@@ -1,0 +1,117 @@
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include "rk3566.dtsi"
+
+/ {
+	model = "FriendlyELEC NanoPi R3S";
+	compatible = "friendlyelec,nanopi-r3s", "rockchip,rk3566";
+
+	chosen {
+		stdout-path = "serial2:1500000n8";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x00000000 0x0 0x80000000>;
+	};
+};
+
+&uart2 {
+	status = "okay";
+};
+
+&sdmmc0 {
+	status = "okay";
+};
+
+&gmac0 {
+	status = "okay";
+	phy-mode = "rgmii";
+	clock_in_out = "input";
+	assigned-clocks = <&cru SCLK_GMAC0_RX_TX>, <&cru SCLK_GMAC0>;
+	assigned-clock-parents = <&cru SCLK_GMAC0_RGMII_SPEED>, <&cru CLK_MAC0_REF>;
+	phy-handle = <&rgmii_phy0>;
+};
+
+&gmac1 {
+	status = "okay";
+	phy-mode = "rgmii";
+	clock_in_out = "output";
+	assigned-clocks = <&cru SCLK_GMAC1_RX_TX>, <&cru SCLK_GMAC1>;
+	assigned-clock-parents = <&cru SCLK_GMAC1_RGMII_SPEED>, <&cru CLK_MAC1_REF>;
+	phy-handle = <&rgmii_phy1>;
+};
+
+&mdio0 {
+	rgmii_phy0: ethernet-phy@0 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0x0>;
+	};
+};
+
+&mdio1 {
+	rgmii_phy1: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <0x1>;
+	};
+};
+
+&spi0 {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+};
+
+/*
+ * USB subsystem — the NanoPi R3S exposes one USB 3.0 Type-A host port
+ * and one USB-C port (power + data) wired to the RK3566's DWC3 DRD
+ * controller.  The USB-C port is the one used for gadget mode:
+ *
+ *   ┌──────────────────────┐         ┌──────────────────┐
+ *   │  Host PC / Phone     │◄──USB-C──┤  NanoPi R3S      │
+ *   │  (sees mass-storage  │         │  (gadget mode)   │
+ *   │   + RNDIS adapter)   │         │                  │
+ *   └──────────────────────┘         └──────────────────┘
+ *
+ * u2phy0_otg provides the PHY, usbdrd3_0 is the DWC3 wrapper, and
+ * usbdrd_dwc3_0 is the controller node.  dr_mode = "otg" lets the
+ * kernel switch between host and peripheral based on the ID pin /
+ * extcon.  For pure-gadget deployments set dr_mode = "peripheral".
+ */
+
+&u2phy0_otg {
+	status = "okay";
+};
+
+&u2phy0_host {
+	status = "okay";
+};
+
+&usb2phy0 {
+	status = "okay";
+};
+
+&usbdrd3_0 {
+	status = "okay";
+};
+
+&usbdrd_dwc3_0 {
+	dr_mode = "otg";
+	maximum-speed = "high-speed";
+	status = "okay";
+};
+
+/*
+ * USB 3.0 Type-A host port — always host mode.
+ */
+&usb_host0_ehci {
+	status = "okay";
+};
+
+&usb_host0_ohci {
+	status = "okay";
+};

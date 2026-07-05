@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+
+default-members = [
+    "packages/core",
+]
+
+members = [
+    "packages/core",
+    "packages/common",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["langyo <langyo.china@gmail.com>"]
+license = "BUSL-1.1"
+description = "aris — Asterinas-based industrial IoT gateway OS/firmware"
+repository = "https://github.com/celestia-island/aris"
+
+[workspace.dependencies]
+anyhow = "^1"
+async-trait = "^0.1"
+clap = { version = "^4", features = ["derive"] }
+thiserror = "^2"
+
+serde = { version = "^1", features = ["derive"] }
+serde_json = "^1"
+toml = "^0.8"
+
+tracing = { version = "^0.1", features = ["log"] }
+tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
+
+tokio = { version = "^1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "net",
+    "io-util",
+    "fs",
+    "sync",
+    "signal",
+    "process",
+] }
+
+# OTA subsystem
+sha2 = "^0.10"
+hex = "^0.4"
+reqwest = { version = "^0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = "^0.3"
+
+# Dev / test
+tempfile = "^3"
+
+common = { path = "packages/common" }
+
+# ── Build profiles ──────────────────────────────────────────
+
+[profile.dev]
+debug = 1
+opt-level = 0
+strip = "none"
+incremental = true
+
+[profile.dev.package."*"]
+debug = 0
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 16
+debug = 0
+strip = true
+
+[profile.bench]
+debug = 0

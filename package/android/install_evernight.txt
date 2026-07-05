@@ -1,0 +1,49 @@
+============================================================
+  Entelecheia Gateway — Android Installation
+============================================================
+
+Android does not support USB mass-storage AutoRun.
+To install the Evernight client on Android:
+
+Option A — USB Tethering (no app required):
+  1. Connect the gateway via USB-C cable
+  2. Android Settings > Network & Internet > Hotspot & tethering
+  3. Enable "USB Tethering" — Android sees the gateway as a
+     network connection
+  4. Open a browser and navigate to http://10.0.99.1:8080
+  5. The gateway dashboard works in Chrome / Firefox
+
+Option B — Install the Evernight APK:
+  1. Copy evernight-android.apk from this USB drive to your phone
+  2. Enable "Install unknown apps" in Android Settings
+  3. Install the APK
+  4. The app will auto-connect to the gateway over USB
+
+Option C — Use as a thin client only:
+  No installation needed. The gateway's dashboard at
+  http://10.0.99.1:8080 is a responsive web app that works
+  in any mobile browser.
+
+============================================================
+  安卓系统安装说明（中文）
+============================================================
+
+安卓不支持 USB 存储设备的自动运行。
+安装 Evernight 客户端有以下三种方式：
+
+方式 A — USB 网络共享（无需安装应用）：
+  1. 通过 USB-C 线连接网关
+  2. 安卓设置 > 网络和互联网 > 热点与网络共享
+  3. 启用"USB 网络共享"
+  4. 打开浏览器访问 http://10.0.99.1:8080
+  5. 网关控制面板支持 Chrome / Firefox
+
+方式 B — 安装 Evernight APK：
+  1. 将本 U 盘中的 evernight-android.apk 复制到手机
+  2. 在安卓设置中开启"安装未知来源应用"
+  3. 安装 APK
+  4. 应用将自动通过 USB 连接网关
+
+方式 C — 仅作为瘦客户端使用：
+  无需安装。网关控制面板 http://10.0.99.1:8080 是响应式
+  网页应用，在任何移动浏览器中均可使用。

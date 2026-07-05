@@ -1,0 +1,205 @@
+#!/bin/sh
+# /usr/sbin/aris-usb-gadget — configure USB composite gadget at runtime.
+#
+# Creates a composite USB gadget on the DWC3 DRD port (USB-C) with:
+#   1. mass_storage  — a FAT image exposed as a virtual USB drive,
+#                       containing per-OS auto-installer scripts.
+#   2. ncm           — CDC-NCM virtual Ethernet adapter (preferred on
+#                       Linux / macOS; Windows 10+ also has a built-in driver).
+#
+# Usage:
+#   aris-usb-gadget start     — create and bind the gadget
+#   aris-usb-gadget stop      — unbind and destroy the gadget
+#   aris-usb-gadget status    — show current state
+#
+# Environment (sourced from /etc/evernight/gateway.env or defaults):
+#   GADGET_MS_FILE  — path to the mass-storage backing image (default below)
+#   GADGET_VID      — USB Vendor ID hex (default 0x1d6b = Linux Foundation)
+#   GADGET_PID      — USB Product ID hex (default 0x0104 = Multifunction Composite)
+#   GADGET_SERIAL   — device serial string (default: hostname)
+#
+# This script is called by /etc/init.d/S50usbgadget at boot.
+
+set -e
+
+CONFIGFS="${ARIS_CONFIGFS:-/sys/kernel/config}"
+UDC_DIR="${ARIS_UDC_DIR:-/sys/class/udc}"
+GADGET_NAME="aris_gadget"
+GADGET_DIR="${CONFIGFS}/usb_gadget/${GADGET_NAME}"
+
+GADGET_MS_FILE="${GADGET_MS_FILE:-/usr/share/evernight-gadget/installer.img}"
+GADGET_VID="${GADGET_VID:-0x1d6b}"
+GADGET_PID="${GADGET_PID:-0x0104}"
+GADGET_MANUFACTURER="${GADGET_MANUFACTURER:-celestia-island}"
+GADGET_PRODUCT="${GADGET_PRODUCT:-Entelecheia Gateway}"
+GADGET_SERIAL="${GADGET_SERIAL:-$(hostname 2>/dev/null || echo aris-0000)}"
+
+# ── Helpers ─────────────────────────────────────────────────
+
+die() {
+    echo "aris-usb-gadget: ERROR: $*" >&2
+    exit 1
+}
+
+# Find the DWC3 UDC (USB Device Controller) name.
+find_udc() {
+    local udc
+    udc=$(ls "${UDC_DIR}/" 2>/dev/null | head -1)
+    [ -n "$udc" ] || die "no UDC found — is the DWC3 driver loaded and dr_mode=otg/peripheral?"
+    echo "$udc"
+}
+
+mount_configfs() {
+    if [ ! -d "${CONFIGFS}/usb_gadget" ]; then
+        mount -t configfs none "${CONFIGFS}" 2>/dev/null || true
+    fi
+    [ -d "${CONFIGFS}/usb_gadget" ] || die "configfs not mounted — cannot configure USB gadget"
+}
+
+# ── Start ───────────────────────────────────────────────────
+
+do_start() {
+    echo "aris-usb-gadget: configuring composite gadget..."
+
+    mount_configfs
+
+    # Tear down stale gadget if present
+    [ -d "${GADGET_DIR}" ] && {
+        echo "aris-usb-gadget: existing gadget found, stopping first..."
+        do_stop >/dev/null 2>&1 || true
+    }
+
+    # Create gadget directory
+    mkdir -p "${GADGET_DIR}"
+
+    # Set USB IDs
+    echo "${GADGET_VID}" > "${GADGET_DIR}/idVendor"
+    echo "${GADGET_PID}" > "${GADGET_DIR}/idProduct"
+    echo "0x0100"        > "${GADGET_DIR}/bcdUSB"
+
+    # English (0x0409) string descriptors
+    local strdir="${GADGET_DIR}/strings/0x409"
+    mkdir -p "${strdir}"
+    echo "${GADGET_MANUFACTURER}" > "${strdir}/manufacturer"
+    echo "${GADGET_PRODUCT}"      > "${strdir}/product"
+    echo "${GADGET_SERIAL}"       > "${strdir}/serialnumber"
+
+    # ── Configuration 1 ──────────────────────────────────────
+    local confdir="${GADGET_DIR}/configs/c.1"
+    mkdir -p "${confdir}"
+    mkdir -p "${confdir}/strings/0x409"
+    echo "Entelecheia Composite" > "${confdir}/strings/0x409/configuration"
+    echo 250                    > "${confdir}/MaxPower"
+
+    # ── Function: mass_storage ───────────────────────────────
+    # Exposes installer.img as a read-only USB drive to the host.
+    local ms_dir="${GADGET_DIR}/functions/mass_storage.0"
+    mkdir -p "${ms_dir}"
+
+    # On real configfs the kernel auto-creates lun.0/ when the function
+    # directory is created. On mock/test environments it does not, so we
+    # create it explicitly — mkdir -p is a no-op if it already exists.
+    mkdir -p "${ms_dir}/lun.0"
+
+    if [ -f "${GADGET_MS_FILE}" ]; then
+        echo "${GADGET_MS_FILE}" > "${ms_dir}/lun.0/file"
+        echo 1                   > "${ms_dir}/lun.0/ro"
+        echo 0                   > "${ms_dir}/lun.0/cdrom"
+        echo 0                   > "${ms_dir}/lun.0/removable"
+        echo "aris-gateway"      > "${ms_dir}/lun.0/inquiry_string" 2>/dev/null || true
+    else
+        echo "aris-usb-gadget: WARNING: ${GADGET_MS_FILE} not found, mass_storage will be empty"
+    fi
+
+    # ── Function: NCM (virtual Ethernet) ─────────────────────
+    mkdir -p "${GADGET_DIR}/functions/ncm.0"
+
+    # Link functions into configuration
+    ln -sf "${ms_dir}"                   "${confdir}/"
+    ln -sf "${GADGET_DIR}/functions/ncm.0" "${confdir}/"
+
+    # Bind to UDC — this makes the gadget visible to the host
+    local udc
+    udc=$(find_udc)
+    echo "${udc}" > "${GADGET_DIR}/UDC"
+
+    echo "aris-usb-gadget: gadget bound to ${udc}"
+    echo "aris-usb-gadget: mass_storage → ${GADGET_MS_FILE}"
+    echo "aris-usb-gadget: ncm virtual Ethernet ready"
+
+    # Bring up the USB network interface
+    # The interface name is typically usb0 or ncm0
+    local usb_iface
+    usb_iface=$(ls /sys/class/net/ | grep -E '^(usb|ncm)' | head -1 || echo "usb0")
+    if [ -n "${usb_iface}" ]; then
+        ip link set "${usb_iface}" up 2>/dev/null || true
+        ip addr add "${USB_NET_IP:-10.0.99.1}/${USB_NET_CIDR:-24}" dev "${usb_iface}" 2>/dev/null || true
+        echo "aris-usb-gadget: ${usb_iface} up at ${USB_NET_IP:-10.0.99.1}"
+    fi
+}
+
+# ── Stop ────────────────────────────────────────────────────
+
+do_stop() {
+    if [ ! -d "${GADGET_DIR}" ]; then
+        echo "aris-usb-gadget: not running"
+        return 0
+    fi
+
+    # Unbind from UDC
+    echo "" > "${GADGET_DIR}/UDC" 2>/dev/null || true
+
+    # Remove function symlinks from config
+    local confdir="${GADGET_DIR}/configs/c.1"
+    if [ -d "${confdir}" ]; then
+        for link in "${confdir}"/*; do
+            [ -L "${link}" ] && rm -f "${link}"
+        done
+        rmdir "${confdir}/strings/0x409" 2>/dev/null || true
+        rmdir "${confdir}" 2>/dev/null || true
+    fi
+
+    # Remove functions
+    for fn in "${GADGET_DIR}/functions"/*; do
+        [ -d "${fn}" ] && rmdir "${fn}" 2>/dev/null || true
+    done
+    rmdir "${GADGET_DIR}/functions" 2>/dev/null || true
+
+    # Remove strings
+    rmdir "${GADGET_DIR}/strings/0x409" 2>/dev/null || true
+
+    # Remove gadget
+    rmdir "${GADGET_DIR}" 2>/dev/null || true
+
+    echo "aris-usb-gadget: stopped"
+}
+
+# ── Status ──────────────────────────────────────────────────
+
+do_status() {
+    if [ ! -d "${GADGET_DIR}" ]; then
+        echo "aris-usb-gadget: not configured"
+        return 1
+    fi
+    echo "aris-usb-gadget: ${GADGET_DIR}"
+    echo "  UDC:    $(cat "${GADGET_DIR}/UDC" 2>/dev/null || echo none)"
+    echo "  VID:PID $(cat "${GADGET_DIR}/idVendor"):$(cat "${GADGET_DIR}/idProduct")"
+    echo "  Functions:"
+    for fn in "${GADGET_DIR}/functions"/*; do
+        [ -d "${fn}" ] && echo "    $(basename "${fn}")"
+    done
+    return 0
+}
+
+# ── Main ────────────────────────────────────────────────────
+
+case "${1:-start}" in
+    start)  do_start ;;
+    stop)   do_stop ;;
+    status) do_status ;;
+    restart) do_stop; sleep 1; do_start ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,80 @@
+# NanoPi R3S — FriendlyELEC
+# Rockchip RK3566, quad-core Cortex-A55, 2GB LPDDR4, dual GbE
+#
+# NOTE: kei/configs/nanopi-r3s.toml also defines board-level parameters
+# for kernel building (BSP crate, QEMU config). The two configs serve
+# different layers and intentionally overlap on arch/soc/dtb — this is
+# the same pattern as Yocto machine.conf vs kernel defconfig.
+
+name = "nanopi-r3s"
+soc = "rk3566"
+arch = "aarch64"
+ram_mb = 2048
+kernel_version = "6.12"
+kernel_defconfig = "nanopi-r3s"
+uboot_defconfig = "nanopi-r3s-rk3566"
+dtb = "rockchip/rk3566-nanopi-r3s"
+eth_interfaces = ["eth0", "eth1"]
+# Evernight features compiled into the aris gateway image.
+#
+# Tier 1 (open standards) — always included:
+#   hardware, protocol, serial, sensor, bin, api, vault, manifest, scripting
+#
+# Tier 2 (vendor-specific) — NOT included in the default image.
+# To add S7comm/MC/EtherNet-IP, append them here and rebuild:
+#   "s7comm",    # Siemens (requires rust7 + snap7-client)
+#   "mc",        # Mitsubishi MC Protocol 3E
+#   "enip",      # Rockwell EtherNet/IP + CIP
+#
+# Tier 3 (third-party plugins) — declared in [[protocol_plugins]] below,
+# loaded at runtime via JSON-RPC (arona types) over WebSocket or IPC.
+evernight_features = [
+    "hardware",
+    "protocol",
+    "serial",
+    "sensor",
+    "bin",
+    "api",
+    "vault",
+    "manifest",
+    "scripting",
+]
+entelecheia_server = "ws://entelecheia.local:8443/api/ws"
+
+# USB gadget (USB-C port, DWC3 DRD controller)
+[usb_gadget]
+enabled = true
+# Composite gadget functions: mass-storage (auto-installer) + NCM (network)
+functions = ["mass_storage", "ncm"]
+# Vendor / product IDs — assigned by USB-IF for development use.
+# 0x1d6b (Linux Foundation) is the default for Linux gadget devices.
+id_vendor = "0x1d6b"
+id_product = "0x0104"
+# Manufacturer / product strings shown to the host OS
+manufacturer = "celestia-island"
+product = "Entelecheia Gateway"
+# Path to the backing-file for the mass-storage function.
+# A FAT image containing per-OS installer scripts and the evernight binary.
+mass_storage_file = "/usr/share/evernight-gadget/installer.img"
+# USB-C virtual network interface static IP (the gateway side of the link)
+usb_net_ip = "10.0.99.1"
+usb_net_cidr = 24
+# DHCP range handed out to the host OS over USB-C NCM
+usb_net_dhcp_start = "10.0.99.100"
+usb_net_dhcp_end = "10.0.99.200"
+
+# Tier 3 protocol plugins — external processes that speak JSON-RPC (arona types)
+# over WebSocket or Unix domain socket. Declared here, loaded at evernight startup.
+#
+# Each plugin is an independent process. evernight connects to it at the given
+# transport URL and treats it like any built-in protocol backend.
+#
+# [[protocol_plugins]]
+# name = "fins_tcp"                            # protocol identifier
+# transport = "ws://127.0.0.1:51001"            # WebSocket endpoint
+# priority = 60                                 # probe order (lower = first)
+#
+# [[protocol_plugins]]
+# name = "mewtocol"                             # Panasonic Mewtocol
+# transport = "ipc:///run/evernight/mewtocol.sock"  # Unix socket
+# priority = 70

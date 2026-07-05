@@ -1,0 +1,7 @@
+[site]
+title = "ARIS"
+description = "Embedded OS for industrial IoT gateways"
+
+[languages]
+default = "en"
+order = ["en", "zhs", "zht", "ja", "ko", "fr", "es", "ru", "ar"]
