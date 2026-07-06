@@ -6,7 +6,7 @@
 ## 1. 项目概述
 
 - **名称**：`aris`
-- **简介**：面向工业 IoT 网关的嵌入式 OS，在 ARM/RISC-V 边缘设备上运行 evernight，远期迁移到 Asterinas 内核。
+- **简介**：兼容 Linux 标准的发行版，附带为 evernight 与 shittim-chest 定制的桌面环境，对标工业 HMI 与上位机。
 - **远程仓库**：本地仓库（无 origin）
 - **技术栈**：Rust / just
 - **类别**：firmware
@@ -102,7 +102,7 @@ Modbus TCP sim (:5020)
 
 ## Goal
 
-Build a production-ready OS/firmware that runs evernight on ARM/RISC-V edge gateways, connects industrial devices to entelecheia, and eventually transitions to the Asterinas Rust kernel.
+Build a Linux-standard (LSB-compatible) distribution that ships a desktop environment purpose-built for evernight and shittim-chest, targeting industrial HMI panels and supervisory host (上位机) stations.
 
 ## Architecture
 

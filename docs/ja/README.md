@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>産業用 IoT ゲートウェイ向け組み込み OS — ARM/RISC-V エッジデバイス上で evernight を実行</strong></p>
+<p align="center"><strong>Linux 標準ディストリビューション、evernight と shittim-chest 向けにチューニングされたデスクトップ — 産業用 HMI とホストステーション（上位機）向けに構築</strong></p>
 
 <div align="center">
 
@@ -27,10 +27,7 @@
 
 ## はじめに
 
-ARIS は Entelecheia 産業用 IoT ゲートウェイ向けの組み込み OS/ファームウェアです。
-ARM/RISC-V エッジデバイス上で
-[evernight](https://github.com/celestia-island/evernight) を実行し、
-最小限で安全なカーネル層を通じてプロトコルブローカーを物理ハードウェアへ橋渡しします。
+ARIS は Linux 標準ベース（LSB）に忠実であり続ける Linux ディストリビューションで、evernight と shittim-chest のために専用構築されたデスクトップ環境を同梱します。そのベンチマークは産業用 HMI パネルと上位機（スーパバイザホスト）——すなわちエッジゲートウェイではなく、オペレータが向き合う機械です。より広い Celestia スタックが物理デバイスまで到達する一方で、ARIS はオペレータが実際にその前に座る OS です。[evernight](https://github.com/celestia-island/evernight) ブローカーと shittim-chest セッションの監視および制御のために特別に配線されたデスクトップへと起動する、馴染みのある LSB 互換の Linux です。
 
 ```mermaid
 flowchart TB

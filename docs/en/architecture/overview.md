@@ -2,9 +2,11 @@
 
 ## Overview
 
-aris is a modular embedded OS for industrial IoT gateways running the
-Entelecheia ecosystem. It bridges the evernight protocol broker to
-physical hardware through a minimal, secure kernel layer.
+aris is a Linux-standard distribution with a desktop environment purpose-built
+for evernight and shittim-chest. It targets industrial HMI panels and
+supervisory host (上位机) stations — the operator-facing machine. It runs a
+stock Linux kernel and bridges the evernight broker and shittim-chest sessions
+to field devices.
 
 ## Architecture Layers
 
@@ -15,9 +17,8 @@ flowchart TB
         Core["aris-core (supervisor)\nWatchdog · OTA update\nNet config · Provisioning"]
         Evn ---|Unix socket / IPC| Core
     end
-    subgraph Krn["Kernel Layer"]
-        K1["Phase 1: Linux 6.x\n(aarch64 / armv7 / riscv64)"]
-        K2["Phase 2: Asterinas framekernel\n(Rust, MPL-2.0)"]
+    subgraph Krn["Kernel Layer (stock Linux)"]
+        Linux["Linux kernel\n(x86_64 / aarch64 / armv7 / riscv64)"]
         Drv["Drivers: stmmac · dw_wdt · 8250_dw\ngpio-rockchip · spi-rockchip\ni2c-rk3x · dw_mmc · phy-rockchip"]
     end
     subgraph HW["Hardware Layer"]

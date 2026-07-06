@@ -24,6 +24,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -116,7 +117,7 @@ echo "BUILD_OK"
 """
 
     result = subprocess.run(
-        ["docker", "run", "--rm",
+        [*build_env.docker_cmd(), "run", "--rm",
          "-v", f"{uboot_src}:/uboot",
          "-v", f"{output_dir}:/output",
          docker_image,
@@ -164,6 +165,8 @@ def obtain_uboot(board: str, output_dir: Path, force_build: bool = False) -> dic
 
 
 if __name__ == "__main__":
+    if build_env.wsl_main_guard():
+        sys.exit(0)
     import argparse
     parser = argparse.ArgumentParser(description="Obtain U-Boot for a board")
     parser.add_argument("board", nargs="?", default="nanopi-r3s")

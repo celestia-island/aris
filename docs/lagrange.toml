@@ -1,6 +1,6 @@
 [site]
 title = "ARIS"
-description = "Embedded OS for industrial IoT gateways"
+description = "Linux-standard distribution with a desktop for evernight & shittim-chest — built for HMI and host stations"
 
 [languages]
 default = "en"

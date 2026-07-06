@@ -27,6 +27,7 @@ except ModuleNotFoundError:
     import tomli as tomllib
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,7 +40,7 @@ EVERNIGHT_CANDIDATES = [
 
 # kei output locations (checked in order)
 KEI_CANDIDATES = [
-    PROJECT_ROOT.parent / "kei" / "target" / "output",      # sibling directory
+    PROJECT_ROOT.parent / "kei" / "target" / "output",  # sibling directory
     Path(os.environ.get("KEI_ROOT", "")) / "output",
 ]
 
@@ -204,6 +205,8 @@ def assemble_rootfs(
 
 
 def main() -> int:
+    if build_env.wsl_main_guard():
+        return 0
     import argparse
 
     parser = argparse.ArgumentParser(description="Build aris firmware image")

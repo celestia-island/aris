@@ -16,7 +16,7 @@ edition = "2024"
 rust-version = "1.85"
 authors = ["langyo <langyo.china@gmail.com>"]
 license = "BUSL-1.1"
-description = "aris — Asterinas-based industrial IoT gateway OS/firmware"
+description = "aris — Linux-standard distribution with a desktop for evernight & shittim-chest (HMI / host stations)"
 repository = "https://github.com/celestia-island/aris"
 
 [workspace.dependencies]

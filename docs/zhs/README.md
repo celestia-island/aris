@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>面向工业物联网网关的嵌入式操作系统 — 在 ARM/RISC-V 边缘设备上运行 evernight</strong></p>
+<p align="center"><strong>兼容 Linux 标准的发行版，附带为 evernight 与 shittim-chest 定制的桌面环境 —— 面向 HMI 与上位机</strong></p>
 
 <div align="center">
 
@@ -27,9 +27,7 @@
 
 ## 简介
 
-ARIS 是 Entelecheia 工业物联网网关的嵌入式操作系统/固件。它在 ARM/RISC-V 边缘设备上运行
-[evernight](https://github.com/celestia-island/evernight)，通过一个最小化、安全的内核层
-将协议代理桥接到物理硬件。
+ARIS 是一套兼容 Linux 标准的发行版，附带为 evernight 与 shittim-chest 定制的桌面环境。它对标的是工业 HMI 面板与上位机——操作员面前的机器，而非边缘网关。当整条 Celestia 技术栈向下触及物理设备时，ARIS 是操作员真正坐镇其前的那套操作系统：一套熟悉的、兼容 LSB 的 Linux，开机即进入专为监控与操控 evernight broker 和 shittim-chest 会话而打造的桌面。
 
 ```mermaid
 flowchart TB

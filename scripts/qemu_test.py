@@ -15,12 +15,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> int:
+    if build_env.wsl_main_guard():
+        return 0
     import argparse
 
     parser = argparse.ArgumentParser(description="QEMU boot test")

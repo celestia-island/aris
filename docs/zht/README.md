@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>面向工業物聯網閘道的嵌入式作業系統 — 在 ARM/RISC-V 邊緣裝置上執行 evernight</strong></p>
+<p align="center"><strong>相容 Linux 標準的發行版，附帶為 evernight 與 shittim-chest 客製化的桌面環境 —— 面向 HMI 與上位機</strong></p>
 
 <div align="center">
 
@@ -27,9 +27,7 @@
 
 ## 簡介
 
-ARIS 是 Entelecheia 工業物聯網閘道的嵌入式作業系統/韌體。它在 ARM/RISC-V 邊緣裝置上執行
-[evernight](https://github.com/celestia-island/evernight)，透過一個最小化、安全的核心層
-將協定代理橋接到實體硬體。
+ARIS 是一套相容 Linux 標準的發行版，附帶為 evernight 與 shittim-chest 客製化的桌面環境。它對標的是工業 HMI 面板與上位機——操作員面前的機器，而非邊緣閘道。當整條 Celestia 技術棧向下觸及實體裝置時，ARIS 是操作員真正坐鎮其前的那套作業系統：一套熟悉的、相容 LSB 的 Linux，開機即進入專為監控與操控 evernight broker 和 shittim-chest 工作階段而打造的桌面。
 
 ```mermaid
 flowchart TB

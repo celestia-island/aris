@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>SO embebido para pasarelas IoT industriales — ejecuta evernight en dispositivos edge ARM/RISC-V</strong></p>
+<p align="center"><strong>Una distribución estándar Linux con un escritorio afinado para evernight y shittim-chest — construida para HMI industrial y estaciones host</strong></p>
 
 <div align="center">
 
@@ -27,10 +27,15 @@
 
 ## Introducción
 
-ARIS es el SO/firmware embebido para la pasarela IoT industrial Entelecheia.
-Ejecuta [evernight](https://github.com/celestia-island/evernight) en
-dispositivos edge ARM/RISC-V, conectando el broker de protocolos al hardware
-físico a través de una capa de núcleo mínima y segura.
+ARIS es una distribución Linux fiel a la base estándar de Linux (Linux Standard
+Base) que incluye un entorno de escritorio diseñado específicamente para
+evernight y shittim-chest. Su referencia es el panel HMI industrial y la
+estación host (上位机) — la máquina orientada al operador, no la pasarela edge.
+Allí donde la pila Celestia más amplia desciende hacia los dispositivos
+físicos, ARIS es el SO frente al que el operador realmente se sienta: un Linux
+familiar y compatible con LSB que arranca en un escritorio cableado
+específicamente para monitorizar y controlar brokers de evernight y sesiones de
+shittim-chest.
 
 ```mermaid
 flowchart TB

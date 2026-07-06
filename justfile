@@ -3,12 +3,24 @@
 
 set unstable
 set shell := ["bash", "-c"]
-set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
+set windows-shell := ["wsl.exe", "bash", "-c"]
 set lists
 
 import "./celestia-devtools.just"
 
 default: build
+
+# ── Environment ─────────────────────────────────────────────
+
+# Inspect the build environment: host kind, WSL2 distros (on Windows),
+# selected distro, and container backend. Pre-flight check before build.
+env-check:
+    {{python_cmd}} scripts/check_env.py
+
+# Build/fetch the HMI browser engine (webkitgtk | servo | cef) per [display]
+# config. Renders the gateway dashboard on an attached screen.
+build-browser BOARD="nanopi-r3s":
+    {{python_cmd}} scripts/build_browser.py {{BOARD}}
 
 # ── Development ────────────────────────────────────────────
 

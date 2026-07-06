@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>산업용 IoT 게이트웨이용 임베디드 OS — ARM/RISC-V 엣지 디바이스에서 evernight 실행</strong></p>
+<p align="center"><strong>evernight와 shittim-chest에 맞춘 데스크톱을 갖춘 Linux 표준 배포판 — 산업용 HMI 및 호스트 스테이션(상위기)을 위해 구축</strong></p>
 
 <div align="center">
 
@@ -27,10 +27,7 @@
 
 ## 소개
 
-aris는 Entelecheia 산업용 IoT 게이트웨이용 임베디드 OS/펌웨어입니다.
-ARM/RISC-V 엣지 디바이스에서
-[evernight](https://github.com/celestia-island/evernight)를 실행하며,
-최소화되고 안전한 커널 계층을 통해 프로토콜 브로커를 물리 하드웨어로 브리지합니다.
+ARIS는 Linux 표준 베이스(LSB)에 충실한 Linux 배포판으로, evernight와 shittim-chest에 맞춰 목적 구축된 데스크톱 환경을 제공합니다. 그 벤치마크는 산업용 HMI 패널과 상위기(감독 호스트) — 즉 엣지 게이트웨이가 아닌, 운용자가 마주하는 기기입니다. Celestia 스택 전체가 물리 디바이스까지 내려가는 반면, ARIS는 운용자가 실제로 앞에 앉는 OS입니다. 친숙하고 LSB 호환 Linux로 부팅되어, evernight 브로커와 shittim-chest 세션을 모니터링하고 제어하도록 특별히 연결된 데스크톱으로 들어섭니다.
 
 ```mermaid
 flowchart TB

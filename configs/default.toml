@@ -60,3 +60,27 @@ usb_net_ip = "10.0.99.1"
 usb_net_cidr = 24
 usb_net_dhcp_start = "10.0.99.100"
 usb_net_dhcp_end = "10.0.99.200"
+
+# Local HMI display (Chromebook-style: the gateway renders its own dashboard
+# on an attached screen, not just serving a web page to a host browser).
+#
+# `engine` selects the browser engine used to render the HMI:
+#   "webkitgtk" — WebKitGTK via Cogs/Epiphany (best prebuilt availability;
+#                apt has arm64 packages. ~150-250MB RAM. Good CSS/JS compat.)
+#   "servo"     — Servo engine (Rust, lightweight ~50-80MB RAM, but fewer
+#                CSS/JS features; shittim-chest's Vue 3 + echarts may break).
+#   "cef"       — Chromium Embedded Framework (best compat, ~300-400MB after
+#                aggressive kiosk trimming, but NO prebuilt arm64 — must
+#                self-compile, 6-12h build).
+#   "none"      — headless gateway (HMI served to host browser only).
+#
+# Default is "none" (headless) for backward compatibility. Boards with a
+# display set this in their own config (e.g. nanopi-r3s stays headless).
+[display]
+engine = "none"
+# Resolution in pixels (ignored if engine = "none").
+resolution = [1024, 768]
+# The URL the kiosk browser loads on boot (the gateway's own dashboard).
+kiosk_url = "http://127.0.0.1:8080/"
+# Extra args passed to the browser engine (e.g. "--disable-gpu --single-process").
+extra_args = ""

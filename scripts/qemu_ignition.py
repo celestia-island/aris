@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +35,10 @@ EVERNIGHT_ROOT = Path(os.environ.get(
     "EVERNIGHT_ROOT",
     str(PROJECT_ROOT.parent / "evernight"),
 ))
-KEI_ROOT = PROJECT_ROOT.parent / "kei"
+KEI_ROOT = Path(os.environ.get(
+    "KEI_ROOT",
+    str(PROJECT_ROOT.parent / "kei"),
+))
 
 GATEWAY_PORT = 8443
 
@@ -89,7 +93,7 @@ def get_kei_kernel() -> Path | None:
     kernel = KEI_ROOT / "target" / "output" / "nanopi-r3s" / "kei-kernel.bin"
     if not kernel.exists():
         # Check default output location
-        kernel = KEI_ROOT / "target" / "aarch64-unknown-none" / "release" / "kei-kernel"
+        kernel = KEI_ROOT / "target" / "aarch64-unknown-none" / "release" / "kei"
     if kernel.exists():
         cf.ok(f"  Found: {kernel}")
         return kernel
@@ -110,7 +114,13 @@ def get_asterinas_kernel() -> Path | None:
 # ── QEMU boot ─────────────────────────────────────────────────
 
 def boot_qemu(kernel: Path, gateway_port: int, arch: str = "aarch64") -> int:
-    """Boot kernel in QEMU and monitor output."""
+    """Boot kernel in QEMU and monitor output.
+
+    When run inside WSL2 with WSLg enabled, the graphical window is
+    automatically forwarded to the Windows desktop (WSLg injects DISPLAY
+    and provides an X/Wayland socket). Override the display backend with
+    the ``QEMU_DISPLAY`` env var (e.g. ``-display none`` for headless CI).
+    """
     qemu_map = {
         "aarch64": ("qemu-system-aarch64", "virt", "cortex-a55"),
         "x86_64": ("qemu-system-x86_64", "q35", "qemu64"),
@@ -129,12 +139,18 @@ def boot_qemu(kernel: Path, gateway_port: int, arch: str = "aarch64") -> int:
         cf.info("  Run: cd ../kei && python3 scripts/initramfs.py")
         return 1
 
+    # Display backend: default to a graphical window (WSLg forwards it to
+    # Windows when run inside WSL2). Set QEMU_DISPLAY="-display none" for
+    # headless / CI runs.
+    display_arg = os.environ.get("QEMU_DISPLAY", "-display sdl")
+
     cf.blank()
     cf.step("Booting in QEMU")
     cf.info(f"  Kernel:     {kernel}")
     cf.info(f"  Machine:    {machine} / {cpu}")
     cf.info(f"  Initramfs:  {initramfs.name}")
     cf.info(f"  Gateway:    ws://10.0.2.2:{gateway_port}/api/ws")
+    cf.info(f"  Display:    {display_arg}")
     cf.info("  Press Ctrl-A X to exit QEMU.")
     cf.blank()
 
@@ -152,8 +168,14 @@ def boot_qemu(kernel: Path, gateway_port: int, arch: str = "aarch64") -> int:
         # Second network interface (tests dual-Ethernet detection)
         "-netdev", "user,id=net1",
         "-device", "virtio-net-device,netdev=net1",
+        # virtio-gpu for graphical HMI output (kei's virtio-gpu driver
+        # publishes a blit-backed framebuffer; FramebufferConsole renders
+        # kernel logs to the window).
+        "-device", "virtio-gpu-device",
+        # Serial console on stdio (kernel logs), plus the display window.
+        "-serial", "mon:stdio",
+        display_arg,
         "-append", f"console=ttyAMA0 rdinit=/init",
-        "-nographic",
         "-no-reboot",
     ]
 
@@ -176,6 +198,8 @@ def cleanup(*_) -> None:
 
 
 def main() -> int:
+    if build_env.wsl_main_guard():
+        return 0
     import argparse
 
     parser = argparse.ArgumentParser(description="QEMU ignition test")

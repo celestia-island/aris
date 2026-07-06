@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 EVERNIGHT_ROOT = Path(os.environ.get("EVERNIGHT_ROOT", str(Path(__file__).resolve().parent.parent.parent / "evernight")))
@@ -143,6 +144,8 @@ while True:
 
 
 def main() -> int:
+    if build_env.wsl_main_guard():
+        return 0
     signal.signal(signal.SIGINT, cleanup)
     signal.signal(signal.SIGTERM, cleanup)
 

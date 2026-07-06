@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
+import build_env
 import cli_format as cf
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -76,7 +77,7 @@ def compile_boot_scr(board: str, output_dir: Path) -> Path | None:
 
     boot_scr = output_dir / "boot.scr"
     result = subprocess.run(
-        ["docker", "run", "--rm",
+        [*build_env.docker_cmd(), "run", "--rm",
          "-v", f"{boot_cmd}:/in/boot.cmd:ro",
          "-v", f"{output_dir}:/out",
          "ubuntu:22.04",
@@ -214,6 +215,8 @@ def write_at_offset(image: Path, data: Path, offset_bytes: int) -> None:
 
 
 def main() -> int:
+    if build_env.wsl_main_guard():
+        return 0
     import argparse
 
     parser = argparse.ArgumentParser(description="Assemble SD card image")
