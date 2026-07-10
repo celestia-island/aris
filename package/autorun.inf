@@ -1,0 +1,10 @@
+[autorun]
+icon=common\evernight.ico,0
+label=Entelecheia Gateway
+action=Install Evernight Gateway Client
+open=windows\install_evernight.bat
+
+[Content]
+MusicFiles=false
+PictureFiles=false
+VideoFiles=false

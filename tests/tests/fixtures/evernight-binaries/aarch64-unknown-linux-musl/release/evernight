@@ -1,0 +1,9 @@
+#!/bin/sh
+# evernight — fixture binary for testing (shell-script fallback)
+# The Rust target 'aarch64-unknown-linux-musl' is not installed on this host, so no
+# real cross-compiled binary was produced. This stub prints the same
+# banner so installer tests still pass.
+echo "evernight (fixture): $*"
+echo "  target: aarch64-unknown-linux-musl"
+echo "  compiled: fixture-build (stub)"
+exit 0

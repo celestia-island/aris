@@ -1,0 +1,11 @@
+[package]
+name = "common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "aris-common — shared types and constants for aris"
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }

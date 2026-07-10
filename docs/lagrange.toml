@@ -1,0 +1,8 @@
+[site]
+title = "ARIS"
+description = "Linux-standard distribution with a desktop for evernight & shittim-chest — built for HMI and host stations"
+
+cname = "aris.docs.celestia.world"
+[languages]
+default = "en"
+order = ["en", "zhs", "zht", "ja", "ko", "fr", "es", "ru", "ar"]

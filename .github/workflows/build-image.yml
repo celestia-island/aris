@@ -1,0 +1,44 @@
+name: Build Firmware Image
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: 'Board name (e.g. nanopi-r3s)'
+        required: true
+        default: 'nanopi-r3s'
+      arch:
+        description: 'Target architecture'
+        required: false
+        default: 'aarch64'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-image:
+    runs-on: ubuntu-24.04-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static genimage mtools
+
+      - name: Build firmware
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/setup-cross.sh
+          ./scripts/build.sh ${{ inputs.board }} ${{ inputs.arch }}
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aris-${{ inputs.board }}-${{ inputs.arch }}
+          path: output/${{ inputs.board }}/image.img

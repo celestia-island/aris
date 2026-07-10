@@ -1,0 +1,7 @@
+#!/bin/sh
+# evernight — fixture binary for testing
+# This is NOT the real evernight. It prints a banner and exits.
+echo "evernight (fixture): $*"
+echo "  target: aarch64-unknown-linux-musl"
+echo "  compiled: fixture-build"
+exit 0
