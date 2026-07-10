@@ -19,6 +19,15 @@ blitz-html = "=0.3.0-alpha.6"
 anyrender = "0.11"
 anyrender_vello_cpu = "0.14"
 
+# Desktop windowing (optional). Enabled by the `winit` feature. These deps
+# pull in platform-specific backends (Win32/X11/Wayland/macOS) and must be
+# excluded from the musl/kei cross-compile targets.
+winit = { version = "0.30", optional = true }
+softbuffer = { version = "0.4", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+
 [features]
 default = []
 fbdev = []
+# Desktop window output via winit + softbuffer (Windows/Linux/macOS).
+winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle"]

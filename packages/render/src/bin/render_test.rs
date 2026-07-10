@@ -14,7 +14,8 @@ h1 { color:#E06C75; font-size:48px; margin:20px; }
                 .filter(|px| px[0]>10 || px[1]>10 || px[2]>10).count();
             eprintln!("Non-black: {}/{}", non_black, frame.width as usize * frame.height as usize);
 
-            // Try /dev/fb0 first
+            // Try /dev/fb0 first (Linux/kei fbdev)
+            #[cfg(unix)]
             if std::path::Path::new("/dev/fb0").exists() {
                 eprintln!("Opening /dev/fb0...");
                 match aris_render::FbDevBackend::open("/dev/fb0") {

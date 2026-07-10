@@ -60,6 +60,7 @@ fn main() {
             );
 
             // Try /dev/fb0 if present (kei / Linux fbdev)
+            #[cfg(unix)]
             if Path::new("/dev/fb0").exists() {
                 eprintln!("Opening /dev/fb0...");
                 if let Ok(mut fb) = aris_render::FbDevBackend::open("/dev/fb0") {

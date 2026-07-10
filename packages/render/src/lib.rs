@@ -9,8 +9,13 @@ use alloc::vec::Vec;
 
 extern crate alloc;
 
+#[cfg(unix)]
 pub mod fbdev;
+#[cfg(unix)]
 pub use fbdev::FbDevBackend;
+
+#[cfg(feature = "winit")]
+pub mod winit_backend;
 
 use anyrender::ImageRenderer;
 
