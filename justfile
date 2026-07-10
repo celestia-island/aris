@@ -160,6 +160,23 @@ windows-interactive:
 dev-shell:
     {{python_cmd}} scripts/dev_shell.py
 
+# ── Development ────────────────────────────────────────────
+
+# Launch the aris browser in a winit desktop window.
+# Uses Windows-native cargo (not WSL) since winit needs a real display.
+# On Windows, this runs via cmd.exe to bypass the WSL shell setting.
+dev:
+    cmd.exe /c cargo run -p aris-render --features "desktop winit" --bin aris_browser
+
+dev-html FILE:
+    cmd.exe /c cargo run -p aris-render --features "desktop winit" --bin aris_browser -- {{FILE}}
+
+dev-render:
+    cmd.exe /c "cargo run -p aris-render --bin render_lagrange -- tests/fixtures/lagrange_index.html"
+
+dev-wasm:
+    cmd.exe /c "cargo run -p aris-wasm --bin render_wasm -- tests/fixtures/tairitsu_website.wasm"
+
 clean:
     rm -rf output/ target/ build/
     cargo clean
