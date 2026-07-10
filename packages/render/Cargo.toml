@@ -12,7 +12,9 @@ thiserror.workspace = true
 tracing.workspace = true
 libc = "0.2"
 memmap2 = "0.9"
-blitz-dom = { version = "=0.3.0-alpha.6", default-features = false }
+# Enable system_fonts on blitz-dom so text renders using the OS font collection.
+# Without it, blitz-dom creates an empty font collection and all text is invisible.
+blitz-dom = { version = "=0.3.0-alpha.6", default-features = false, features = ["system_fonts"] }
 blitz-paint = { version = "=0.3.0-alpha.6", default-features = false }
 blitz-traits = "=0.3.0-alpha.6"
 blitz-html = "=0.3.0-alpha.6"
