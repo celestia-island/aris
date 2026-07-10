@@ -12,30 +12,30 @@ thiserror.workspace = true
 tracing.workspace = true
 libc = "0.2"
 memmap2 = "0.9"
-# Enable system_fonts on blitz-dom so text renders using the OS font collection.
-# Without it, blitz-dom creates an empty font collection and all text is invisible.
-blitz-dom = { version = "=0.3.0-alpha.6", default-features = false, features = ["system_fonts"] }
+# blitz-dom: system_fonts is enabled via the "desktop" feature (see below).
+# Without it, blitz-dom creates an empty font collection. On musl/kei, the
+# fontconfig dependency can't cross-compile, so we only enable it on desktop.
+blitz-dom = { version = "=0.3.0-alpha.6", default-features = false }
 blitz-paint = { version = "=0.3.0-alpha.6", default-features = false }
 blitz-traits = "=0.3.0-alpha.6"
 blitz-html = "=0.3.0-alpha.6"
 anyrender = "0.11"
 anyrender_vello_cpu = "0.14"
 
-# Boa JS engine (optional). Enabled by the `js` feature. Lets render_html
-# execute <script> blocks before rendering, so JS-generated content
-# (document.write, dynamic DOM) appears in the output.
+# Boa JS engine (optional)
 aris-js = { path = "../js", optional = true }
 
-# Desktop windowing (optional). Enabled by the `winit` feature. These deps
-# pull in platform-specific backends (Win32/X11/Wayland/macOS) and must be
-# excluded from the musl/kei cross-compile targets.
+# Desktop windowing (optional)
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
 [features]
-default = []
+default = ["desktop"]
 fbdev = []
+# Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
+# Disable for musl cross-compile: cargo build --no-default-features
+desktop = ["blitz-dom/system_fonts"]
 # Execute <script> blocks via Boa before rendering.
 js = ["dep:aris-js"]
 # Desktop window output via winit + softbuffer (Windows/Linux/macOS).
