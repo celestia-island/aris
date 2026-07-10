@@ -1,87 +1,34 @@
-# Архитектура системы aris
+# Архитектура ARIS
 
 ## Обзор
 
-aris — это модульная встраиваемая ОС для промышленных IoT-шлюзов, работающая в
-экосистеме Entelecheia. Она связывает брокер протоколов evernight с физическим
-оборудованием через минимальный защищённый слой ядра.
+ARIS — браузерный движок на основе servo. Можно встроить как библиотеку или запустить как автономный браузер. Конвейер рендеринга использует 100% Rust крейты, заменяя SpiderMonkey / WebRender / components/script на Boa / Vello CPU / Wasmtime.
 
-## Слои архитектуры
+## Ключевые замены
 
-```mermaid
-flowchart TB
-    subgraph App["Слой приложений"]
-        Evn["evernight\nБрокер протоколов\nModbus RTU/TCP · S7comm · EtherCAT\nШина CAN · OPC UA"]
-        Core["aris-core (супервизор)\nWatchdog · OTA-обновление\nСетевые настройки · Инициализация"]
-        Evn ---|Unix-сокет / IPC| Core
-    end
-    subgraph Krn["Слой ядра"]
-        K1["Фаза 1: Linux 6.x\n(aarch64 / armv7 / riscv64)"]
-        K2["Фаза 2: Фрейм-ядро Asterinas\n(Rust, MPL-2.0)"]
-        Drv["Драйверы: stmmac · dw_wdt · 8250_dw\ngpio-rockchip · spi-rockchip\ni2c-rk3x · dw_mmc · phy-rockchip"]
-    end
-    subgraph HW["Слой оборудования"]
-        Soc["RK3566 / BCM2711 / JH7110 / Intel N100"]
-        Iface["Двойной GbE · GPIO · SPI · I2C\nUART · RS-485 · CAN"]
-    end
-    App --> Krn
-    Krn --> HW
-```
+| Компонент Servo | Альтернатива ARIS | Причина |
+|-----------------|-------------------|---------|
+| SpiderMonkey (C++) | boa_engine | 100% Rust, без сборки C++ |
+| WebRender + SWGL (C++) | vello_cpu | Растеризация CPU на 100% Rust |
+| components/script | Мост Boa | Без привязки к SpiderMonkey |
+| — | wasmtime | WASM Component Model + WASI |
 
-## Процесс загрузки
+## Бэкенды отображения
 
-```mermaid
-flowchart TB
-    PWR["Включение питания"] --> ROM["Mask ROM"]
-    ROM --> SPL["U-Boot SPL"]
-    SPL --> ATF["ATF (BL31)"]
-    ATF --> UBT["U-Boot Proper"]
-    UBT -->|Загрузка ядра + DTB + initramfs| KRN["Ядро Linux"]
-    KRN -->|Выполнение /init| INIT["aris-core (PID 1)"]
-    INIT --> ETH["Настройка eth0 (WAN) + eth1 (LAN)"]
-    INIT --> MNT["Монтирование постоянного раздела (/data)"]
-    INIT --> ID["Проверка / инициализация идентичности устройства"]
-    INIT --> EVN["Запуск демона evernight"]
-    EVN --> CFG["Загрузка /etc/evernight/config.toml"]
-    EVN --> REG["Подключение к entelecheia (WebSocket)"]
-    EVN --> LSN["Запуск слушателей протоколов\nModbus :502 · S7comm :102 · OPC UA :4840"]
-    INIT --> SUP["Цикл супервизии\nКормление watchdog · Health-check evernight · Обработка OTA"]
-```
+| Бэкенд | Применение |
+|--------|-----------|
+| /dev/fb0 mmap | Встраиваемые устройства, ядро kei |
+| winit + softbuffer | Десктоп (Linux/macOS/Windows) |
+| WASM canvas | Встраивание в браузер (WASM) |
 
-## Схема разделов (Обновление A/B)
+## Два режима
 
-| Смещение | Размер | Раздел | Содержимое |
-|----------|--------|--------|------------|
-| 0 | 32 КиБ | (промежуток) | idbloader.img |
-| 32 КиБ | 8 МиБ | (промежуток) | u-boot.itb |
-| 8 МиБ | 128 МиБ | boot-A | Image + DTB + boot.scr |
-| 136 МиБ | 128 МиБ | boot-B | Image + DTB + boot.scr (резерв) |
-| 264 МиБ | 512 МиБ | rootfs-A | squashfs (ro) |
-| 776 МиБ | 512 МиБ | rootfs-B | squashfs (ro, резерв) |
-| 1288 МиБ | - | постоянный | ext4 (rw, /data) |
+1. **Встроенный режим** (библиотека): `render_html()` выдаёт пиксельный буфер
+2. **Автономный режим** (браузер): `render_window` открывает полноценное окно
 
-## Сетевая топология
+## Связанные проекты
 
-```mermaid
-flowchart TB
-    NET["Интернет / Корпоративная LAN"] --> ETH0
-    subbox GW["Шлюз aris"]
-        ETH0["eth0 — WAN (DHCP)"]
-        ETH1["eth1 — LAN (192.168.42.1/24)"]
-    end
-    ETH1 --> PLC["ПЛК\n192.168.42.5"]
-    ETH1 --> SEN["Датчик\n192.168.42.10"]
-    ETH1 --> HMI["HMI\n192.168.42.20"]
-```
-
-## Стратегия Asterinas ARM64 (Фаза 2)
-
-Основной upstream-источник для Asterinas ARM64:
-
-- **Форк**: https://github.com/wanywhn/asterinas (ветка: `arm64-support`)
-- **PR**: asterinas/asterinas#3270
-- **Статус**: Почти готов к слиянию; включает GICv3, ARM GIC, базовое дерево
-  устройств, настройку MMU и UART-консоль для aarch64
-
-После слияния в mainline Asterinas aris будет отслеживать официальный репозиторий.
-До тех пор ветка `arm64-support` служит базой разработки.
+- **[kei](https://github.com/celestia-island/kei)** — Ядро ОС на Rust
+- **[tairitsu](https://github.com/celestia-island/tairitsu)** — UI фреймворк на WASM
+- **[hikari](https://github.com/celestia-island/hikari)** — Библиотека UI компонентов
+- **[shirabe](https://github.com/celestia-island/shirabe)** — Автоматизация браузера

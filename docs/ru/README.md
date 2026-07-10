@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>Дистрибутив, соответствующий стандартам Linux, с рабочим столом для evernight и shittim-chest — создан для промышленных HMI и супервизорных станций</strong></p>
+<p align="center"><strong>Браузерный движок на базе servo — встраиваемый или автономный. Официальная инфраструктура servo частично заменена на 100% Rust альтернативы.</strong></p>
 
 <div align="center">
 
@@ -20,76 +20,86 @@
 [한국어](../ko/README.md) ·
 [Français](../fr/README.md) ·
 [Español](../es/README.md) ·
-**[Русский](../ru/README.md)** ·
+**Русский** ·
 [العربية](../ar/README.md)
 
 </div>
 
 ## Введение
 
-ARIS — это дистрибутив Linux, верный стандарту Linux Standard Base, с рабочим
-окружением, специально созданным для evernight и shittim-chest. Его эталон —
-промышленная HMI-панель и 上位机 (супервизорная станция): машина, обращённая к
-оператору, а не edge-шлюз. В то время как более широкий стек Celestia спускается
-к физическим устройствам, ARIS — это ОС, перед которой реально сидит оператор:
-знакомый, LSB-совместимый Linux, загружающийся в рабочий стол, специально
-настроенный для мониторинга и управления брокерами evernight и сессиями
-shittim-chest.
+ARIS — это **браузерный движок, основанный на servo**. Его можно встроить как библиотеку в любое Rust-приложение или запустить как автономный браузер. Конвейер рендеринга собран из 100% Rust крейтов — html5ever, stylo, taffy, parley, vello — а зависимости servo от SpiderMonkey / WebRender / SWGL заменены на Boa (JS), Vello CPU (растеризация) и Wasmtime (WASM).
 
 ```mermaid
 flowchart TB
-    Ent["Entelecheia (Облачная/Edge AI платформа)"] --> Evn["evernight (Брокер протоколов)"]
-    Evn --> Aris["aris (Ядро ОС + Прошивка устройства)"]
-    Aris --> HW["Физические устройства (ПЛК / Датчики / Клапаны)"]
+    subgraph ARIS["Движок ARIS"]
+        HTML["html5ever\nРазбор HTML"]
+        CSS["stylo\nКаскад CSS"]
+        LAYOUT["taffy\nВёрстка"]
+        TEXT["parley\nФормирование текста"]
+        RAST["vello_cpu\nРастеризация"]
+        JS["boa_engine\nJavaScript"]
+        WASM["wasmtime\nСреда WASM"]
+    end
+    EMBED["Встроить в Rust-приложение"] --> ARIS
+    ARIS --> STANDALONE["Автономный браузер"]
+    ARIS --> FB["framebuffer / winit\nВывод пикселей"]
 ```
 
-## Автонастройка USB-C без конфигурации
+## Почему не форк Servo напрямую?
 
-При подключении к любому хосту через USB-C шлюз представляется как составное
-USB-устройство:
+Servo включает SpiderMonkey (C++), WebRender (C++/SWGL) и обширный граф зависимостей. ARIS берёт лучшие части servo — фронтенд HTML/CSS на чистом Rust (html5ever, stylo, cssparser, selectors) — и перестраивает слои JavaScript, растеризации и WASM на 100% Rust альтернативах.
 
-- **Накопитель** — виртуальный USB-диск с автоустановщиками клиента evernight
-  для каждой ОС (Windows `.bat` + AutoRun, Linux `.sh`, macOS `.command`,
-  инструкции для Android)
-- **CDC-NCM** — виртуальный Ethernet-адаптер, предоставляющий хосту прямой
-  IP-канал к панели шлюза по адресу `http://10.0.99.1:8080`
-
-**Подключите USB-C → хост видит USB-диск → откройте установщик → готово.**
-Никакой настройки сети, загрузки драйверов или ручного сопряжения.
-
-## Поддерживаемые архитектуры
-
-| Архитектура | Статус | Целевые платы |
-|-------------|--------|---------------|
-| ARMv8+ (aarch64) | Активная | NanoPi R3S (RK3566) |
-| ARMv7+ (armv7) | Запланирована | Raspberry Pi 3/4 |
-| RISC-V 64 (riscv64) | Запланирована | VisionFive 2 |
-| x86_64 | Запланирована | Промышленный ПК |
+| Компонент Servo | Альтернатива ARIS | Причина |
+|-----------------|-------------------|---------|
+| SpiderMonkey (C++) | boa_engine | 100% Rust, без сборки C++ |
+| WebRender + SWGL (C++) | vello_cpu | Растеризация CPU на 100% Rust |
+| components/script | Мост Boa | Без привязки к SpiderMonkey |
+| — | wasmtime | WASM Component Model, WASI |
 
 ## Быстрый старт
 
 ```bash
-just setup-cross   # Install cross-compilation toolchains
-just build         # Build firmware image for default board
-just build-board nanopi-r3s
-just flash-sd      # Write image to SD card
+# Сборка автономного браузера
+cargo build -p aris-render --release
+
+# Рендеринг веб-страницы в фреймбуфер
+cargo run -p aris-render --bin render_lagrange -- example.html
+
+# Запуск в окне (бэкенд winit)
+cargo run -p aris-render --bin render_window --features winit-backend
 ```
+
+Подробнее в [руководстве по сборке](./build/quickstart.md).
 
 ## Архитектура
 
-ARIS следует двухфазной стратегии:
+```
+┌──────────────────────────────────────────────────────┐
+│  tairitsu (VDOM) / hikari (UI компоненты)            │
+│  WASM Component Model → интерфейс WIT                │
+├──────────────────────────────────────────────────────┤
+│  Конвейер рендеринга ARIS                              │
+│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
+│  Движок Boa JS (скрипты страниц)                      │
+│  Wasmtime (WASM компоненты, WASI)                     │
+├──────────────────────────────────────────────────────┤
+│  Бэкенды отображения: /dev/fb0 · winit+softbuffer     │
+├──────────────────────────────────────────────────────┤
+│  Ядро kei (syscall ABI) или Linux                     │
+└──────────────────────────────────────────────────────┘
+```
 
-- **Фаза 1** (текущая): ядро Linux + облегчённый rootfs в стиле Buildroot,
-  запускает evernight как демон. Прагматично, доступно сейчас.
-- **Фаза 2** (будущая): [Asterinas](https://github.com/asterinas/asterinas)
-  фрейм-ядро (ОС на Rust) заменяет ядро Linux. Полностью безопасный стек от
-  кремния до приложения.
+Подробнее в [обзоре архитектуры](./architecture/overview.md).
 
-См. [документацию](../en/) для деталей архитектуры, спецификаций оборудования и
-руководств по сборке.
+## Экосистема
+
+- **[kei](https://github.com/celestia-island/kei)** — Ядро ОС на Rust
+- **[tairitsu](https://github.com/celestia-island/tairitsu)** — UI фреймворк на WASM
+- **[hikari](https://github.com/celestia-island/hikari)** — Библиотека UI компонентов
+- **[shirabe](https://github.com/celestia-island/shirabe)** — Автоматизация браузера, контракт FFI рендеринга
+- **[evernight](https://github.com/celestia-island/evernight)** — Промышленный протокольный брокер
+- **[entelecheia](https://github.com/celestia-island/entelecheia)** — Платформа AI-агентов
 
 ## Лицензия
 
-Business Source License 1.1 (BUSL-1.1). Commercial use requires an
-authorization license. Non-commercial use follows the SySL-1.0 protocol.
-Converts to SySL-1.0 or Apache-2.0 on 2030-01-01. See [LICENSE](../../LICENSE).
+Business Source License 1.1 (BUSL-1.1). Преобразуется в SySL-1.0 или Apache-2.0 2030-01-01. См. [LICENSE](../../LICENSE).

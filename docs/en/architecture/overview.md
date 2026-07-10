@@ -1,88 +1,120 @@
-# aris System Architecture
+# ARIS Architecture
 
 ## Overview
 
-aris is a Linux-standard distribution with a desktop environment purpose-built
-for evernight and shittim-chest. It targets industrial HMI panels and
-supervisory host (上位机) stations — the operator-facing machine. It runs a
-stock Linux kernel and bridges the evernight broker and shittim-chest sessions
-to field devices.
+ARIS is a browser engine derived from servo. It can be embedded as a library
+in any Rust application, or run as a standalone desktop browser. The rendering
+pipeline uses pure-Rust crates (html5ever, stylo, taffy, parley, vello),
+replacing servo's SpiderMonkey (C++), WebRender (C++/SWGL), and
+components/script with Boa, Vello CPU, and Wasmtime respectively.
 
-## Architecture Layers
-
-```mermaid
-flowchart TB
-    subgraph App["Application Layer"]
-        Evn["evernight\nProtocol Broker\nModbus RTU/TCP · S7comm · EtherCAT\nCAN bus · OPC UA"]
-        Core["aris-core (supervisor)\nWatchdog · OTA update\nNet config · Provisioning"]
-        Evn ---|Unix socket / IPC| Core
-    end
-    subgraph Krn["Kernel Layer (stock Linux)"]
-        Linux["Linux kernel\n(x86_64 / aarch64 / armv7 / riscv64)"]
-        Drv["Drivers: stmmac · dw_wdt · 8250_dw\ngpio-rockchip · spi-rockchip\ni2c-rk3x · dw_mmc · phy-rockchip"]
-    end
-    subgraph HW["Hardware Layer"]
-        Soc["RK3566 / BCM2711 / JH7110 / Intel N100"]
-        Iface["Dual GbE · GPIO · SPI · I2C\nUART · RS-485 · CAN"]
-    end
-    App --> Krn
-    Krn --> HW
-```
-
-## Boot Flow
+## Rendering Pipeline
 
 ```mermaid
-flowchart TB
-    PWR["Power-On"] --> ROM["Mask ROM"]
-    ROM --> SPL["U-Boot SPL"]
-    SPL --> ATF["ATF (BL31)"]
-    ATF --> UBT["U-Boot Proper"]
-    UBT -->|Load kernel + DTB + initramfs| KRN["Linux Kernel"]
-    KRN -->|Execute /init| INIT["aris-core (PID 1)"]
-    INIT --> ETH["Configure eth0 (WAN) + eth1 (LAN)"]
-    INIT --> MNT["Mount persistent partition (/data)"]
-    INIT --> ID["Check / provision device identity"]
-    INIT --> EVN["Spawn evernight daemon"]
-    EVN --> CFG["Load /etc/evernight/config.toml"]
-    EVN --> REG["Connect to entelecheia (WebSocket)"]
-    EVN --> LSN["Start protocol listeners\nModbus :502 · S7comm :102 · OPC UA :4840"]
-    INIT --> SUP["Supervision loop\nFeed watchdog · Health-check evernight · Handle OTA"]
+flowchart LR
+    HTML["HTML\nhtml5ever"] --> DOM["DOM Tree"]
+    CSS["CSS\nstylo"] --> STYLE["Computed Styles"]
+    DOM --> LAYOUT["Layout\ntaffy"]
+    STYLE --> LAYOUT
+    LAYOUT --> TEXT["Text Shaping\nparley"]
+    TEXT --> RAST["Rasterization\nvello_cpu"]
+    RAST --> RGBA["RGBA Buffer"]
+    JS["JavaScript\nboa_engine"] -.-> DOM
+    JS -.-> STYLE
+    WASM["WASM\nwasmtime"] -.-> JS
 ```
 
-## Partition Layout (A/B Update)
+### Component Details
 
-| Offset | Size | Partition | Contents |
-|--------|------|-----------|----------|
-| 0 | 32 KiB | (gap) | idbloader.img |
-| 32 KiB | 8 MiB | (gap) | u-boot.itb |
-| 8 MiB | 128 MiB | boot-A | Image + DTB + boot.scr |
-| 136 MiB | 128 MiB | boot-B | Image + DTB + boot.scr (standby) |
-| 264 MiB | 512 MiB | rootfs-A | squashfs (ro) |
-| 776 MiB | 512 MiB | rootfs-B | squashfs (ro, standby) |
-| 1288 MiB | - | persistent | ext4 (rw, /data) |
+| Layer | Crate | Role | Origin |
+|-------|-------|------|--------|
+| HTML parsing | html5ever | Parse HTML into DOM tree | Servo (pure Rust) |
+| CSS parsing & cascade | stylo + cssparser + selectors | Parse CSS, compute cascaded styles | Servo (pure Rust) |
+| Layout | taffy | Flexbox, Grid, Block layout | Independent (pure Rust) |
+| Text shaping | parley | Text layout and shaping | Independent (pure Rust) |
+| Rasterization | vello_cpu | CPU-based vector graphics → RGBA pixels | Independent (pure Rust) |
+| JavaScript | boa_engine | ECMAScript execution | Independent (pure Rust) |
+| WASM runtime | wasmtime | WASM Component Model, WASI | Independent |
 
-## Network Topology
+### What We Replaced from Servo
 
-```mermaid
-flowchart TB
-    NET["Internet / Enterprise LAN"] --> ETH0
-    subbox GW["aris Gateway"]
-        ETH0["eth0 — WAN (DHCP)"]
-        ETH1["eth1 — LAN (192.168.42.1/24)"]
-    end
-    ETH1 --> PLC["PLC\n192.168.42.5"]
-    ETH1 --> SEN["Sensor\n192.168.42.10"]
-    ETH1 --> HMI["HMI\n192.168.42.20"]
+| Servo Component | ARIS Replacement | Reason |
+|----------------|-----------------|--------|
+| SpiderMonkey (C++) | boa_engine | Pure Rust, no C++ build dependency |
+| WebRender + SWGL (C++) | vello_cpu | Pure Rust CPU rasterization |
+| components/script | Boa bridge (aris-js) | No SpiderMonkey coupling |
+| components/layout (partial) | taffy + parley | Pure Rust, independently maintained |
+| — | wasmtime | WASM Component Model with WASI |
+
+## Display Backends
+
+ARIS renders to a pixel buffer which can be displayed through multiple backends:
+
+| Backend | Crate | Use Case |
+|---------|-------|----------|
+| /dev/fb0 mmap | aris-render (fbdev) | Embedded devices, kei kernel |
+| winit + softbuffer | aris-render (winit_backend) | Desktop (Linux, macOS, Windows) |
+| WASM canvas | aris-wasm | Browser embedding via WASM |
+
+## System Integration
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Application Layer                                       │
+│  tairitsu (VDOM) · hikari (UI components)                │
+│  evernight (protocol broker) · entelecheia (AI agents)   │
+├──────────────────────────────────────────────────────────┤
+│  ARIS Browser Engine                                     │
+│  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐     │
+│  │ render  │ │   js    │ │  wasm    │ │   abi    │     │
+│  │ HTML→   │ │ boa_    │ │ wasmtime │ │ Linux    │     │
+│  │ pixels  │ │ engine  │ │ + WIT   │ │ compat   │     │
+│  └─────────┘ └─────────┘ └──────────┘ └──────────┘     │
+├──────────────────────────────────────────────────────────┤
+│  Kernel Layer                                            │
+│  kei (syscall ABI, /dev/fb0, virtio-gpu) or Linux       │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Asterinas ARM64 Strategy (Phase 2)
+## Package Structure
 
-Primary upstream source for ARM64 Asterinas:
+```
+aris/
+├── packages/
+│   ├── render/        # Rendering pipeline (Blitz + Vello CPU)
+│   │   ├── src/lib.rs          # Public API
+│   │   ├── src/fbdev.rs        # /dev/fb0 mmap backend
+│   │   ├── src/winit_backend.rs # Desktop window backend
+│   │   └── src/bin/            # render_lagrange, render_window, etc.
+│   ├── js/             # Boa JS engine bridge (aris-js)
+│   ├── wasm/           # Wasmtime WASM host + WIT adapter
+│   ├── abi/            # Linux ABI compatibility layer
+│   ├── core/           # PID 1 system supervisor
+│   └── common/         # Shared types
+├── configs/            # Board configurations
+├── board/              # Device trees, boot scripts
+├── kernel/             # Kernel patches (when on Linux)
+└── scripts/            # Build and test automation
+```
 
-- **Fork**: https://github.com/wanywhn/asterinas (branch: `arm64-support`)
-- **PR**: asterinas/asterinas#3270
-- **Status**: Nearly ready for merge; includes GICv3, ARM GIC, basic device
-  tree, MMU setup, and UART console for aarch64
+## Two Operating Modes
 
-Once merged into mainline Asterinas, aris will track the official repo. Until
-then, the `arm64-support` branch serves as the development baseline.
+### 1. Embedded (Library)
+Link `aris-render` as a dependency, call `render_html()` or `render_dom_ops()`:
+```rust
+use aris_render::render_html;
+let pixels: Vec<u8> = render_html("<h1>Hello</h1>", 800, 600)?;
+```
+
+### 2. Standalone (Desktop Browser)
+Run the `render_window` binary for a full desktop browser window:
+```bash
+cargo run -p aris-render --bin render_window --features winit-backend
+```
+
+## Related Projects
+
+- **[kei](https://github.com/celestia-island/kei)** — Rust OS kernel providing syscall ABI and framebuffer
+- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI framework with VDOM
+- **[hikari](https://github.com/celestia-island/hikari)** — UI component library built on tairitsu
+- **[shirabe](https://github.com/celestia-island/shirabe)** — Browser automation, defines render FFI contract

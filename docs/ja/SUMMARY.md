@@ -7,6 +7,5 @@
 # ガイド
 
 - [クイックスタート](./build/quickstart.md)
+- [アーキテクチャ概要](./architecture/overview.md)
 - [デプロイメント](./guides/deployment.md)
-- [アーキテクチャ概览](./architecture/overview.md)
-- [NanoPi R3S ハードウェアリファレンス](./hardware/nanopi-r3s-spec.md)

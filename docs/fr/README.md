@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>Une distribution Linux-standard avec un bureau optimisé pour evernight &amp; shittim-chest — conçue pour les HMI industrielles et les postes hôtes</strong></p>
+<p align="center"><strong>Un moteur de navigateur bâti sur servo — intégrable ou autonome. L'infrastructure officielle de servo est partiellement remplacée par des alternatives 100% Rust.</strong></p>
 
 <div align="center">
 
@@ -18,7 +18,7 @@
 [繁體中文](../zht/README.md) ·
 [日本語](../ja/README.md) ·
 [한국어](../ko/README.md) ·
-**[Français](../fr/README.md)** ·
+**Français** ·
 [Español](../es/README.md) ·
 [Русский](../ru/README.md) ·
 [العربية](../ar/README.md)
@@ -27,70 +27,79 @@
 
 ## Introduction
 
-ARIS est une distribution Linux qui reste fidèle à la base standard Linux et
-embarque un environnement de bureau conçu spécifiquement pour evernight et
-shittim-chest. Sa référence est le panneau HMI industriel et le poste hôte
-(上位机) — la machine face à l'opérateur, pas la passerelle edge. Là où la pile
-Celestia plus large descend jusqu'aux appareils physiques, ARIS est l'OS devant
-lequel l'opérateur se trouve réellement : un Linux familier et compatible LSB
-qui démarre sur un bureau câblé spécifiquement pour surveiller et contrôler les
-courtiers evernight et les sessions shittim-chest.
+ARIS est un **moteur de navigateur dérivé de servo**. Il peut être intégré comme bibliothèque dans n'importe quelle application Rust, ou exécuté comme navigateur de bureau autonome. Le pipeline de rendu est assemblé à partir de crates 100% Rust — html5ever, stylo, taffy, parley, vello — et les dépendances SpiderMonkey / WebRender / SWGL de servo sont remplacées par Boa (JS), Vello CPU (rastérisation) et Wasmtime (WASM).
 
 ```mermaid
 flowchart TB
-    Ent["Entelecheia (Plateforme Cloud/Edge AI)"] --> Evn["evernight (Courtier de protocoles)"]
-    Evn --> Aris["aris (Noyau OS + Firmware du périphérique)"]
-    Aris --> HW["Périphériques physiques (PLC / Capteurs / Vannes)"]
+    subgraph ARIS["Moteur ARIS"]
+        HTML["html5ever\nAnalyse HTML"]
+        CSS["stylo\nCascade CSS"]
+        LAYOUT["taffy\nMise en page"]
+        TEXT["parley\nForme du texte"]
+        RAST["vello_cpu\nRastérisation"]
+        JS["boa_engine\nJavaScript"]
+        WASM["wasmtime\nRuntime WASM"]
+    end
+    EMBED["Intégrer dans une app Rust"] --> ARIS
+    ARIS --> STANDALONE["Navigateur autonome"]
+    ARIS --> FB["framebuffer / winit\nSortie pixels"]
 ```
 
-## Provisionnement Zero-Config USB-C
+## Pourquoi ne pas forker Servo directement ?
 
-Lorsqu'il est connecté à un hôte via USB-C, la passerelle se présente comme un
-périphérique USB composite :
+Servo embarque SpiderMonkey (C++), WebRender (C++/SWGL) et un graphe de dépendances volumineux. ARIS reprend les meilleurs éléments de servo — le frontal HTML/CSS en Rust pur (html5ever, stylo, cssparser, selectors) — et reconstruit les couches JavaScript, rastérisation et WASM avec des alternatives 100% Rust.
 
-- **Stockage de masse** — un lecteur USB virtuel contenant des auto-installeurs
-  par OS pour le client evernight (Windows `.bat` + AutoRun, Linux `.sh`,
-  macOS `.command`, instructions Android)
-- **CDC-NCM** — une carte Ethernet virtuelle donnant à l'hôte un lien IP direct
-  vers le tableau de bord de la passerelle à `http://10.0.99.1:8080`
-
-**Branchez USB-C → l'hôte voit un lecteur USB → ouvrez l'installeur → terminé.**
-Aucune configuration réseau, aucun téléchargement de pilote, aucun appairage
-manuel.
-
-## Architectures prises en charge
-
-| Architecture | Statut | Cartes cibles |
-|-------------|--------|---------------|
-| ARMv8+ (aarch64) | Actif | NanoPi R3S (RK3566) |
-| ARMv7+ (armv7) | Planifié | Raspberry Pi 3/4 |
-| RISC-V 64 (riscv64) | Planifié | VisionFive 2 |
-| x86_64 | Planifié | PC industriel |
+| Composant Servo | Alternative ARIS | Raison |
+|-----------------|-----------------|--------|
+| SpiderMonkey (C++) | boa_engine | 100% Rust, pas de build C++ |
+| WebRender + SWGL (C++) | vello_cpu | Rastérisation CPU 100% Rust |
+| components/script | Pont Boa | Sans couplage SpiderMonkey |
+| — | wasmtime | WASM Component Model, WASI |
 
 ## Démarrage rapide
 
 ```bash
-just setup-cross   # Install cross-compilation toolchains
-just build         # Build firmware image for default board
-just build-board nanopi-r3s
-just flash-sd      # Write image to SD card
+# Compiler le navigateur autonome
+cargo build -p aris-render --release
+
+# Rendre une page web vers le framebuffer
+cargo run -p aris-render --bin render_lagrange -- example.html
+
+# Exécuter dans une fenêtre (backend winit)
+cargo run -p aris-render --bin render_window --features winit-backend
 ```
+
+Voir le [guide de compilation](./build/quickstart.md) pour plus de détails.
 
 ## Architecture
 
-ARIS suit une stratégie en deux phases :
+```
+┌──────────────────────────────────────────────────────┐
+│  tairitsu (VDOM) / hikari (composants UI)            │
+│  WASM Component Model → interface WIT                │
+├──────────────────────────────────────────────────────┤
+│  Pipeline de rendu ARIS                               │
+│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
+│  Moteur Boa JS (scripts de page)                     │
+│  Wasmtime (composants WASM, WASI)                    │
+├──────────────────────────────────────────────────────┤
+│  Backends d'affichage : /dev/fb0 · winit+softbuffer  │
+├──────────────────────────────────────────────────────┤
+│  Noyau kei (ABI syscall) ou Linux                    │
+└──────────────────────────────────────────────────────┘
+```
 
-- **Phase 1** (actuelle) : noyau Linux + rootfs léger de type Buildroot, exécute
-  evernight comme daemon. Pragmatique, livrable maintenant.
-- **Phase 2** (future) : [Asterinas](https://github.com/asterinas/asterinas)
-  framekernel (OS Rust) remplace le noyau Linux. Pile sécurisée complète, du
-  silicium jusqu'à l'application.
+Voir la [vue d'ensemble architecturale](./architecture/overview.md).
 
-Voir la [documentation](../en/) pour les détails d'architecture, les références
-matérielles et les guides de construction.
+## Écosystème
+
+- **[kei](https://github.com/celestia-island/kei)** — Noyau OS en Rust
+- **[tairitsu](https://github.com/celestia-island/tairitsu)** — Framework UI WASM
+- **[hikari](https://github.com/celestia-island/hikari)** — Bibliothèque de composants UI
+- **[shirabe](https://github.com/celestia-island/shirabe)** — Automatisation navigateur, contrat FFI de rendu
+- **[evernight](https://github.com/celestia-island/evernight)** — Courtier de protocoles industriels
+- **[entelecheia](https://github.com/celestia-island/entelecheia)** — Plateforme d'agents IA
 
 ## Licence
 
-Business Source License 1.1 (BUSL-1.1). Commercial use requires an
-authorization license. Non-commercial use follows the SySL-1.0 protocol.
-Converts to SySL-1.0 or Apache-2.0 on 2030-01-01. See [LICENSE](../../LICENSE).
+Business Source License 1.1 (BUSL-1.1). Convertie en SySL-1.0 ou Apache-2.0 le 2030-01-01. Voir [LICENSE](../../LICENSE).

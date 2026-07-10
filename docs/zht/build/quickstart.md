@@ -1,11 +1,9 @@
-# 快速開始 — 從原始碼到 SD 卡
+# 快速開始 — 構建 ARIS
 
 ## 前置條件
 
-- Linux x86_64 或 ARM64 主機
 - Rust 1.85+（透過 `rustup`）
 - `just` 命令執行器（`cargo install just`）
-- SD 卡讀卡機 + microSD（≥ 8 GB）
 
 ## 1. 複製
 
@@ -14,46 +12,37 @@ git clone https://github.com/celestia-island/aris
 cd aris
 ```
 
-## 2. 設定交叉編譯
+## 2. 構建瀏覽器引擎
 
 ```bash
-just setup-cross
+cargo build -p aris-render --release
+cargo build -p aris-render --release --features winit-backend
+cargo build -p aris-wasm --release
 ```
 
-此命令會安裝 Rust 目標（`aarch64-unknown-linux-musl` 等），並列印適用於您發行版的 GCC 工具鏈說明。
-
-## 3. 建置韌體
+## 3. 執行範例
 
 ```bash
-just build-board nanopi-r3s
+cargo run -p aris-render --bin render_test
+cargo run -p aris-render --bin render_lagrange -- path/to/page.html
+cargo run -p aris-render --bin render_window --features winit-backend
+cargo run -p aris-wasm --bin render_wasm -- path/to/component.wasm
 ```
 
-產生 `output/nanopi-r3s/image.img`。
+## 4. 平台設定
 
-## 4. 燒錄到 SD 卡
+### Linux
 
 ```bash
-just flash-sd /dev/sdX
+sudo apt install libx11-dev libxkbcommon-dev libwayland-dev
 ```
 
-將 `/dev/sdX` 替換為您的 SD 卡裝置（用 `lsblk` 查看）。
+macOS / Windows 無需額外依賴。
 
-## 5. 啟動
-
-將 SD 卡插入 NanoPi R3S，連接 5V USB-C 電源。
-
-- **序列控制台**：將 USB-TTL 連接到 3 針除錯排針（GND/TX/RX），1500000 鮑率，8N1
-- **SSH**：啟動後，`ssh root@<ip>`（從 WAN eth0 透過 DHCP 取得）
-
-## 6. 驗證
+## 5. 執行測試
 
 ```bash
-# Check aris-core is running (PID 1)
-ps aux | grep aris-core
-
-# Check evernight is running
-ps aux | grep evernight
-
-# Check device registration with entelecheia
-tail -f /var/log/evernight.log
+cargo test -p aris-render
+cargo test -p aris-js
+cargo test -p aris-wasm
 ```
