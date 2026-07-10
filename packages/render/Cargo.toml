@@ -12,8 +12,8 @@ thiserror.workspace = true
 tracing.workspace = true
 libc = "0.2"
 memmap2 = "0.9"
-blitz-dom = "=0.3.0-alpha.6"
-blitz-paint = "=0.3.0-alpha.6"
+blitz-dom = { version = "=0.3.0-alpha.6", default-features = false }
+blitz-paint = { version = "=0.3.0-alpha.6", default-features = false }
 blitz-traits = "=0.3.0-alpha.6"
 blitz-html = "=0.3.0-alpha.6"
 anyrender = "0.11"
