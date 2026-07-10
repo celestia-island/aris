@@ -2,7 +2,7 @@
 
 This directory contains board-specific files for the NanoPi R3S:
 
-- `defconfig` — Buildroot-style full board definition (composite config)
+- `defconfig` — Full board definition (composite config)
 - `linux.config` — Linux kernel .config fragment
 - `uboot.config` — U-Boot .config fragment
 - `genimage.cfg` — SD card image partition layout
