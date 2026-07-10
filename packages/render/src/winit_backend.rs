@@ -125,23 +125,51 @@ pub fn run_window(html: &str, config: &RenderConfig) -> anyhow::Result<()> {
             let Some(surface) = self.surface.as_mut() else {
                 return;
             };
-            // Resize the softbuffer surface to the window size.
+            // softbuffer's surface dimensions are in physical pixels. The
+            // window reports logical sizes via Resized, so account for HiDPI
+            // by scaling up. We request the physical pixel grid from the
+            // window's scale factor.
+            let scale = self
+                .window
+                .as_ref()
+                .map(|w| w.scale_factor())
+                .unwrap_or(1.0);
+            let phys_w = ((sw as f64) * scale).round() as u32;
+            let phys_h = ((sh as f64) * scale).round() as u32;
+            if phys_w == 0 || phys_h == 0 {
+                return;
+            }
             let _ = surface.resize(
-                NonZeroU32::new(sw).unwrap(),
-                NonZeroU32::new(sh).unwrap(),
+                NonZeroU32::new(phys_w).unwrap(),
+                NonZeroU32::new(phys_h).unwrap(),
             );
             // softbuffer expects XRGB8888 u32 pixels (0x00RRGGBB). Our Frame is
-            // RGBA bytes ([R, G, B, A]). Convert per-pixel, mapping frame
-            // coordinates onto the (possibly differently-sized) surface with
-            // top-left origin.
+            // RGBA bytes ([R, G, B, A]). The surface buffer has phys_w * phys_h
+            // entries (one u32 each). We stretch the frame (fw×fh) to fill the
+            // physical surface so the full window is covered regardless of
+            // HiDPI scaling.
             if let Ok(mut buffer) = surface.buffer_mut() {
                 let fw = frame.width as usize;
                 let fh = frame.height as usize;
+                let pw = phys_w as usize;
+                let ph = phys_h as usize;
                 let buf_len = buffer.len();
-                let pixels_per_row = buf_len / sh as usize;
-                for y in 0..(sh as usize).min(fh) {
-                    for x in 0..(sw as usize).min(fw) {
-                        let src = (y * fw + x) * 4;
+                for dy in 0..ph {
+                    // Map physical y → frame y (nearest-neighbor stretch).
+                    let fy = if ph > 0 { dy * fh / ph } else { 0 };
+                    if fy >= fh {
+                        break;
+                    }
+                    let row_start = dy * pw;
+                    if row_start >= buf_len {
+                        break;
+                    }
+                    for dx in 0..pw {
+                        let fx = if pw > 0 { dx * fw / pw } else { 0 };
+                        if fx >= fw {
+                            break;
+                        }
+                        let src = (fy * fw + fx) * 4;
                         if src + 2 >= frame.rgba.len() {
                             break;
                         }
@@ -149,10 +177,7 @@ pub fn run_window(html: &str, config: &RenderConfig) -> anyhow::Result<()> {
                         let g = frame.rgba[src + 1] as u32;
                         let b = frame.rgba[src + 2] as u32;
                         // XRGB8888: blue in low byte
-                        let idx = y * pixels_per_row + x;
-                        if idx < buf_len {
-                            buffer[idx] = (r << 16) | (g << 8) | b;
-                        }
+                        buffer[row_start + dx] = (r << 16) | (g << 8) | b;
                     }
                 }
                 let _ = buffer.present();

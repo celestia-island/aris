@@ -11,6 +11,7 @@ members = [
     "packages/render",
     "packages/abi",
     "packages/js",
+    "packages/wasm",
 ]
 
 [workspace.package]

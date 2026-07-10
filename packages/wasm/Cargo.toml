@@ -1,0 +1,19 @@
+[package]
+name = "aris-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "WASM Component Model host for aris — runs tairitsu/hikari components via Wasmtime"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+aris-render = { path = "../render" }
+# tairitsu-ssr provides render_to_html(): a synchronous, non-tokio host that
+# loads a WASM Component (wasm32-wasip2), instantiates it with the
+# tairitsu-browser:full WIT world, calls lifecycle::start, and returns the
+# rendered body HTML string. We depend on the local source tree so the whole
+# stack (wasmtime, wasi, wit-bindgen) uses one consistent version.
+# Path: packages/wasm → packages → aris → celestia → tairitsu
+tairitsu-ssr = { path = "../../../tairitsu/packages/ssr" }
