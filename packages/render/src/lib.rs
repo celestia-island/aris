@@ -1,131 +1,76 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! aris-render — HTML/CSS rendering pipeline for the aris HMI.
-//!
-//! Provides a pure-Rust rendering stack using Blitz (Stylo + Taffy + Parley)
-//! and Vello CPU for software rasterization to a pixel buffer. The buffer
-//! can be pushed to `/dev/fb0` on kei/Linux or saved as a file for testing.
-//!
-//! ## Architecture
-//!
-//! ```text
-//! HTML string → blitz-dom (parse + CSS cascade + layout)
-//!            → blitz-paint (paint to anyrender scene)
-//!            → anyrender_vello_cpu (CPU rasterize to RGBA buffer)
-//!            → fbdev backend (mmap /dev/fb0) or file output
-//! ```
 
 #![allow(unsafe_code)]
 #![allow(dead_code)]
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 extern crate alloc;
 
 pub mod fbdev;
-
 pub use fbdev::FbDevBackend;
 
 use anyrender::ImageRenderer;
-use blitz_dom::{BaseDocument, DocumentConfig};
-use blitz_traits::shell::Viewport;
 
 /// Configuration for the rendering pipeline.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
-    /// Viewport width in pixels.
     pub width: u32,
-    /// Viewport height in pixels.
     pub height: u32,
-    /// Scale factor (1.0 = no scaling).
     pub scale: f32,
 }
 
 impl Default for RenderConfig {
     fn default() -> Self {
-        Self {
-            width: 1280,
-            height: 800,
-            scale: 1.0,
-        }
+        Self { width: 1280, height: 800, scale: 1.0 }
     }
 }
 
 /// A rendered frame as an RGBA pixel buffer.
 #[derive(Debug)]
 pub struct Frame {
-    /// Width in pixels.
     pub width: u32,
-    /// Height in pixels.
     pub height: u32,
-    /// Pixel data in RGBA format (4 bytes per pixel, row-major).
     pub rgba: Vec<u8>,
 }
 
 impl Frame {
-    /// Creates a new empty (black) frame.
     pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            rgba: vec![0; (width * height * 4) as usize],
-        }
+        Self { width, height, rgba: vec![0; (width * height * 4) as usize] }
     }
 
-    /// Returns the raw pixel data as a byte slice.
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.rgba
-    }
-
-    /// Returns the raw pixel data as a mutable byte slice.
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        &mut self.rgba
-    }
-
-    /// Saves the frame as a PPM (P6) file for testing/debugging.
     pub fn save_ppm(&self, path: &str) -> anyhow::Result<()> {
         use std::fs::File;
         use std::io::Write;
-
         let mut file = File::create(path)?;
         writeln!(file, "P6")?;
         writeln!(file, "{} {}", self.width, self.height)?;
         writeln!(file, "255")?;
-
-        // Convert RGBA → RGB for PPM
         let mut rgb = Vec::with_capacity((self.width * self.height * 3) as usize);
         for chunk in self.rgba.chunks_exact(4) {
-            rgb.push(chunk[0]); // R
-            rgb.push(chunk[1]); // G
-            rgb.push(chunk[2]); // B
+            rgb.push(chunk[0]);
+            rgb.push(chunk[1]);
+            rgb.push(chunk[2]);
         }
         file.write_all(&rgb)?;
         Ok(())
     }
 }
 
-/// Renders an HTML string into a pixel buffer using the Blitz + Vello CPU pipeline.
-///
-/// This is the high-level entry point: parse HTML, apply CSS cascade via Stylo,
-/// compute layout via Taffy, rasterize via Vello CPU — all in pure Rust with
-/// no GPU/DRM dependency.
-///
-/// # Arguments
-///
-/// * `html` — The HTML document to render.
-/// * `config` — Rendering configuration (viewport size, scale).
-///
-/// # Returns
-///
-/// A `Frame` containing the rendered RGBA pixel data.
+/// Renders an HTML string into a pixel buffer using Blitz + Vello CPU.
 pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     let width = config.width;
     let height = config.height;
     let scale = config.scale as f64;
 
-    // 1. Create a BaseDocument with viewport configuration
+    // Use blitz-html's HtmlDocument to parse HTML properly
+    use blitz_html::HtmlDocument;
+    use blitz_dom::DocumentConfig;
+    use blitz_traits::shell::Viewport;
+
     let viewport = Viewport {
         window_size: (width, height),
         hidpi_scale: config.scale,
@@ -137,19 +82,14 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
         ..Default::default()
     };
 
-    let mut doc = BaseDocument::new(doc_config);
+    // HtmlDocument::from_html handles full HTML parsing (html5ever) + DOM construction
+    let mut doc = HtmlDocument::from_html(html, doc_config);
 
-    // 2. Parse HTML into the document's DOM tree
-    //    Use set_inner_html on the root document node
-    let root_id = doc.root_node().id;
-    doc.mutate().set_inner_html(root_id, html);
-
-    // 3. Resolve styles (Stylo CSS cascade) and compute layout (Taffy)
+    // Resolve styles (Stylo CSS cascade) and compute layout (Taffy)
     doc.resolve(0.0);
 
-    // 4. Paint the document to an anyrender scene, then rasterize via Vello CPU
+    // Paint to anyrender scene, then rasterize via Vello CPU
     let mut frame = Frame::new(width, height);
-
     let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
     renderer.render(
         |scene| {
