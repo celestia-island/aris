@@ -14,6 +14,9 @@ libc = "0.2"
 memmap2 = "0.9"
 blitz-dom = "=0.3.0-alpha.6"
 blitz-paint = "=0.3.0-alpha.6"
+blitz-traits = "=0.3.0-alpha.6"
+anyrender = "0.11"
+anyrender_vello_cpu = "0.14"
 
 [features]
 default = []

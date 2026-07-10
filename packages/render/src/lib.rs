@@ -10,12 +10,15 @@
 //!
 //! ```text
 //! HTML string → blitz-dom (parse + CSS cascade + layout)
-//!            → blitz-renderer-vello (Vello CPU rasterize to RGBA buffer)
+//!            → blitz-paint (paint to anyrender scene)
+//!            → anyrender_vello_cpu (CPU rasterize to RGBA buffer)
 //!            → fbdev backend (mmap /dev/fb0) or file output
 //! ```
 
 #![allow(unsafe_code)]
+#![allow(dead_code)]
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -24,6 +27,10 @@ extern crate alloc;
 pub mod fbdev;
 
 pub use fbdev::FbDevBackend;
+
+use anyrender::ImageRenderer;
+use blitz_dom::{BaseDocument, DocumentConfig};
+use blitz_traits::shell::Viewport;
 
 /// Configuration for the rendering pipeline.
 #[derive(Debug, Clone)]
@@ -113,56 +120,43 @@ impl Frame {
 /// # Returns
 ///
 /// A `Frame` containing the rendered RGBA pixel data.
-///
-/// # Note
-///
-/// This function is a placeholder that produces a solid-color test pattern.
-/// The full Blitz integration (DOM parse → Stylo cascade → Taffy layout →
-/// Vello CPU rasterize) requires the blitz-dom and blitz-renderer-vello crates
-/// to be published on crates.io with compatible APIs. Until then, the test
-/// pattern verifies the fbdev output path end-to-end.
 pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
-    // TODO: Full Blitz pipeline integration:
-    // 1. blitz_dom::Document::from_html(html)
-    // 2. Apply CSS cascade (Stylo)
-    // 3. Compute layout (Taffy)
-    // 4. Rasterize via blitz_renderer_vello::render_to_buffer(&mut frame.rgba)
-    //
-    // For now, generate a test pattern that visualizes the viewport:
-    let mut frame = Frame::new(config.width, config.height);
-    generate_test_pattern(&mut frame, html);
+    let width = config.width;
+    let height = config.height;
+    let scale = config.scale as f64;
+
+    // 1. Create a BaseDocument with viewport configuration
+    let viewport = Viewport {
+        window_size: (width, height),
+        hidpi_scale: config.scale,
+        ..Default::default()
+    };
+
+    let doc_config = DocumentConfig {
+        viewport: Some(viewport),
+        ..Default::default()
+    };
+
+    let mut doc = BaseDocument::new(doc_config);
+
+    // 2. Parse HTML into the document's DOM tree
+    //    Use set_inner_html on the root document node
+    let root_id = doc.root_node().id;
+    doc.mutate().set_inner_html(root_id, html);
+
+    // 3. Resolve styles (Stylo CSS cascade) and compute layout (Taffy)
+    doc.resolve(0.0);
+
+    // 4. Paint the document to an anyrender scene, then rasterize via Vello CPU
+    let mut frame = Frame::new(width, height);
+
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    renderer.render(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut doc, scale, width, height, 0, 0);
+        },
+        &mut frame.rgba,
+    );
+
     Ok(frame)
-}
-
-/// Generates a diagnostic test pattern when full HTML rendering is not yet wired.
-///
-/// The pattern shows:
-/// - A colored border (green) to confirm pixel output works
-/// - A diagonal gradient to show the full viewport is covered
-fn generate_test_pattern(frame: &mut Frame, _html: &str) {
-    let w = frame.width;
-    let h = frame.height;
-
-    for y in 0..h {
-        for x in 0..w {
-            let idx = ((y * w + x) * 4) as usize;
-            let on_border = x < 8 || y < 8 || x >= w - 8 || y >= h - 8;
-
-            if on_border {
-                // Green border (matches kei's GPU test pattern)
-                frame.rgba[idx] = 0; // R
-                frame.rgba[idx + 1] = 255; // G
-                frame.rgba[idx + 2] = 0; // B
-                frame.rgba[idx + 3] = 255; // A
-            } else {
-                // Blue gradient with red diagonal (One Half Dark inspired)
-                let blue = ((x ^ y) & 0xFF) as u8;
-                let red = (((x + y) >> 1) & 0x7F) as u8;
-                frame.rgba[idx] = red;
-                frame.rgba[idx + 1] = 0x2C;
-                frame.rgba[idx + 2] = blue;
-                frame.rgba[idx + 3] = 255;
-            }
-        }
-    }
 }
