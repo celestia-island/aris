@@ -197,3 +197,172 @@ pub fn run_window(html: &str, config: &RenderConfig) -> anyhow::Result<()> {
     event_loop.run_app(&mut app)?;
     Ok(())
 }
+
+/// Run a window that executes `<script>` blocks via Boa before rendering.
+///
+/// This is the `js`-feature variant of [`run_window`]. It calls
+/// [`crate::render_html_with_js`] instead of [`crate::render_html`], so
+/// inline `<script>` tags run through the Boa engine and their side effects
+/// (e.g. `document.write`) appear in the rendered output.
+#[cfg(feature = "js")]
+pub fn run_window_with_js(html: &str, config: &RenderConfig) -> anyhow::Result<()> {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::window::{Window, WindowId};
+
+    let event_loop = EventLoop::new()?;
+
+    struct App {
+        html: String,
+        config: RenderConfig,
+        window: Option<Rc<Window>>,
+        context: Option<softbuffer::Context<Rc<Window>>>,
+        surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
+        cached_frame: Option<Frame>,
+        surface_size: (u32, u32),
+    }
+
+    impl ApplicationHandler for App {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            if self.window.is_some() {
+                return;
+            }
+            let window = event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("aris-render + Boa JS")
+                        .with_inner_size(winit::dpi::LogicalSize::new(
+                            self.config.width,
+                            self.config.height,
+                        )),
+                )
+                .expect("create window");
+            let window = Rc::new(window);
+            let context =
+                softbuffer::Context::new(window.clone()).expect("softbuffer context");
+            let surface =
+                softbuffer::Surface::new(&context, window.clone()).expect("surface");
+
+            match crate::render_html_with_js(&self.html, &self.config) {
+                Ok(frame) => {
+                    let nb = frame
+                        .rgba
+                        .chunks_exact(4)
+                        .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
+                        .count();
+                    eprintln!(
+                        "[winit+js] rendered {}x{} non-black {}/{}",
+                        frame.width,
+                        frame.height,
+                        nb,
+                        frame.width as usize * frame.height as usize
+                    );
+                    self.cached_frame = Some(frame);
+                }
+                Err(e) => {
+                    eprintln!("[winit+js] render error: {:?}", e);
+                }
+            }
+
+            self.surface_size = (self.config.width, self.config.height);
+            self.window = Some(window);
+            self.context = Some(context);
+            self.surface = Some(surface);
+        }
+
+        fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                }
+                WindowEvent::Resized(size) => {
+                    self.surface_size = (size.width, size.height);
+                    self.present();
+                }
+                WindowEvent::RedrawRequested => {
+                    self.present();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl App {
+        fn present(&mut self) {
+            let (sw, sh) = self.surface_size;
+            if sw == 0 || sh == 0 {
+                return;
+            }
+            let Some(frame) = self.cached_frame.as_ref() else {
+                return;
+            };
+            let Some(surface) = self.surface.as_mut() else {
+                return;
+            };
+            let scale = self
+                .window
+                .as_ref()
+                .map(|w| w.scale_factor())
+                .unwrap_or(1.0);
+            let phys_w = ((sw as f64) * scale).round() as u32;
+            let phys_h = ((sh as f64) * scale).round() as u32;
+            if phys_w == 0 || phys_h == 0 {
+                return;
+            }
+            let _ = surface.resize(
+                NonZeroU32::new(phys_w).unwrap(),
+                NonZeroU32::new(phys_h).unwrap(),
+            );
+            if let Ok(mut buffer) = surface.buffer_mut() {
+                let fw = frame.width as usize;
+                let fh = frame.height as usize;
+                let pw = phys_w as usize;
+                let ph = phys_h as usize;
+                let buf_len = buffer.len();
+                for dy in 0..ph {
+                    let fy = if ph > 0 { dy * fh / ph } else { 0 };
+                    if fy >= fh {
+                        break;
+                    }
+                    let row_start = dy * pw;
+                    if row_start >= buf_len {
+                        break;
+                    }
+                    for dx in 0..pw {
+                        let fx = if pw > 0 { dx * fw / pw } else { 0 };
+                        if fx >= fw {
+                            break;
+                        }
+                        let src = (fy * fw + fx) * 4;
+                        if src + 2 >= frame.rgba.len() {
+                            break;
+                        }
+                        let r = frame.rgba[src] as u32;
+                        let g = frame.rgba[src + 1] as u32;
+                        let b = frame.rgba[src + 2] as u32;
+                        buffer[row_start + dx] = (r << 16) | (g << 8) | b;
+                    }
+                }
+                let _ = buffer.present();
+            }
+        }
+    }
+
+    let mut app = App {
+        html: html.to_string(),
+        config: config.clone(),
+        window: None,
+        context: None,
+        surface: None,
+        cached_frame: None,
+        surface_size: (0, 0),
+    };
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}

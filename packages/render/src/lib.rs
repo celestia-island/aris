@@ -104,3 +104,35 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
 
     Ok(frame)
 }
+
+/// Execute `<script>` blocks in the HTML via Boa, then render.
+///
+/// When the `js` feature is enabled, this runs any inline `<script>` tags
+/// through the Boa JS engine before feeding the (possibly modified) HTML to
+/// [`render_html`]. JS side effects that write to `document.body` or
+/// `document.write` are injected into the HTML so the rendered output reflects
+/// the script's output.
+///
+/// Without the `js` feature, this is equivalent to [`render_html`].
+#[cfg(feature = "js")]
+pub fn render_html_with_js(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
+    let result = aris_js::execute_scripts(html);
+    if !result.errors.is_empty() {
+        for e in &result.errors {
+            tracing::warn!("[js] {}", e);
+        }
+    }
+    // If the script wrote body content via document.write, inject it before
+    // </body>. This is a minimal integration — full DOM mutation would need
+    // the tairitsu WIT host (Phase 4).
+    let final_html = if let Some(body) = result.document_props.get("body") {
+        if !body.is_empty() {
+            html.replace("</body>", &format!("{}\n</body>", body))
+        } else {
+            html.to_string()
+        }
+    } else {
+        html.to_string()
+    };
+    render_html(&final_html, config)
+}

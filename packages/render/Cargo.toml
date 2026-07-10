@@ -19,6 +19,11 @@ blitz-html = "=0.3.0-alpha.6"
 anyrender = "0.11"
 anyrender_vello_cpu = "0.14"
 
+# Boa JS engine (optional). Enabled by the `js` feature. Lets render_html
+# execute <script> blocks before rendering, so JS-generated content
+# (document.write, dynamic DOM) appears in the output.
+aris-js = { path = "../js", optional = true }
+
 # Desktop windowing (optional). Enabled by the `winit` feature. These deps
 # pull in platform-specific backends (Win32/X11/Wayland/macOS) and must be
 # excluded from the musl/kei cross-compile targets.
@@ -29,5 +34,7 @@ raw-window-handle = { version = "0.6", optional = true }
 [features]
 default = []
 fbdev = []
+# Execute <script> blocks via Boa before rendering.
+js = ["dep:aris-js"]
 # Desktop window output via winit + softbuffer (Windows/Linux/macOS).
 winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle"]
