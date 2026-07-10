@@ -90,10 +90,11 @@ impl FbDevBackend {
         );
 
         // Try mmap for direct pixel access.
-        let mmap = match memmap2::MmapOptions::new()
-            .len(fb_size)
-            .map_mut(&file)
-        {
+        let mmap = match unsafe {
+            memmap2::MmapOptions::new()
+                .len(fb_size)
+                .map_mut(&file)
+        } {
             Ok(m) => {
                 tracing::info!("fbdev: mmap successful ({} bytes)", fb_size);
                 Some(m)

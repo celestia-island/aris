@@ -14,7 +14,7 @@
 //!            → fbdev backend (mmap /dev/fb0) or file output
 //! ```
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 use alloc::string::String;
 use alloc::vec::Vec;
