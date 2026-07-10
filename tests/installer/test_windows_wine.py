@@ -16,7 +16,6 @@ Wine installation:
 """
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -119,18 +118,18 @@ def main():
         f.write(b"MZ\x90\x00" + b"\x00" * 124)  # minimal PE header stub
 
     # ── 5a: Run the installer ──────────────────────────────────
-    print(f"\n[5a] Running install_evernight.bat via Wine...")
+    print("\n[5a] Running install_evernight.bat via Wine...")
     bat_wine_path = os.path.join(mock_win, "install_evernight.bat")
     output, retcode = run_wine_batch(bat_wine_path)
 
     print(f"  exit code: {retcode}")
     # Filter out Wine noise
-    lines = [l for l in output.split("\n") if l.strip() and not l.startswith("0") and "fixme" not in l.lower()]
+    lines = [line for line in output.split("\n") if line.strip() and not line.startswith("0") and "fixme" not in line.lower()]
     for line in lines:
         print(f"  {line}")
 
     # ── 5b: Check installer output ──────────────────────────────────
-    print(f"\n[5b] Analyzing installer output...")
+    print("\n[5b] Analyzing installer output...")
 
     # Architecture detection
     if "AMD64 detected" in output or "detected" in output.lower():
@@ -153,7 +152,7 @@ def main():
         print("  [ok] Service registered (unexpected success in Wine!)")
 
     # ── 5c: Verify binary was copied ────────────────────────────────
-    print(f"\n[5c] Verifying installation...")
+    print("\n[5c] Verifying installation...")
     installed_exe = os.path.join(WINEPREFIX, "drive_c", "Program Files", "Entelecheia", "evernight.exe")
     if os.path.isfile(installed_exe):
         size = os.path.getsize(installed_exe)
@@ -163,7 +162,7 @@ def main():
         print("  [!!] evernight.exe not found")
 
     # ── 5d: Path resolution validation ────────────────────────────────
-    print(f"\n[5d] Path resolution...")
+    print("\n[5d] Path resolution...")
     if "not found on the USB drive" in output:
         failures.append("USB path resolution failed")
         print("  [!!] USB drive path resolution failed")
@@ -171,7 +170,7 @@ def main():
         print("  [ok] USB drive path resolution works")
 
     # ── 5e: Static analysis (supplemental) ────────────────────────
-    print(f"\n[5e] Batch file logic analysis...")
+    print("\n[5e] Batch file logic analysis...")
     with open(BAT_FILE) as f:
         bat = f.read()
 

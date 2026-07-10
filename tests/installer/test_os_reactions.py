@@ -12,10 +12,8 @@ The Linux and macOS installers are tested via shell dry-runs.
 
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PKG_DIR = os.path.join(SCRIPT_DIR, "..", "..", "package")

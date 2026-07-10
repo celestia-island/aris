@@ -49,7 +49,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ARIS_ROOT = os.path.join(SCRIPT_DIR, "..", "..")
@@ -74,13 +73,13 @@ FW_LINK_BASE = "https://go.microsoft.com/fwlink/?linkid={linkid}&clcid=0x409&cul
 def download_win11_eval_iso(dest=None):
     """
     Auto-download Windows 11 Enterprise Evaluation ISO from Microsoft.
-    
+
     Reverse-engineers the eval center download flow:
     1. GET the eval center web page
     2. Extract go.microsoft.com/fwlink redirect URLs
     3. Follow the fwlink to get the real ISO URL from Microsoft's CDN
     4. Download the ISO
-    
+
     This is the same approach used by dockurr/windows.
     Returns path to downloaded ISO, or None on failure.
     """
@@ -89,14 +88,14 @@ def download_win11_eval_iso(dest=None):
     from html import unescape as html_unescape
 
     iso_path = dest or WIN_ISO
-    
+
     if os.path.exists(iso_path) and os.path.getsize(iso_path) > 100_000_000:
         print(f"  ISO already cached: {iso_path}")
         return iso_path
 
     os.makedirs(CACHE_DIR, exist_ok=True)
     ua = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
-    
+
     print("  Step 1: Fetching eval center page...")
     try:
         r = sp.run(["curl", "-sL", "--max-time", "30", "-A", ua, EVAL_WIN11_URL],
@@ -107,19 +106,19 @@ def download_win11_eval_iso(dest=None):
         return None
 
     if len(html) < 1000:
-        print(f"  ✗ Eval page returned empty/invalid response")
+        print("  ✗ Eval page returned empty/invalid response")
         return None
 
     # Extract fwlink URLs with culture=en-us and country=us
     pattern = r'https?://go\.microsoft\.com/fwlink/\?[^\s"<>]*?linkid=\d+[^\s"<>]*culture=en[^\s"<>]*country=us[^\s"<>]*'
     links = list(dict.fromkeys(re.findall(pattern, html, re.IGNORECASE)))
-    
+
     if not links:
         # Fallback: extract linkid values and construct fwlink URLs
         linkids = list(dict.fromkeys(re.findall(r'linkid=(\d+)', html)))
         print(f"  Found {len(linkids)} linkid values (building fwlinks manually)")
         links = [FW_LINK_BASE.format(linkid=lid) for lid in linkids[:8]]  # test first 8
-    
+
     if not links:
         print("  ✗ No fwlink URLs found on the eval page")
         print("    The Microsoft page structure may have changed.")
@@ -137,10 +136,10 @@ def download_win11_eval_iso(dest=None):
                        capture_output=True, text=True, timeout=20)
             url = r.stdout.strip()
             fn = url.split("/")[-1] if "/" in url else ""
-            
+
             if not fn:
                 continue
-            
+
             # Look for x64 English ISO
             if "x64" in fn and "en-us" in fn.lower():
                 dl_url = url
@@ -150,7 +149,7 @@ def download_win11_eval_iso(dest=None):
                 dl_url = url
         except Exception:
             continue
-    
+
     if not dl_url:
         # Use the first link as fallback
         try:
@@ -167,7 +166,7 @@ def download_win11_eval_iso(dest=None):
 
     fn = dl_url.split("/")[-1]
     print(f"  Step 3: Downloading {fn[:60]}...")
-    
+
     # Get content-length for progress reporting
     try:
         r = sp.run(["curl", "-sI", "--max-time", "15", dl_url],
@@ -180,7 +179,7 @@ def download_win11_eval_iso(dest=None):
         pass
 
     print(f"  Downloading to: {iso_path}")
-    print(f"  This will take a while. Press Ctrl+C to cancel.")
+    print("  This will take a while. Press Ctrl+C to cancel.")
     print()
 
     # Download with curl (shows progress)
@@ -192,7 +191,7 @@ def download_win11_eval_iso(dest=None):
         f'--progress-bar '
         f'"{dl_url}"'
     )
-    
+
     if rc == 0 and os.path.exists(iso_path) and os.path.getsize(iso_path) > 100_000_000:
         size_gb = os.path.getsize(iso_path) / (1024**3)
         print(f"\n  ✓ Downloaded: {iso_path} ({size_gb:.1f} GB)")
@@ -243,14 +242,14 @@ def create_vm_disk():
 
 def create_autounattend_xml():
     """Generate Windows unattended install answer file.
-    
+
     This automates the Windows OOBE, creates an admin account, and skips
     the interactive prompts during installation. Attached as a floppy disk
     to the VM so Windows Setup picks it up automatically.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     xml_path = os.path.join(CACHE_DIR, "Autounattend.xml")
-    
+
     # Only write if it doesn't exist (don't overwrite user edits)
     if os.path.exists(xml_path):
         return xml_path
@@ -258,7 +257,7 @@ def create_autounattend_xml():
     xml = """<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
     <settings pass="windowsPE">
-        <component name="Microsoft-Windows-Setup" 
+        <component name="Microsoft-Windows-Setup"
                    processorArchitecture="amd64"
                    publicKeyToken="31bf3856ad364e35"
                    language="neutral" versionScope="nonSxS">
@@ -349,7 +348,7 @@ def create_autounattend_xml():
 
 def create_floppy_with_autounattend():
     """Create a floppy disk image with Autounattend.xml.
-    
+
     Windows Setup automatically looks for Autounattend.xml on removable
     media at boot. By attaching it as a floppy disk, the installation
     becomes fully unattended.
@@ -387,7 +386,7 @@ def create_floppy_with_autounattend():
 def create_usb_test_iso():
     """
     Create a small bootable ISO that simulates the aris gadget USB drive.
-    
+
     This ISO is attached as a USB mass-storage device to the QEMU VM,
     so Windows sees it as a removable USB drive. It contains:
     - autorun.inf at the root (triggers AutoRun)
@@ -499,8 +498,8 @@ def boot_windows(iso: str, test_mode: bool = False):
     print("  QEMU Windows VM")
     print("=" * 55)
     print(f"  Display:  VNC localhost:{VNC_PORT}  (connect with vncviewer)")
-    print(f"  RDP:      localhost:3389           (after Windows boots)")
-    print(f"  QMP:      localhost:4444           (automation)")
+    print("  RDP:      localhost:3389           (after Windows boots)")
+    print("  QMP:      localhost:4444           (automation)")
 
     if test_mode:
         print()
@@ -527,8 +526,8 @@ def cmd_status():
         sz = os.path.getsize(iso)
         print(f"  ISO:       ✓ {os.path.basename(iso)} ({sz:,} bytes)")
     else:
-        print(f"  ISO:       ✗ not found")
-        print(f"              Auto-download:  just windows-setup --auto-download")
+        print("  ISO:       ✗ not found")
+        print("              Auto-download:  just windows-setup --auto-download")
         print(f"              Manual:         download from {EVAL_WIN11_URL}")
         print(f"              Expected:       {WIN_ISO}")
     print(f"  Installer: {'✓' if os.path.exists(INSTALLER_IMG) else '✗ (run: just test-gadget first)'}")
@@ -552,7 +551,7 @@ def cmd_setup(auto_download=False):
         if iso:
             print(f"  ✓ Found: {iso}")
         else:
-            print(f"  ✗ Windows ISO not found.")
+            print("  ✗ Windows ISO not found.")
             print(f"    Expected location: {WIN_ISO}")
             print()
             print("  To auto-download (Win11 x64 en-us):")

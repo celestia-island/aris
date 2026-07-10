@@ -109,7 +109,9 @@ def main():
         for name, want in [("idVendor","0x1d6b"),("idProduct","0x0104")]:
             got = mock.attr(name)
             ok = got == want
-            if not ok: fails.append(f"{name}: {got}≠{want}")
+            if not ok:
+
+                fails.append(f"{name}: {got}≠{want}")
             print(f"  [{'ok' if ok else '!!'}] {name}={got}")
 
         # 2c: strings
@@ -118,7 +120,9 @@ def main():
         for k, want in [("manufacturer","test-celestia"),("product","Test GW"),("serialnumber","T0001")]:
             got = st.get(k,"")
             ok = got == want
-            if not ok: fails.append(f"{k}: {got}≠{want}")
+            if not ok:
+
+                fails.append(f"{k}: {got}≠{want}")
             print(f"  [{'ok' if ok else '!!'}] {k}={got}")
 
         # 2d: functions
@@ -126,7 +130,9 @@ def main():
         fns = mock.functions()
         for fn in ["mass_storage.0", "ncm.0"]:
             ok = fn in fns
-            if not ok: fails.append(f"missing {fn}")
+            if not ok:
+
+                fails.append(f"missing {fn}")
             print(f"  [{'ok' if ok else '!!'}] {fn}")
         print(f"  all: {fns}")
 
@@ -137,7 +143,9 @@ def main():
             with open(p) as f:
                 val = f.read().strip()
             ok = val == mock.ms_file
-            if not ok: fails.append("ms file mismatch")
+            if not ok:
+
+                fails.append("ms file mismatch")
             print(f"  [{'ok' if ok else '!!'}] file={os.path.basename(val)}")
         else:
             fails.append("lun.0/file missing")
@@ -148,14 +156,18 @@ def main():
         lks = mock.config_links()
         for fn in ["mass_storage.0", "ncm.0"]:
             ok = fn in lks
-            if not ok: fails.append(f"{fn} not linked")
+            if not ok:
+
+                fails.append(f"{fn} not linked")
             print(f"  [{'ok' if ok else '!!'}] {fn}")
 
         # 2g: UDC
         print("\n[2g] UDC binding...")
         udc = mock.attr("UDC")
         ok = bool(udc)
-        if not ok: fails.append("UDC not bound")
+        if not ok:
+
+            fails.append("UDC not bound")
         print(f"  [{'ok' if ok else '!!'}] UDC={udc}")
 
         # 2h: status
@@ -163,14 +175,18 @@ def main():
         r = mock.run(["status"])
         for fn in ["mass_storage", "ncm"]:
             ok = fn in r.stdout
-            if not ok: fails.append(f"status: {fn} missing")
+            if not ok:
+
+                fails.append(f"status: {fn} missing")
             print(f"  [{'ok' if ok else '!!'}] mentions {fn}")
 
         # 2i: stop
         print("\n[2i] Stop...")
         r = mock.run(["stop"])
         ok = r.returncode == 0
-        if not ok: fails.append("stop failed")
+        if not ok:
+
+            fails.append("stop failed")
         print(f"  [{'ok' if ok else '!!'}] exit={r.returncode}")
 
         # 2j: idempotent start
@@ -178,7 +194,9 @@ def main():
         mock.run(["start"])
         r2 = mock.run(["start"])
         ok = r2.returncode == 0 and mock.exists()
-        if not ok: fails.append("restart failed")
+        if not ok:
+
+            fails.append("restart failed")
         print(f"  [{'ok' if ok else '!!'}] restarted")
 
     finally:

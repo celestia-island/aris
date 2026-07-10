@@ -19,3 +19,5 @@ Thumbs.db
 __pycache__/
 /tests/output/
 /Cargo.lock
+
+dist/

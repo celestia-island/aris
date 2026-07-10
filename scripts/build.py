@@ -286,9 +286,8 @@ def main() -> int:
     # [7/7] Image assembly
     cf.blank()
     cf.step("[7/7] Assembling SD card image")
-    dtb_path = output_dir / "board.dtb"
     image_script = PROJECT_ROOT / "scripts" / "build_image.py"
-    image_result = subprocess.run(
+    image_result = subprocess.run(  # noqa: F841  (subprocess side-effect: runs image build)
         [sys.executable, str(image_script), board],
         cwd=PROJECT_ROOT,
     )

@@ -18,12 +18,10 @@ Usage:
 """
 
 import argparse
-import hashlib
 import os
 import shutil
 import subprocess
 import sys
-import time
 import urllib.request
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +44,7 @@ def download_alpine():
         print(f"  [ok] Alpine ISO cached: {iso_path}")
         return iso_path
 
-    print(f"  [..] Downloading Alpine Linux...")
+    print("  [..] Downloading Alpine Linux...")
     try:
         urllib.request.urlretrieve(ALPINE_URL, iso_path)
         print(f"  [ok] Downloaded: {os.path.getsize(iso_path):,} bytes")
@@ -126,7 +124,7 @@ def run_qemu_smoke():
                 if r.returncode == 0 and r.stdout.strip():
                     kernel_path = r.stdout.strip()
                     break
-            except:
+            except Exception:
                 pass
 
     if not kernel_path:
@@ -222,7 +220,7 @@ def test_qemu_gadget_script():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true", help="Smoke test only")
-    args = parser.parse_args()
+    args = parser.parse_args()  # noqa: F841  (argparse parse_args side-effect)
 
     print("Test 4: QEMU USB gadget integration")
     print("=" * 50)

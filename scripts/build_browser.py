@@ -159,7 +159,7 @@ def build_servo(arch: str, rootfs: Path) -> bool:
     binary = servo_src / "target" / rust_target / "release" / "servo"
     if binary.exists():
         shutil.copy2(binary, rootfs / "usr" / "bin" / "servo-browser")
-        cf.ok(f"  servo-browser → /usr/bin/servo-browser")
+        cf.ok("  servo-browser → /usr/bin/servo-browser")
         return True
     cf.fail("  Servo 二进制未找到")
     return False

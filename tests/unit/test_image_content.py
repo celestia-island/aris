@@ -107,12 +107,12 @@ def main() -> int:
                         if "INSTALL" in sub_entry.full_name.upper():
                             content = reader.read_file(sub_entry.first_cluster, sub_entry.file_size).decode("utf-8", errors="replace")
                             if "10.0.99.1" in content:
-                                print(f"  [ok] install_evernight.bat: contains gateway IP")
+                                print("  [ok] install_evernight.bat: contains gateway IP")
                             else:
                                 failures.append("install_evernight.bat: missing gateway IP")
-                                print(f"  [!!] install_evernight.bat: missing gateway IP")
+                                print("  [!!] install_evernight.bat: missing gateway IP")
                             if "EvernightGateway" in content:
-                                print(f"  [ok] install_evernight.bat: service name defined")
+                                print("  [ok] install_evernight.bat: service name defined")
                             else:
                                 failures.append("install_evernight.bat: missing service name")
                             break
@@ -128,7 +128,7 @@ def main() -> int:
                         if "README" in sub_entry.full_name.upper():
                             content = reader.read_file(sub_entry.first_cluster, sub_entry.file_size).decode("utf-8", errors="replace")
                             if "10.0.99.1" in content:
-                                print(f"  [ok] README.txt: contains gateway IP")
+                                print("  [ok] README.txt: contains gateway IP")
                             else:
                                 failures.append("README.txt: missing gateway IP")
                             break

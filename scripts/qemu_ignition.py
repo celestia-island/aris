@@ -175,7 +175,7 @@ def boot_qemu(kernel: Path, gateway_port: int, arch: str = "aarch64") -> int:
         # Serial console on stdio (kernel logs), plus the display window.
         "-serial", "mon:stdio",
         display_arg,
-        "-append", f"console=ttyAMA0 rdinit=/init",
+        "-append", "console=ttyAMA0 rdinit=/init",
         "-no-reboot",
     ]
 

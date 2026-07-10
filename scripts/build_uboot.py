@@ -16,11 +16,9 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
@@ -177,7 +175,7 @@ if __name__ == "__main__":
     out.mkdir(parents=True, exist_ok=True)
     result = obtain_uboot(args.board, out, force_build=args.build)
     if result:
-        print(f"\nU-Boot artifacts:")
+        print("\nU-Boot artifacts:")
         for name, path in result.items():
             print(f"  {name}: {path}")
     else:

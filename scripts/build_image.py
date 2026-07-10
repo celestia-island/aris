@@ -17,7 +17,6 @@ Usage:
 """
 from __future__ import annotations
 
-import os
 import shutil
 import struct
 import subprocess
@@ -76,7 +75,7 @@ def compile_boot_scr(board: str, output_dir: Path) -> Path | None:
         return None
 
     boot_scr = output_dir / "boot.scr"
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: F841  (subprocess side-effect: runs docker boot.cmd)
         [*build_env.docker_cmd(), "run", "--rm",
          "-v", f"{boot_cmd}:/in/boot.cmd:ro",
          "-v", f"{output_dir}:/out",
@@ -118,7 +117,6 @@ def write_gpt(image_path: Path, partitions: list[dict]) -> None:
         f.write(struct.pack("<H", 0xAA55))  # boot signature
 
         # ── GPT Header (sector 1) ──
-        header_start = f.tell() + SECTOR - 512  # should be at offset 512
         f.seek(SECTOR)
         header = bytearray(SECTOR)
         sig = b"EFI PART"

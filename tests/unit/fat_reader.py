@@ -11,7 +11,6 @@ Only implements read operations — sufficient for validation tests.
 import struct
 import sys
 import os
-from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional
 
@@ -125,11 +124,6 @@ class FatReader:
         # Count clusters
         root_dir_sectors = (root_entry_count * 32 + bytes_per_sector - 1) // bytes_per_sector
         data_sectors = total_sectors - reserved_sectors - 0 - root_dir_sectors
-        if sectors_per_fat16 != 0:
-            fat_sectors = num_fats * sectors_per_fat16
-        else:
-            fats32 = struct.unpack_from("<I", d, 36)[0]
-            fat_sectors = num_fats * fats32
         count_of_clusters = data_sectors // sectors_per_cluster
 
         fat_type = 32 if count_of_clusters >= 65525 else 16
@@ -343,7 +337,7 @@ def main():
 
     if len(sys.argv) >= 4 and sys.argv[2] == "extract":
         target = sys.argv[3]
-        root = reader.list_root()
+        root = reader.list_root()  # noqa: F841  (validates root directory is readable)
         # Try to find file in root, then common/, windows/, etc.
         for prefix in ["", "common/", "windows/", "linux/", "macos/", "android/"]:
             parts = (prefix + target).split("/")

@@ -96,7 +96,210 @@ Modbus TCP sim (:5020)
 
 ---
 
-## 既有详细计划（存档）
+## 6. 桌面系统路线图（2026-07-10 制定）
+
+### 6.1 架构重组：三仓库分层
+
+```
+celestia-island/
+├── kei/          内核（fork of asterinas）
+│                 纯内核职责：syscall ABI / drivers / scheduler / memory
+│
+├── aris/         系统中间件 ← 本次重点
+│                 - 渲染引擎（Blitz + Vello CPU，非 Servo fork）
+│                 - JS 引擎（Boa，替换 SpiderMonkey）
+│                 - WASM 运行时（Wasmtime，WASI 接入 tairitsu）
+│                 - Linux ABI 完整兼容层（gcompat 级别）
+│                 - 独立浏览器产品能力
+│                 - PID 1 系统监督器（LED/watchdog/网络/USB）
+│
+├── evernight/    发行版 ← 产出可部署镜像
+│                 - 消费 kei 内核 + aris 系统层
+│                 - OTA / 设备管理 / 产品镜像组装
+│                 - 板级配置 / init 脚本 / 安装器
+│
+├── tairitsu/     UI 框架（WASM Component Model）
+├── hikari/       UI 组件库（消费 tairitsu VDOM）
+├── kou/          终端引擎（调色板/协议参考）
+├── shirabe/      浏览器自动化（定义了渲染引擎 FFI 合约）
+└── entelecheia/  AI agent 平台（已有 Boa JS 集成经验）
+```
+
+**关键变化**：
+- aris 从"发行版组装器"升级为"系统中间件层"
+- evernight 成为产出可部署镜像的发行版（从 aris 迁入 OTA、板级配置、init 脚本）
+- Servo 不 vendor 也不 fork——用 Blitz + 独立 crate 组装渲染管线
+
+### 6.2 渲染技术选型：Blitz + 纯 Rust 组件
+
+不 fork Servo，而是用 crates.io 上的纯 Rust 组件组装渲染管线：
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                   aris 渲染管线                            │
+│                                                          │
+│  ┌──────────────┐   ┌─────────────────────────────────┐ │
+│  │ tairitsu     │   │ Blitz 渲染管线 (纯 Rust)         │ │
+│  │ (VDOM + diff)│   │                                 │ │
+│  │              │   │ html5ever  ← HTML 解析           │ │
+│  │ hikari 组件  │   │ stylo      ← CSS 级联(无SM依赖)  │ │
+│  └──────┬───────┘   │ taffy      ← Flexbox/Grid 布局  │ │
+│         │ DOM ops   │ parley     ← 文字排版            │ │
+│         ↓           │ vello_cpu  ← CPU 光栅化→像素     │ │
+│  ┌──────────────┐   └───────┬─────────────────────────┘ │
+│  │ Boa JS 引擎   │           │ RGBA buffer              │
+│  │ (页面内 JS)   │           ↓                          │
+│  └──────────────┘   mmap /dev/fb0 → kei virtio-gpu     │
+│                                                          │
+│  ┌──────────────┐                                       │
+│  │ Wasmtime     │  WASI ←→ kei syscall ABI             │
+│  │ (WASM 组件)  │                                       │
+│  └──────────────┘                                       │
+└──────────────────────────────────────────────────────────┘
+```
+
+**核心技术决策**：
+
+| 组件 | 选型 | 理由 |
+|------|------|------|
+| HTML/CSS 解析 | html5ever + cssparser + selectors | 纯 Rust，crates.io 独立发布，无 SpiderMonkey 依赖 |
+| CSS 级联 | stylo (servo feature) | crates.io 上的 `stylo` crate 用 `servo` feature 时不依赖 `mozjs` |
+| 布局引擎 | taffy | 纯 Rust，Flexbox/Grid/Block，独立于 Servo |
+| 文字排版 | parley | 纯 Rust，文字 shaping/breaking |
+| 光栅化 | vello_cpu | 纯 Rust CPU 光栅化，`render_to_buffer` 直接写像素 buffer |
+| 渲染集成 | blitz-dom + blitz-renderer-vello | 已组装好 parse→style→layout→paint 管线，无 JS |
+| JS 引擎 | boa_engine | 纯 Rust，替换 SpiderMonkey；entelecheia 已有集成经验 |
+| WASM 运行时 | wasmtime | tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 接入 |
+| 显示后端 | /dev/fb0 mmap | vello_cpu 输出 RGBA → memcpy 到 fb0，无需 DRM/Wayland |
+
+**避免使用**：
+- ❌ `mozjs` / SpiderMonkey — Boa 替代
+- ❌ `webrender` + SWGL — SWGL 是 C++，非纯 Rust
+- ❌ Servo `components/script` — SpiderMonkey 耦合层，整个替换
+- ❌ DRM/Wayland — vello_cpu + fbdev 绕过，远期再考虑
+
+### 6.3 aris 新增包结构
+
+```
+aris/
+├── packages/
+│   ├── core/           # PID 1 系统监督器（现有）
+│   ├── common/         # 共享类型（现有）
+│   ├── render/         # ← 新增：渲染管线
+│   │   ├── Cargo.toml  # blitz-dom, blitz-renderer-vello, boa_engine
+│   │   └── src/
+│   │       ├── lib.rs        # 公共 API: render_html, render_dom_ops
+│   │       ├── fbdev.rs      # /dev/fb0 mmap 后端
+│   │       ├── boa_bridge.rs # Boa JS 引擎桥接（页面内 JS 执行）
+│   │       └── wit_host.rs   # tairitsu WIT 接口的 Rust host 实现
+│   │
+│   └── abi/            # ← 新增：Linux ABI 完整兼容层
+│       ├── Cargo.toml
+│       └── src/
+│           ├── lib.rs          # 兼容层入口
+│           ├── syscall_shim.rs # 缺失 syscall 的用户态 fallback
+│           ├── fbdev_mmap.rs   # /dev/fb0 mmap 用户态驱动
+│           ├── drm_translate.rs # DRM ioctl → fbdev 翻译层
+│           └── proc_sys.rs     # /proc, /sys 模拟
+```
+
+### 6.4 evernight 迁移计划
+
+从 aris 迁入 evernight 的组件：
+
+| 组件 | 当前位置 | 迁入位置 | 理由 |
+|------|---------|---------|------|
+| OTA 更新 | `aris/packages/core/src/ota.rs` | `evernight/packages/ota/` | 产品级更新逻辑，evernight 已有 reqwest/sha2 |
+| 板级配置 | `aris/configs/*.toml` | `evernight/configs/` | 选择编译哪些 evernight 功能 |
+| 共享类型 | `aris/packages/common/` | `evernight/packages/aris-common/` | BoardConfig 等 |
+| init 脚本 | `aris/overlay/S90evernight` | `evernight/overlay/` | evernight 的启动脚本 |
+| 安装器 | `aris/package/` | `evernight/package/` | USB 安装器安装的是 evernight |
+| 点火测试 | `aris/scripts/ignition_test.py` | `evernight/scripts/` | 测试 evernight 注册流程 |
+
+保留在 aris 的组件：PID 1 监督器、LED/watchdog/网络/USB、board/（设备树/U-Boot）、build_browser.py、渲染管线、ABI 兼容层。
+
+evernight 需改造为 Cargo workspace：
+```toml
+[workspace]
+members = [
+    ".",                      # evernight 主程序（broker）
+    "packages/aris-common",   # 共享类型（从 aris 迁入）
+    "packages/ota",           # OTA 更新（从 aris 迁入）
+]
+```
+
+### 6.5 tairitsu ↔ aris 渲染管线对接
+
+**数据流**：
+```
+tairitsu WASM 组件（Wasmtime 执行）
+  → VDOM diff → DOM ops（create_element, set_style, append_child...）
+  → WIT interface（browser-full.wit）
+  → aris render 包的 wit_host.rs（实现 WIT host）
+  → blitz-dom（消费 DOM ops，更新 DOM 树）
+  → stylo（CSS 级联）→ taffy（布局）→ vello_cpu（光栅化）
+  → RGBA pixel buffer
+  → mmap /dev/fb0（kei virtio-gpu 显示）
+```
+
+**两种模式**：
+1. **SSR 模式**（简单，阶段 1）：tairitsu SSR 生成 HTML 字符串 → blitz-dom 解析 → 渲染
+2. **交互模式**（完整，阶段 4）：tairitsu WASM 组件实时通过 WIT 发送 DOM ops → blitz-dom 增量更新
+
+### 6.6 实施阶段
+
+#### 阶段 1：aris Linux kiosk 验证（~1-2 周）
+- 创建带显示的 QEMU 板子配置（`configs/qemu-hmi.toml`）
+- 在 aris Linux 后端（标准 Linux 内核）上用 WebKitGTK/Cogs 验证 kiosk 浏览器
+- 截图确认 evernight dashboard 渲染
+- 验证 `build_browser.py` 的 webkitgtk 路径
+
+#### 阶段 2：kei syscall + fbdev 补全（~3-5 天）
+- kei 补全 `/dev/fb0` mmap 支持（Blit 后端目前返回 ENODEV）
+- 补全缺失 syscall（SYSV shm、posix_spawn fallback）
+- 在 kei QEMU 上验证 `/dev/fb0` mmap 写入 → SDL 窗口显示
+
+#### 阶段 3：Blitz 渲染管线集成（~2-4 周）
+- 创建 `aris/packages/render/`
+- 集成 blitz-dom + blitz-renderer-vello（vello_cpu 后端）
+- 实现 `/dev/fb0` mmap 后端
+- 在 aris Linux 后端上验证 Blitz 渲染 HTML 到 fb0
+- 截图确认网页渲染
+
+#### 阶段 4：Boa JS + Wasmtime + WIT host（~4-8 周）
+- 集成 boa_engine 处理页面内 JS
+- 集成 wasmtime 执行 tairitsu WASM 组件
+- 实现 tairitsu `browser-full.wit` 的 Rust host adapter
+- WASI → kei syscall 桥接
+- 在 kei QEMU 上端到端验证
+
+#### 阶段 5：evernight 迁移 + 发行版组装（~2-4 周）
+- 从 aris 迁出 OTA、板级配置、init 脚本到 evernight
+- evernight 改造为 Cargo workspace
+- 产出完整的 kei + aris + evernight 部署镜像
+
+#### 阶段 6：Linux ABI 完整兼容层（~2-3 月）
+- 实现 gcompat 级别的 ABI 兼容库
+- 支持标准 Linux arm64 二进制（.deb 包）直接运行
+- /proc、/sys 模拟
+- DRM ioctl → fbdev 翻译层
+- 包管理器集成（apk 或 pkgsrc）
+
+#### 阶段 7：Wayland/DRM 最小实现（远期，按需）
+- 如果需要窗口管理或多窗口
+- 实现 kei 的 DRM 框架（/dev/dri/）
+- 移植 cage（最小 Wayland compositor）
+
+### 6.7 技术决策记录
+
+1. **不用 Servo fork**：Blitz 已经组装好 Stylo + Taffy + Vello CPU 管线，无需从 Servo 拆组件
+2. **不用 SpiderMonkey**：Boa 替代（纯 Rust，entelecheia 已有经验），页面内 JS 性能要求不高（dashboard 场景）
+3. **不用 WebRender/SWGL**：SWGL 是 C++，Vello CPU 是纯 Rust CPU 光栅化
+4. **不用 Vue/echarts**：UI 框架用 tairitsu（WASM Component Model）+ hikari 组件库
+5. **WASI 直接接入**：tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 成为应用层和内核的原生接口
+6. **完整 ABI 兼容层**：aris 实现 gcompat 级别的 Linux 兼容，支持任意 arm64 Linux 二进制
+
+---
 
 # aris — Project Plan
 
