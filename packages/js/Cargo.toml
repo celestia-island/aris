@@ -1,17 +1,16 @@
 [package]
 name = "aris-js"
-version = "0.1.0"
-edition = "2024"
-license = "BUSL-1.1"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Boa JS engine integration for aris HMI"
 
 [dependencies]
-tracing = "0.1"
-# Pin Boa to 0.20: aris pins rustc to 1.85 (rust-toolchain.toml), but Boa 0.21
-# requires rustc 1.88. Boa 0.20 (Dec 2024) is the latest release that compiles
-# on the 1.85 toolchain. The API surface we use (Context::default, Source,
-# eval, JsValue::to_string) is identical between 0.20 and 0.21.
+tracing.workspace = true
+# Keep Boa at 0.20: Boa 0.21 pins icu_normalizer ~2.0.0, which conflicts with
+# blitz-dom/parley's icu_normalizer ^2.1.1 in the same workspace. Boa 0.20
+# uses icu 1.x (different major), so it coexists cleanly. The toolchain bump
+# to 1.91 (stable) lets 0.20 compile too — its regress backend uses let-chains
+# that need rustc >= 1.88.
 boa_engine = "=0.20.0"
-
-[workspace]
-

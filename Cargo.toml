@@ -10,12 +10,13 @@ members = [
     "packages/common",
     "packages/render",
     "packages/abi",
+    "packages/js",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.91"
 authors = ["langyo <langyo.china@gmail.com>"]
 license = "BUSL-1.1"
 description = "aris — Linux-standard distribution with a desktop for evernight & shittim-chest (HMI / host stations)"
