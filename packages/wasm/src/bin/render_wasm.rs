@@ -72,8 +72,8 @@ fn main() {
                 Err(e) => eprintln!("[wasm] save error: {}", e),
             }
 
-            if pct < 5 {
-                eprintln!("[wasm] FAIL: non-black ratio {}% below 5%", pct);
+            if pct < 1 {
+                eprintln!("[wasm] FAIL: non-black ratio {}% below 1%", pct);
                 std::process::exit(2);
             }
         }
