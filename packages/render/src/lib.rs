@@ -13,6 +13,9 @@ extern crate alloc;
 pub mod fbdev;
 pub use fbdev::FbDevBackend;
 
+#[cfg(feature = "js")]
+#[cfg(feature = "js")]
+
 use anyrender::ImageRenderer;
 
 /// Configuration for the rendering pipeline.

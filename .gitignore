@@ -21,3 +21,4 @@ __pycache__/
 /Cargo.lock
 
 dist/
+packages/js/target/

@@ -1,0 +1,13 @@
+[package]
+name = "aris-js"
+version = "0.1.0"
+edition = "2024"
+license = "BUSL-1.1"
+description = "Boa JS engine integration for aris HMI"
+
+[dependencies]
+tracing = "0.1"
+boa_engine = "0.21"
+
+[workspace]
+
