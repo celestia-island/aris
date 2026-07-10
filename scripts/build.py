@@ -187,7 +187,7 @@ def assemble_rootfs(
         cf.warn("evernight binary not found")
 
     # overlay files (config, init scripts)
-    overlay_dir = PROJECT_ROOT / "overlay" / board
+    overlay_dir = PROJECT_ROOT / "configs" / "overlay" / board
     if overlay_dir.exists():
         shutil.copytree(overlay_dir, rootfs, dirs_exist_ok=True)
         cf.ok(f"Overlay ({board}) applied")

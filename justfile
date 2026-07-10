@@ -117,7 +117,7 @@ test-quick:
 
 # Build the USB mass-storage installer image (exposed to hosts via USB-C)
 build-installer-image OUTPUT="output/installer.img" EVERNIGHT_DIR="output/evernight-binaries":
-    bash package/build_installer_image.sh {{OUTPUT}} {{EVERNIGHT_DIR}}
+    bash scripts/package/build_installer_image.sh {{OUTPUT}} {{EVERNIGHT_DIR}}
 
 # Create fixture binaries for testing
 create-fixtures:

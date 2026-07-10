@@ -6,7 +6,7 @@ For Rockchip boards (RK3566/RK3588), U-Boot consists of two artifacts:
   - u-boot.itb     — U-Boot proper FIT image, written at SD offset 8MB
 
 Strategy (in order of preference):
-  1. Use prebuilt binaries from board directory (board/<board>/uboot/)
+  1. Use prebuilt binaries from board directory (configs/board/<board>/uboot/)
   2. Download prebuilt from official vendor/manufacturer
   3. Build from mainline U-Boot source inside Docker (needs aarch64 GCC)
 
@@ -32,14 +32,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PREBUILT_URLS = {
     "nanopi-r3s": {
         # FriendlyELEC rk3568 uboot works for rk3566 nanopi-r3s
-        # We bundle our own prebuilt in board/nanopi-r3s/uboot/ instead.
+        # We bundle our own prebuilt in configs/board/nanopi-r3s/uboot/ instead.
     },
 }
 
 
 def find_prebuilt(board: str) -> dict[str, Path] | None:
-    """Look for prebuilt U-Boot artifacts in board/<board>/uboot/."""
-    uboot_dir = PROJECT_ROOT / "board" / board / "uboot"
+    """Look for prebuilt U-Boot artifacts in configs/board/<board>/uboot/."""
+    uboot_dir = PROJECT_ROOT / "configs" / "board" / board / "uboot"
     artifacts = {}
     for name in ("idbloader.img", "u-boot.itb"):
         p = uboot_dir / name
