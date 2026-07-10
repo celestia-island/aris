@@ -1,0 +1,9 @@
+# aris-js is a standalone workspace (see the `[workspace]` table in Cargo.toml)
+# and therefore does NOT inherit aris's top-level rust-toolchain.toml pin (1.85).
+#
+# Boa 0.20's regex backend (regress 0.10.5) uses let-chains, which are stable
+# on the 2024 edition only with rustc >= 1.88. This pin selects a toolchain
+# that compiles the full dependency tree. Use "stable" (>= 1.88) rather than a
+# dated channel so it resolves from whatever is locally installed.
+[toolchain]
+channel = "stable"

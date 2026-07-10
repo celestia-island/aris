@@ -168,7 +168,7 @@ celestia-island/
 | 文字排版 | parley | 纯 Rust，文字 shaping/breaking |
 | 光栅化 | vello_cpu | 纯 Rust CPU 光栅化，`render_to_buffer` 直接写像素 buffer |
 | 渲染集成 | blitz-dom + blitz-renderer-vello | 已组装好 parse→style→layout→paint 管线，无 JS |
-| JS 引擎 | boa_engine | 纯 Rust，替换 SpiderMonkey；entelecheia 已有集成经验 |
+| JS 引擎 | boa_engine 0.20 | 纯 Rust，替换 SpiderMonkey；entelecheia 已有集成经验 |
 | WASM 运行时 | wasmtime | tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 接入 |
 | 显示后端 | /dev/fb0 mmap | vello_cpu 输出 RGBA → memcpy 到 fb0，无需 DRM/Wayland |
 
@@ -298,6 +298,7 @@ tairitsu WASM 组件（Wasmtime 执行）
 4. **不用 Vue/echarts**：UI 框架用 tairitsu（WASM Component Model）+ hikari 组件库
 5. **WASI 直接接入**：tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 成为应用层和内核的原生接口
 6. **完整 ABI 兼容层**：aris 实现 gcompat 级别的 Linux 兼容，支持任意 arm64 Linux 二进制
+7. **Boa 0.20 + 独立工具链**：aris 顶层工具链锁定 rustc 1.85（与 kei 内核一致），但 Boa 0.21 要求 rustc 1.88，其正则后端 regress 0.10.5 使用了 2024 edition 才稳定的 let-chains。因此 aris-js 作为独立 workspace（`[workspace]` 空表隔离），并通过本地 `rust-toolchain.toml` 锁定 `stable`（≥1.88）工具链。Boa 0.20 与 0.21 的公共 API（`Context::default`/`Source`/`eval`/`JsValue::to_string`）完全一致，升级仅受 MSRV 阻塞。
 
 ---
 

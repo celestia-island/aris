@@ -132,8 +132,8 @@ impl FbDevBackend {
             // Direct pixel copy via mmap
             let dst = &mut mmap[..];
             for y in 0..copy_h {
-                let src_offset = ((y * frame.width * 4) as usize);
-                let dst_offset = ((y * self.width * bpp) as usize);
+                let src_offset = (y * frame.width * 4) as usize;
+                let dst_offset = (y * self.width * bpp) as usize;
                 let len = (copy_w * 4) as usize;
                 let src_end = src_offset + len;
                 let dst_end = dst_offset + len;
@@ -147,7 +147,7 @@ impl FbDevBackend {
             self.file.seek(std::io::SeekFrom::Start(0))?;
             // Write line by line to handle stride differences
             for y in 0..copy_h {
-                let src_offset = ((y * frame.width * 4) as usize);
+                let src_offset = (y * frame.width * 4) as usize;
                 let len = (copy_w * 4) as usize;
                 self.file.write_all(&frame.rgba[src_offset..src_offset + len])?;
                 // Pad to stride if framebuffer width > frame width

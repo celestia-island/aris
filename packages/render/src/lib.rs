@@ -5,7 +5,6 @@
 #![allow(unsafe_code)]
 #![allow(dead_code)]
 
-use alloc::string::String;
 use alloc::vec::Vec;
 
 extern crate alloc;
