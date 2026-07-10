@@ -1,0 +1,60 @@
+# QEMU HMI board — virtual machine with display for desktop system testing.
+#
+# This board config is used for Phase 1 of the desktop system roadmap:
+# validating the HMI kiosk browser on a standard Linux kernel in QEMU
+# before porting to kei. It uses the webkitgtk engine (Cogs browser)
+# which has prebuilt arm64 packages available via apt.
+#
+# Usage:
+#   just build-board qemu-hmi --kernel-source linux
+#   python3 scripts/qemu_desktop.py qemu-hmi
+
+name = "qemu-hmi"
+arch = "aarch64"
+soc = "virt"
+ram_mb = 4096
+kernel_version = "6.12"
+kernel_defconfig = "defconfig"
+uboot_defconfig = ""
+dtb = ""
+eth_interfaces = ["eth0"]
+
+# Enable evernight features for a full gateway with HMI
+evernight_features = [
+    "hardware",
+    "protocol",
+    "serial",
+    "sensor",
+    "bin",
+    "api",
+    "vault",
+    "manifest",
+    "scripting",
+]
+
+entelecheia_server = "ws://entelecheia.local:8443/api/ws"
+
+# USB gadget — disabled for QEMU (no physical USB-C port)
+[usb_gadget]
+enabled = false
+
+# Local HMI display — use WebKitGTK (best prebuilt arm64 availability)
+[display]
+engine = "webkitgtk"
+resolution = [1280, 800]
+kiosk_url = "http://127.0.0.1:8080/"
+extra_args = "--disable-gpu"
+
+# QEMU-specific configuration
+[qemu]
+machine = "virt"
+cpu = "cortex-a72"
+smp = 2
+display = "sdl"
+# Extra QEMU devices for HMI testing
+devices = [
+    "virtio-gpu-device",
+    "virtio-keyboard-device",
+    "virtio-net-device",
+    "virtio-serial-device",
+]

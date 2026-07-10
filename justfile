@@ -92,6 +92,14 @@ qemu-ignition-asterinas:
 qemu-test:
     {{python_cmd}} scripts/qemu_test.py nanopi-r3s
 
+# QEMU desktop test with HMI display (webkitgtk/servo kiosk browser)
+qemu-desktop BOARD="qemu-hmi":
+    {{python_cmd}} scripts/qemu_desktop.py {{BOARD}}
+
+# QEMU desktop test with kei kernel backend (experimental)
+qemu-desktop-kei BOARD="qemu-hmi":
+    {{python_cmd}} scripts/qemu_desktop.py {{BOARD}} --kernel-source kei
+
 hw-test:
     cargo test --test hardware -- --test-threads=1
 
