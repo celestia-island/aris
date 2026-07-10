@@ -1,0 +1,27 @@
+[package]
+name = "aris-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTML/CSS rendering pipeline for aris HMI — Blitz + Vello CPU + /dev/fb0"
+
+[dependencies]
+# Workspace deps
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Linux fbdev support
+libc = "0.2"
+memmap2 = "0.9"
+
+# NOTE: blitz-dom and blitz-renderer-vello will be added in phase 3
+# once they are published on crates.io with compatible APIs.
+# For now the render pipeline produces a test pattern that verifies
+# the fbdev output path end-to-end.
+
+[features]
+default = []
+# Enable fbdev direct rendering (requires Linux /dev/fb0)
+fbdev = []
