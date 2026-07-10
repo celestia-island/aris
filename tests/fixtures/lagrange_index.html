@@ -1,0 +1,704 @@
+<!doctype html>
+<html lang="en" data-langs="en,zhs,zht,ja,ko,fr,es,ru,ar">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quick start</title>
+<style>
+
+/* hikari CSS - theme-aware (uses lagrange vars, not hardcoded dark) */
+:root{
+--hi-radius-sm:4px;--hi-radius-md:8px;--hi-radius-lg:12px;--hi-radius-full:9999px;
+--hi-blur-sm:8px;--hi-blur-md:16px;
+--hi-ease-out-expo:cubic-bezier(.16,1,.3,1);
+--hi-shadow-panel:0 2px 12px rgba(0,0,0,.06);
+--hi-shadow-elevated:0 4px 20px rgba(0,0,0,.08);
+--hi-shadow-focus:0 0 0 3px rgba(58,110,165,.12);
+--hi-z-modal:1000;--hi-z-toast:9999;--hi-z-tooltip:10000;
+--hi-scroll-size:8px;--hi-scroll-thumb:4px;
+}
+.hi-glass{background:var(--bg-subtle);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.hi-glass-panel{background:var(--bg-subtle);border:1px solid var(--border);border-radius:12px;box-shadow:var(--hi-shadow-panel)}
+.hi-scroll-container{overflow:auto;scrollbar-width:none!important}
+.hi-scroll-container::-webkit-scrollbar{display:none!important}
+.hi-obs-track{position:absolute;top:4px;bottom:4px;right:4px;width:8px;pointer-events:none;z-index:50;opacity:0;transition:width .15s,opacity .15s}
+.hi-obs-track:hover{width:14px;opacity:1;pointer-events:auto}
+.hi-obs-thumb{position:absolute;right:2px;width:4px;min-height:20px;border-radius:9999px;background:var(--fg-sec);opacity:.4;cursor:pointer;transition:width .15s,opacity .15s}
+.hi-obs-thumb:hover{width:6px;opacity:.6}
+.hi-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;box-shadow:var(--hi-shadow-panel);transition:box-shadow .3s}
+.hi-card:hover{box-shadow:var(--hi-shadow-elevated)}
+.hi-card-body{padding:1.5rem}
+.hi-typography{line-height:1.5;color:var(--fg)}
+.hi-typography-h1{font-size:1.85rem;font-weight:700;margin:0 0 1rem}
+.hi-typography-h2{font-size:1.35rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.3rem;margin:2rem 0 1rem}
+.hi-typography-h3{font-size:1.1rem;font-weight:600;margin:1.5rem 0 .75rem}
+.hi-typography-body{margin:.75rem 0}
+.hi-code-highlight{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:1rem 0;font-size:.85rem}
+.hi-code-highlight-header{display:flex;align-items:center;justify-content:space-between;padding:.4rem .6rem;border-bottom:1px solid var(--border);background:var(--bg-subtle)}
+.hi-code-highlight-language{font-size:.7rem;color:var(--fg-sec);text-transform:uppercase}
+.hi-code-highlight-copy{font-size:.7rem;color:var(--fg-sec);background:none;border:none;cursor:pointer;padding:.2rem .4rem;border-radius:4px}
+.hi-code-highlight-copy:hover{background:var(--accent-bg)}
+.hi-code-highlight-content{display:flex;overflow-x:auto;scrollbar-width:none}
+.hi-code-highlight-content::-webkit-scrollbar{display:none}
+.hi-code-highlight-line-numbers{padding:1rem .5rem;text-align:right;color:var(--fg-sec);user-select:none;min-width:2.5rem;opacity:.5}
+.hi-code-highlight-code{flex:1;padding:1rem;margin:0;overflow-x:auto}
+.hi-code-highlight-code code{font-family:"SFMono-Regular",Consolas,monospace;font-size:.85rem;line-height:1.5}
+.hi-alert{display:flex;gap:.75rem;padding:1rem;border-radius:8px;margin:1rem 0;background:var(--accent-bg);border:1px solid var(--border)}
+.hi-alert-content{flex:1}
+.hi-alert-description{margin:0;font-size:.9rem;color:var(--fg)}
+.hi-divider{border:none;border-top:1px solid var(--border);margin:2rem 0}
+.hi-tag{display:inline-flex;padding:.1em .4em;border-radius:4px;font-size:.88em;font-family:"SFMono-Regular",Consolas,monospace;background:var(--code-bg);color:var(--fg);border:1px solid var(--border)}
+.hi-link{color:var(--accent);text-decoration:none}
+.hi-link:hover{text-decoration:underline}
+.hi-container{width:100%;margin:0;padding:0}
+.hi-container-md{max-width:none}
+.hi-flex{display:block}
+.hi-flex-col{display:block}
+.hi-flex-1{display:block}
+.hi-grid{display:block}
+.hi-row{display:block}
+.hi-col{display:block}
+.hi-space{display:inline-block;width:0}
+.hi-space-horizontal{display:inline-block;width:8px}
+.hi-empty-container{padding:2rem;text-align:center}
+.hi-empty-description{color:var(--fg-sec);font-size:.9rem}
+.hi-badge{display:inline-flex;align-items:center;justify-content:center;min-width:1.25rem;height:1.25rem;padding:0 .35rem;border-radius:9999px;font-size:.72rem;background:var(--accent);color:#fff}
+.hi-image{max-width:100%;border-radius:8px}
+.hi-skeleton{background:linear-gradient(90deg,var(--bg-subtle) 25%,var(--border) 37%,var(--bg-subtle) 63%);background-size:400% 100%;animation:hi-sk 1.4s ease infinite;border-radius:4px}
+@keyframes hi-sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+.hi-progress{width:100%;height:6px;background:var(--bg-subtle);border-radius:9999px;overflow:hidden}
+.hi-progress-bar{height:100%;background:var(--accent);border-radius:9999px}
+.hi-spin{display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:hi-spin .6s linear infinite}
+@keyframes hi-spin{to{transform:rotate(360deg)}}
+.hi-glow-wrapper{position:relative}
+.hi-glow-wrapper::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .2s}
+.hi-glow-wrapper:hover::before{opacity:1}
+.hi-avatar{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:9999px;background:var(--accent-bg);color:var(--accent);font-size:.8rem;font-weight:600}
+.hi-button{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;padding:.4rem .8rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);cursor:pointer;font-size:.85rem;transition:all .15s}
+.hi-button:hover{border-color:var(--accent)}
+.hi-checkbox{display:inline-flex;align-items:center;gap:.4rem;cursor:pointer}
+.hi-switch{display:inline-flex;align-items:center;cursor:pointer}
+.hi-timeline{display:flex;flex-direction:column;gap:1rem;padding-left:1.5rem;border-left:2px solid var(--border)}
+.hi-timeline-item{position:relative;padding-bottom:1rem}
+.hi-timeline-item::before{content:"";position:absolute;left:-1.65rem;top:.25rem;width:.75rem;height:.75rem;border-radius:9999px;background:var(--accent)}
+.hi-breadcrumb{display:flex;align-items:center;gap:.3rem;font-size:.82rem;color:var(--fg-sec)}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid var(--border);padding:.5rem .75rem;text-align:left}
+th{background:var(--code-bg);font-weight:600}
+.hi-drawer{position:fixed;inset:0;z-index:1000;display:flex}
+.hi-drawer-mask{position:absolute;inset:0;background:rgba(0,0,0,.3)}
+.hi-drawer-content{position:relative;background:var(--bg);padding:1.5rem;box-shadow:var(--hi-shadow-elevated)}
+.hi-toast{position:fixed;top:1rem;right:1rem;z-index:9999;padding:.75rem 1rem;border-radius:8px;background:var(--bg);border:1px solid var(--border);box-shadow:var(--hi-shadow-elevated);font-size:.85rem}
+.hi-popover{position:absolute;z-index:1000;padding:.5rem .75rem;border-radius:8px;background:var(--bg);border:1px solid var(--border);box-shadow:var(--hi-shadow-panel);font-size:.82rem}
+.hi-tooltip{position:absolute;z-index:10000;padding:.25rem .5rem;border-radius:4px;background:var(--fg);color:var(--bg);font-size:.75rem;white-space:nowrap}
+.hi-pagination{display:flex;align-items:center;gap:.3rem;font-size:.85rem}
+.hi-tabs{display:flex;flex-direction:column}
+.hi-tabs-nav{display:flex;border-bottom:1px solid var(--border);gap:.25rem}
+.hi-tabs-tab{padding:.4rem .8rem;border:none;background:none;cursor:pointer;font-size:.85rem;color:var(--fg-sec);border-bottom:2px solid transparent}
+.hi-tabs-tab-active{color:var(--accent);border-bottom-color:var(--accent)}
+.hi-menu{display:flex;flex-direction:column;gap:.1rem}
+.hi-menu-item{padding:.4rem .6rem;border-radius:4px;cursor:pointer;font-size:.875rem;color:var(--fg-sec)}
+.hi-menu-item:hover{background:var(--accent-bg);color:var(--fg)}
+.hi-sidebar{display:flex;flex-direction:column;gap:.5rem;padding:1rem}
+.hi-calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:.25rem;font-size:.8rem}
+.hi-calendar-cell{padding:.3rem;text-align:center;border-radius:4px}
+.hi-qrcode{display:inline-block;padding:.5rem;background:#fff;border-radius:4px}
+.hi-comment{padding:.75rem;border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem}
+.hi-comment-author{font-weight:600;font-size:.85rem}
+.hi-comment-content{margin-top:.3rem;font-size:.9rem;color:var(--fg-sec)}
+.hi-arrow{display:inline-block;transition:transform .15s}
+.hi-zoom-controls{display:inline-flex;gap:.25rem;align-items:center}
+.hi-collapse{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:.5rem 0}
+.hi-collapse-header{padding:.6rem .8rem;cursor:pointer;font-weight:500;background:var(--bg-subtle)}
+.hi-collapse-content{padding:.6rem .8rem}
+.hi-carousel{position:relative;overflow:hidden;border-radius:8px}
+.hi-drag-layer{position:fixed;pointer-events:none;z-index:1200;opacity:.8}
+.hi-user-guide{display:flex;flex-direction:column;gap:1rem}
+.hi-sort{display:inline-flex;flex-direction:column;font-size:.6rem;line-height:.8;color:var(--fg-sec)}
+.hi-filter{display:flex;align-items:center;gap:.5rem;padding:.4rem;border-radius:8px;border:1px solid var(--border)}
+.hi-tree{font-size:.85rem}
+.hi-tree-node{padding:.2rem 0}
+.hi-stepper{display:flex;flex-direction:column;gap:1rem}
+.hi-step{display:flex;align-items:center;gap:.5rem}
+.hi-step-circle{width:1.5rem;height:1.5rem;border-radius:9999px;display:flex;align-items:center;justify-content:center;font-size:.75rem;border:2px solid var(--border)}
+.hi-step-active .hi-step-circle{border-color:var(--accent);color:var(--accent)}
+.hi-anchor{font-size:.82rem;color:var(--fg-sec)}
+.hi-input{padding:.35rem .6rem;border:1px solid var(--border);border-radius:4px;font-size:.85rem;background:var(--bg);color:var(--fg)}
+.hi-input:focus{outline:none;border-color:var(--accent);box-shadow:var(--hi-shadow-focus)}
+.hi-section{margin:1.5rem 0}
+.hi-header{font-weight:600;font-size:1rem;margin-bottom:.5rem}
+.hi-footer{font-size:.8rem;color:var(--fg-sec);margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)}
+.hi-aside{flex-shrink:0}
+.hi-content{flex:1;min-width:0}
+.hi-p-8{padding:2rem}
+.hi-gap-4{gap:1rem}
+.hi-text-center{text-align:center}
+.hi-inline-flex{display:inline-flex}
+:root {
+--bg:#ffffff;--bg-subtle:#f7f7fa;--fg:#000000;--fg-sec:#5a5a6a;
+--accent:#3a6ea5;--accent-bg:rgba(58,110,165,.08);--border:#e2e2ea;
+--code-bg:#f2f2f5;--sidebar-w:260px;--radius:6px;--ts:.18s ease
+}
+@media(prefers-color-scheme:dark){
+:root{
+--bg:#16161e;--bg-subtle:#12121a;--fg:#e0e0e8;--fg-sec:#9090a0;
+--accent:#6db4e0;--accent-bg:rgba(109,180,224,.12);--border:#28283a;
+--code-bg:#1e1e2a
+}}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans",sans-serif;color:var(--fg);background:var(--bg);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none;transition:color var(--ts)}
+a:hover{text-decoration:underline}
+/* ── layout ── */
+.layout{display:flex;min-height:100vh}
+/* ── sidebar ── */
+.sidebar{width:var(--sidebar-w);border-right:1px solid var(--border);position:sticky;top:0;height:100vh;display:flex;flex-direction:column;background:var(--bg-subtle)}
+.lg-search-box{padding:.85rem .85rem .5rem;position:relative;display:flex;align-items:center;gap:.4rem}
+.lg-search-icon{color:var(--fg-sec);flex-shrink:0;display:flex;align-items:center}
+.lg-search-icon svg{display:block}
+#lg-search-input{flex:1;padding:.4rem .6rem;border:1px solid var(--border);border-radius:var(--hi-radius-sm,4px);font-size:.85rem;background:var(--bg);color:var(--fg);transition:border-color var(--ts);min-width:0}
+#lg-search-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(58 110 165/12%)}
+#lg-search-input::placeholder{color:var(--fg-sec)}
+#lg-search-results{position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:360px;overflow:auto;scrollbar-width:none;background:var(--bg);border:1px solid var(--border);border-radius:var(--hi-radius-md,8px);box-shadow:var(--hi-shadow-dropdown,0 4px 24px rgb(0 0 0/12%));display:none;z-index:200}
+#lg-search-results::-webkit-scrollbar{display:none}
+#lg-sidebar{flex:1;overflow-y:auto;padding:.5rem .75rem 1rem;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+#lg-sidebar::-webkit-scrollbar{width:6px}
+#lg-sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:9999px}
+#lg-sidebar::-webkit-scrollbar-thumb:hover{background:var(--fg-sec)}
+.sidebar h2{font-size:.7rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-sec);margin:1rem .25rem .5rem}
+.sidebar ul{list-style:none;padding:0;margin:0}
+.sidebar li{margin:0}
+.sidebar li a{display:block;padding:.42rem .6rem;font-size:.875rem;font-weight:400;color:var(--fg-sec);border-radius:var(--hi-radius-sm,4px);transition:all .15s var(--hi-ease-out-expo,cubic-bezier(.16,1,.3,1));border-left:2px solid transparent;padding-left:.6rem}
+.sidebar li a:hover{color:var(--fg);background:var(--accent-bg);text-decoration:none}
+.sidebar li a.active{color:var(--accent);font-weight:500;border-left-color:var(--accent);background:var(--accent-bg)}
+/* ── language dropdown ── */
+.lg-lang-footer{padding:.6rem .85rem;border-top:1px solid var(--border)}
+.lg-lang-select{position:relative}
+.lg-lang-trigger{display:flex;align-items:center;gap:.4rem;width:100%;padding:.4rem .6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;font-size:.85rem;color:var(--fg);transition:border-color var(--ts)}
+.lg-lang-trigger:hover{border-color:var(--accent)}
+.lg-lang-trigger svg{flex-shrink:0;color:var(--fg-sec)}
+.lg-lang-arrow{margin-left:auto;transition:transform var(--ts)}
+.lg-lang-panel{display:none;position:absolute;bottom:calc(100% + 4px);left:0;right:0;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 -4px 16px rgba(0,0,0,.12);max-height:240px;overflow:auto;z-index:200}
+.lg-lang-panel.open{display:block}
+.lg-lang-opt{display:flex;align-items:center;padding:.4rem .6rem;color:var(--fg);font-size:.85rem;transition:background var(--ts)}
+.lg-lang-opt:hover{background:var(--accent-bg);text-decoration:none}
+.lg-lang-opt.selected{color:var(--accent);font-weight:600}
+/* ── search results ── */
+#lg-search-results .lg-hit{display:block;padding:.5rem .6rem;border-bottom:1px solid var(--border);color:var(--fg);transition:background var(--ts)}
+#lg-search-results .lg-hit:hover{background:var(--accent-bg);text-decoration:none}
+#lg-search-results .lg-hit b{font-size:.85rem}
+#lg-search-results .lg-hit span{display:block;font-size:.78rem;color:var(--fg-sec);margin-top:.1rem}
+#lg-search-results .lg-no{padding:.75rem;color:var(--fg-sec);text-align:center;font-size:.85rem}
+/* ── content ── */
+.content{flex:1;max-width:820px;margin:0 auto;padding:2rem 1.5rem 5rem;min-width:0}
+.content h1{font-size:1.85rem;font-weight:700;margin:0 0 1rem;line-height:1.3}
+.content h2{font-size:1.35rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:.3rem;margin:2rem 0 1rem}
+.content h3{font-size:1.1rem;font-weight:600;margin:1.5rem 0 .75rem}
+.content p{margin:.75rem 0}
+.content img{max-width:100%;border-radius:var(--radius)}
+.content pre{background:var(--code-bg);padding:1rem;border-radius:var(--radius);overflow:auto;font-size:.85rem;line-height:1.5}
+.content code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;font-size:.88em}
+.content p>code,li>code{background:var(--code-bg);padding:.12em .35em;border-radius:3px}
+.content table{border-collapse:collapse;margin:1rem 0;width:100%;font-size:.9rem}
+.content th,.content td{border:1px solid var(--border);padding:.5rem .75rem;text-align:left}
+.content th{background:var(--code-bg);font-weight:600}
+.content blockquote{border-left:3px solid var(--accent);margin:1rem 0;padding:.5rem 1rem;color:var(--fg-sec);background:var(--accent-bg);border-radius:0 var(--radius) var(--radius) 0}
+.content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+.content ul,.content ol{padding-left:1.5rem}
+/* ── responsive ── */
+@media(max-width:880px){
+.layout{flex-direction:column}
+.sidebar{position:static;height:auto;width:auto;max-height:50vh}
+}
+.lg-live-block{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin:1.5rem 0}
+.lg-live-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--bg-subtle)}
+.lg-live-tab{padding:.4rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem;color:var(--fg-sec);border-bottom:2px solid transparent;transition:all var(--ts)}
+.lg-live-tab:hover{color:var(--fg)}
+.lg-live-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.lg-live-preview{padding:1.5rem}
+.lg-live-preview-empty{color:var(--fg-sec);font-style:italic;text-align:center;padding:2rem}
+.lg-live-source{margin:0;padding:1rem;overflow:auto;font-size:.85rem;display:none}
+.lg-live-source code{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+<div class="lg-search-box"><span class="lg-search-icon"></span><input type="search" placeholder="Search…" id="lg-search-input" autocomplete="off"><div id="lg-search-results"></div></div>
+<nav id="lg-sidebar">
+<h2>Contents</h2><ul>
+<li><a href="/index.html">Lagrange</a></li>
+<li><a href="/guides/quickstart.html">Quick Start</a></li>
+<li><a href="/guides/architecture.html">Architecture</a></li>
+</ul>
+</nav>
+<div class="lg-lang-footer"><div id="lg-sw"></div></div>
+</aside>
+<main class="content" id="lg-body">
+<div><p align="center"><img src="https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp" alt="Lagrange" width="240" /></p></div><div><h1 align="center">Lagrange</h1></div><div><p align="center"><strong>A WASI-rendered Markdown static site facility — multilingual out of the box</strong></p></div><div style="text-align:center"><p><a href="https://sysl.celestia.world" class="hi-link"><div class="hi-image-container" style="position:relative;display:inline-block"><img alt="License: SySL-1.0" src="https://img.shields.io/badge/License-SySL--1.0-blue.svg" style="object-fit:cover" class="hi-image "></div></a>
+<a href="https://github.com/celestia-island/lagrange/actions/workflows/checks.yml" class="hi-link"><div class="hi-image-container" style="position:relative;display:inline-block"><img alt="Checks" src="https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml" style="object-fit:cover" class="hi-image "></div></a>
+<a href="https://crates.io/crates/lagrange-library" class="hi-link"><div class="hi-image-container" style="position:relative;display:inline-block"><img alt="crates.io" src="https://img.shields.io/crates/v/lagrange-library" style="object-fit:cover" class="hi-image "></div></a>
+<a href="https://lagrange.docs.celestia.world" class="hi-link"><div class="hi-image-container" style="position:relative;display:inline-block"><img alt="Docs" src="https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue" style="object-fit:cover" class="hi-image "></div></a></p></div><div style="text-align:center"><p><strong>English</strong> ·
+<a href="docs/zhs/index.html" class="hi-link">简体中文</a> ·
+<a href="docs/zht/index.html" class="hi-link">繁體中文</a> ·
+<a href="docs/ja/index.html" class="hi-link">日本語</a> ·
+<a href="docs/ko/index.html" class="hi-link">한국어</a> ·
+<a href="docs/fr/index.html" class="hi-link">Français</a> ·
+<a href="docs/es/index.html" class="hi-link">Español</a> ·
+<a href="docs/ru/index.html" class="hi-link">Русский</a> ·
+<a href="docs/ar/index.html" class="hi-link">العربية</a></p></div><p>Lagrange turns a folder of markdown into a static, multilingual documentation
+site — WASI-rendered, with a built-in language switcher and root redirect to
+English. No JavaScript framework, no mdBook, no Node toolchain.</p><p>Lagrange renders <strong>its own documentation</strong>: the <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">docs/</span> tree next to this README
+is built by Lagrange itself (<span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">just docs</span>). If you are reading the published
+site, it was produced by Lagrange.</p><h2>Quick start</h2><p>Build the site for this very repo:</p><div class="hi-code-highlight"><pre class="hi-code-highlight-code"><code class="language-bash">git clone https://github.com/celestia-island/lagrange
+cd lagrange
+cargo run --release -- build --src docs --out target/site
+</code></pre></div><p>Open <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">target/site/index.html</span> — it redirects into the English book.</p><p>Point Lagrange at any docs tree with the same shape:</p><div class="hi-code-highlight"><pre class="hi-code-highlight-code"><code class="language-">docs/
+├── logo.webp          # shared assets live at the docs root
+├── en/
+│   ├── README.md      # becomes &lt;site&gt;/en/index.html
+│   ├── SUMMARY.md     # drives the sidebar
+│   └── guides/*.md
+└── zhs/ …             # one directory per language
+</code></pre></div><div class="hi-code-highlight"><pre class="hi-code-highlight-code"><code class="language-bash">lagrange build --src docs --out _site
+</code></pre></div><p><span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">README.md</span> and <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">index.md</span> both map to <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">index.html</span>; a <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">docs/en/README.md</span>
+symlink to the root <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">README.md</span> is the recommended way to keep the GitHub
+landing page and the docs index in sync.</p><h2>Deploying the site</h2><p>Lagrange emits a plain static directory, so it deploys anywhere. The build is
+just <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">lagrange build --src docs --out &lt;dir&gt;</span> (or <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">cargo run --release -- build …</span>
+when consumed from source).</p><h3>GitHub Actions → GitHub Pages</h3><p>A ready-made composite action checks Lagrange out alongside your repo and runs
+the build. This is what Lagrange itself uses
+(<a href=".github/workflows/docs.yml" class="hi-link"><span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">.github/workflows/docs.yml</span></a>):</p><div class="hi-code-highlight"><pre class="hi-code-highlight-code"><code class="language-yaml">jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: celestia-island/lagrange/.github/actions/build@dev
+        with:
+          src: docs
+          out: _site
+      - run: echo "your-project.docs.celestia.world" &gt; _site/CNAME
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+</code></pre></div><h3>Cloudflare Pages</h3><p>Build command <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">cargo run --release -- build --src docs --out _site</span>, build output
+directory <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">_site</span>. For a prebuilt Lagrange, mirror
+<a href="https://github.com/celestia-island/lagrange" class="hi-link"><span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">celestia-island/lagrange</span></a> and run
+<span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.
+<span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">--site_url</span> is optional and only affects absolute links in the language
+switcher.</p><h3>Vercel</h3><p>Framework preset <strong>Other</strong>, build command
+<span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">cargo run --release -- build --src docs --out public</span>, output directory
+<span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">public</span>. (Vercel needs the Rust toolchain — use the
+<a href="https://github.com/vercel-community/rust" class="hi-link"><span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">vercel-rust</span></a> runtime builder, or
+build in a prior CI step and deploy the static output.)</p><h2>Features</h2><ul><li><strong>pest-based markdown parser</strong> — block + inline, modelled on
+[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown), plus
+raw-HTML-block pass-through so centred README markup survives.</li><li><strong>tairitsu VDom rendering</strong> — documents become <span class="hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code">VNode</span> trees serialised via
+`render_to_html`.</li><li><strong>Multilingual</strong> — one directory per language, a built-in language switcher,
+and a root redirect to English.</li><li><strong>Self-hosting</strong> — Lagrange's own documentation is built by Lagrange.</li></ul><h2>License</h2><p>SySL-1.0 (Synthetic Source License). See <a href="LICENSE" class="hi-link">LICENSE</a> or the <a href="https://sysl.celestia.world" class="hi-link">SySL website</a>.</p>
+</main>
+</div>
+<script type="application/json" id="lg-data">{"ar":{"title":"مقدمة","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>أداة إنشاء مواقع Markdown ثابتة بتصيير WASI — متعددة اللغات</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<strong>العربية</strong></p></div><h2>مقدمة</h2><p>يحوّل Lagrange مجلدًا من ملفات Markdown إلى موقع توثيق ثابت متعدد اللغات —\nيُصيّر عبر WASI، مع مبدّل لغة مدمج وإعادة توجيه من الجذر إلى الإنجليزية.\nبلا أطر JavaScript، بلا mdBook، بلا سلسلة أدوات Node.</p><p>يعرض Lagrange <strong>توثيق نفسه</strong>: شجرة <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> المجاورة لهذا الملف التمهيدي\nمبنية بواسطة Lagrange نفسه (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). إذا كنت تقرأ الموقع المنشور،\nفقد أُنتج بواسطة Lagrange.</p><h2>بداية سريعة</h2><p>قم ببناء الموقع الخاص بهذا المستودع:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>افتح <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> — سيُعاد توجيهك إلى الكتاب الإنجليزي.</p><p>وجّه Lagrange إلى أي شجرة توثيق بنفس الشكل:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p>كل من <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> و <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> يُؤديان إلى <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>؛ ويُوصى بربط\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span> رمزيًا إلى <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> الجذري للحفاظ على تزامن\nصفحة GitHub الرئيسية مع فهرس التوثيق.</p><h2>نشر الموقع</h2><p>يُنتج Lagrange دليلًا ثابتًا خالصًا، لذا يمكن نشره في أي مكان. عملية البناء\nببساطة هي <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> (أو <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>\nعند الاستخدام من المصدر).</p><h3>GitHub Actions → GitHub Pages</h3><p>إجراء مركّب جاهز (_composite action_) يجلب Lagrange إلى جانب مستودعك ويُنفذ\nالبناء. هذا ما يستخدمه Lagrange نفسه\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>أمر البناء <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>، دليل الإخراج\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. لـ Lagrange جاهز مسبقًا، قم بنسخ\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a>\nوشغّل <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> اختياري ويؤثر فقط على الروابط المطلقة في مبدّل اللغة.</p><h3>Vercel</h3><p>الإعداد المسبق للإطار <strong>Other</strong>، أمر البناء\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>، دليل الإخراج\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (يحتاج Vercel إلى سلسلة أدوات Rust — استخدم مشغّل\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a>، أو قم بالبناء\nفي خطوة CI سابقة وانشر المخرجات الثابتة.)</p><h2>الميزات</h2><ul><li><strong>محلّل Markdown قائم على pest</strong> — كتل + سطور، مستند إلى\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown)،\nبالإضافة إلى تمرير كتل HTML الخام لكي تنجو ترميزات توسيط README.</li><li><strong>عرض VDom عبر tairitsu</strong> — تُصبح المستندات أشجار <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> تُسلسل عبر\n`render_to_html`.</li><li><strong>متعدد اللغات</strong> — دليل واحد لكل لغة، ومبدّل لغة مدمج، وإعادة توجيه من\nالجذر إلى الإنجليزية.</li><li><strong>الاستضافة الذاتية</strong> — توثيق Lagrange نفسه مبني بواسطة Lagrange.</li></ul><h2>الترخيص</h2><p>SySL-1.0 (Synthetic Source License — رخصة المصدر التركيبي). راجع <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">البداية السريعة</a></li>\n<li><a href=\"/guides/architecture.html\">البنية</a></li>\n</ul>","meta":{}},"en":{"title":"Quick start","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>A WASI-rendered Markdown static site facility — multilingual out of the box</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://crates.io/crates/lagrange-library\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"crates.io\" src=\"https://img.shields.io/crates/v/lagrange-library\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><strong>English</strong> ·\n<a href=\"docs/zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"docs/zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"docs/ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"docs/ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"docs/fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"docs/es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"docs/ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"docs/ar/index.html\" class=\"hi-link\">العربية</a></p></div><p>Lagrange turns a folder of markdown into a static, multilingual documentation\nsite — WASI-rendered, with a built-in language switcher and root redirect to\nEnglish. No JavaScript framework, no mdBook, no Node toolchain.</p><p>Lagrange renders <strong>its own documentation</strong>: the <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> tree next to this README\nis built by Lagrange itself (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). If you are reading the published\nsite, it was produced by Lagrange.</p><h2>Quick start</h2><p>Build the site for this very repo:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>Open <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> — it redirects into the English book.</p><p>Point Lagrange at any docs tree with the same shape:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> and <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> both map to <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>; a <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span>\nsymlink to the root <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> is the recommended way to keep the GitHub\nlanding page and the docs index in sync.</p><h2>Deploying the site</h2><p>Lagrange emits a plain static directory, so it deploys anywhere. The build is\njust <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> (or <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>\nwhen consumed from source).</p><h3>GitHub Actions → GitHub Pages</h3><p>A ready-made composite action checks Lagrange out alongside your repo and runs\nthe build. This is what Lagrange itself uses\n(<a href=\".github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>Build command <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>, build output\ndirectory <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. For a prebuilt Lagrange, mirror\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> and run\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> is optional and only affects absolute links in the language\nswitcher.</p><h3>Vercel</h3><p>Framework preset <strong>Other</strong>, build command\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>, output directory\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (Vercel needs the Rust toolchain — use the\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> runtime builder, or\nbuild in a prior CI step and deploy the static output.)</p><h2>Features</h2><ul><li><strong>pest-based markdown parser</strong> — block + inline, modelled on\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown), plus\nraw-HTML-block pass-through so centred README markup survives.</li><li><strong>tairitsu VDom rendering</strong> — documents become <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> trees serialised via\n`render_to_html`.</li><li><strong>Multilingual</strong> — one directory per language, a built-in language switcher,\nand a root redirect to English.</li><li><strong>Self-hosting</strong> — Lagrange's own documentation is built by Lagrange.</li></ul><h2>License</h2><p>SySL-1.0 (Synthetic Source License). See <a href=\"LICENSE\" class=\"hi-link\">LICENSE</a> or the <a href=\"https://sysl.celestia.world\" class=\"hi-link\">SySL website</a>.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">Quick Start</a></li>\n<li><a href=\"/guides/architecture.html\">Architecture</a></li>\n</ul>","meta":{}},"es":{"title":"Introducción","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>Un generador de sitios estáticos Markdown renderizado con WASI — multilingüe</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<strong>Español</strong> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>Introducción</h2><p>Lagrange convierte una carpeta de archivos Markdown en un sitio de documentación\nestático y multilingüe — renderizado con WASI, con un selector de idioma\nintegrado y una redirección raíz al inglés. Sin frameworks JavaScript, sin\nmdBook, sin cadena de herramientas Node.</p><p>Lagrange renderiza <strong>su propia documentación</strong>: el árbol <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> junto a este\nREADME es construido por Lagrange mismo (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). Si estás leyendo el sitio\npublicado, fue generado por Lagrange.</p><h2>Inicio rápido</h2><p>Construye el sitio para este mismo repositorio:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>Abre <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> — redirige al libro en inglés.</p><p>Apunta Lagrange a cualquier árbol de documentación con la misma estructura:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> e <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> se mapean ambos a <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>; un enlace simbólico de\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span> hacia el <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> raíz es la forma recomendada de\nmantener sincronizadas la página de inicio de GitHub y el índice de la\ndocumentación.</p><h2>Desplegando el sitio</h2><p>Lagrange produce un directorio estático simple, por lo que se puede desplegar en\ncualquier lugar. La construcción es simplemente\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> (o\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span> cuando se compila desde el código fuente).</p><h3>GitHub Actions → GitHub Pages</h3><p>Una acción compuesta lista para usar obtiene Lagrange junto a tu repositorio y\nejecuta la construcción. Esto es lo que usa el propio Lagrange\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>Comando de construcción\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>, directorio de salida\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. Para un Lagrange precompilado, haz un mirror de\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> y\nejecuta\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> es opcional y solo afecta los enlaces absolutos en el selector de\nidioma.</p><h3>Vercel</h3><p>Preajuste de framework <strong>Other</strong>, comando de construcción\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>, directorio de salida\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (Vercel necesita la cadena de herramientas de Rust — usa el runtime\nbuilder <a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a>, o construye en\nun paso CI previo y despliega la salida estática.)</p><h2>Características</h2><ul><li><strong>Parser Markdown basado en pest</strong> — bloques + inline, inspirado en\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown), además\nde paso directo de bloques HTML crudos para que el marcado centrado de los\nREADME se conserve.</li><li><strong>Renderizado VDom tairitsu</strong> — los documentos se convierten en árboles\n`VNode` serializados mediante `render_to_html`.</li><li><strong>Multilingüe</strong> — un directorio por idioma, un selector de idioma integrado y\nuna redirección raíz al inglés.</li><li><strong>Auto-alojado</strong> — la propia documentación de Lagrange es construida por\nLagrange.</li></ul><h2>Licencia</h2><p>SySL-1.0 (Synthetic Source License). Ver <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">Inicio rápido</a></li>\n<li><a href=\"/guides/architecture.html\">Arquitectura</a></li>\n</ul>","meta":{}},"fr":{"title":"Introduction","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>Un générateur de site statique Markdown via WASI — multilingue prêt à l'emploi</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<strong>Français</strong> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>Introduction</h2><p>Lagrange transforme un dossier de fichiers Markdown en un site de documentation\nstatique multilingue — rendu WASI, avec un sélecteur de langue intégré et une\nredirection racine vers l'anglais. Aucun framework JavaScript, pas de mdBook,\npas de chaîne d'outils Node.</p><p>Lagrange génère <strong>sa propre documentation</strong> : l'arborescence <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> à côté de\nce README est construite par Lagrange lui-même (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). Si vous lisez le\nsite publié, il a été produit par Lagrange.</p><h2>Démarrage rapide</h2><p>Construire le site pour ce dépôt même :</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>Ouvrez <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> — il redirige vers le livre en anglais.</p><p>Pointez Lagrange vers n'importe quelle arborescence de documentation ayant la\nmême structure :</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> et <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> correspondent tous deux à <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span> ; un lien\nsymbolique <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span> pointant vers le <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> racine est la\nméthode recommandée pour garder la page d'accueil GitHub et l'index de la\ndocumentation synchronisés.</p><h2>Déploiement du site</h2><p>Lagrange produit un simple répertoire statique, il se déploie donc partout. La\ncompilation se résume à <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> (ou\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span> lorsqu'il est consommé depuis les sources).</p><h3>GitHub Actions → GitHub Pages</h3><p>Une action composite prête à l'emploi récupère Lagrange en même temps que votre\ndépôt et exécute la compilation. C'est ce que Lagrange utilise lui-même\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>) :</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>Commande de build <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>,\nrépertoire de sortie <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. Pour un Lagrange précompilé, faites un miroir de\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> et\nexécutez\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> est optionnel et n'affecte que les liens absolus dans le sélecteur\nde langue.</p><h3>Vercel</h3><p>Préréglage de framework <strong>Other</strong>, commande de build\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>, répertoire de sortie\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (Vercel nécessite la chaîne d'outils Rust — utilisez le runtime\nbuilder <a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a>, ou compilez\ndans une étape CI préalable et déployez la sortie statique.)</p><h2>Fonctionnalités</h2><ul><li><strong>Parseur Markdown basé sur pest</strong> — blocs + inline, modélisé d'après\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown), avec\nprise en charge des blocs HTML bruts pour que le balisage centré des README\nsoit préservé.</li><li><strong>Rendu via le VDom tairitsu</strong> — les documents deviennent des arbres <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span>\nsérialisés via `render_to_html`.</li><li><strong>Multilingue</strong> — un répertoire par langue, un sélecteur de langue intégré et\nune redirection racine vers l'anglais.</li><li><strong>Auto-hébergé</strong> — la documentation de Lagrange est construite par Lagrange\nlui-même.</li></ul><h2>Licence</h2><p>SySL-1.0 (Synthetic Source License). Voir <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">Démarrage rapide</a></li>\n<li><a href=\"/guides/architecture.html\">Architecture</a></li>\n</ul>","meta":{}},"ja":{"title":"概要","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>WASI レンダリングの Markdown 静的サイト生成ツール — 多言語対応済</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<strong>日本語</strong> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>概要</h2><p>Lagrange は Markdown のフォルダを静的で多言語対応のドキュメントサイトに変換します ——\nWASI レンダリング、組み込みの言語スイッチャー、ルートから英語へのリダイレクト。\nJavaScript フレームワークも mdBook も Node ツールチェーンも不要です。</p><p>Lagrange は<strong>自身のドキュメント</strong>をビルドします: この README と同階層の <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> ツリーは\nLagrange 自身によって生成されています (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>)。公開サイトをご覧の場合、それは Lagrange\nによって生成されたものです。</p><h2>クイックスタート</h2><p>このリポジトリのサイトをビルドするには:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> を開くと、英語版のドキュメントにリダイレクトされます。</p><p>同じ構造を持つ任意のドキュメントツリーに対して Lagrange を使用できます:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> と <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> はどちらも <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span> にマッピングされます。GitHub の\nランディングページとドキュメントのインデックスを同期させるには、ルートの <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span>\nへのシンボリックリンク <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span> を作成するのが推奨される方法です。</p><h2>デプロイ</h2><p>Lagrange は純粋な静的ディレクトリを出力するため、あらゆる場所にデプロイできます。\nビルドは単に <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> です（ソースから利用する場合は\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>）。</p><h3>GitHub Actions → GitHub Pages</h3><p>すぐに使える composite アクションがリポジトリと共に Lagrange をチェックアウトして\nビルドを実行します。以下は Lagrange 自身が使用しているものです\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>ビルドコマンド <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>、ビルド出力\nディレクトリ <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>。事前ビルドされた Lagrange を使用する場合は、\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> をミラーして\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>\nを実行します。<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> はオプションで、言語スイッチャー内の絶対リンクにのみ影響します。</p><h3>Vercel</h3><p>フレームワークプリセット <strong>Other</strong>、ビルドコマンド\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>、出力ディレクトリ <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>。\n（Vercel は Rust ツールチェーンが必要です —\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> ランタイムビルダーを使用するか、\n先行する CI ステップでビルドし、静的出力をデプロイしてください。）</p><h2>特徴</h2><ul><li><strong>pest ベースの Markdown パーサー</strong> — ブロック＋インライン、\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown) をモデルにし、\n生の HTML ブロックも透過的に扱うため、中央揃えの README マークアップもそのまま残ります。</li><li><strong>tairitsu VDom レンダリング</strong> — ドキュメントは <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> ツリーに変換され、\n`render_to_html` によってシリアライズされます。</li><li><strong>多言語対応</strong> — 言語ごとに 1 ディレクトリ、言語スイッチャー内蔵、ルートから英語への\nリダイレクト。</li><li><strong>セルフホスティング</strong> — Lagrange のドキュメントは Lagrange 自身によって\nビルドされています。</li></ul><h2>ライセンス</h2><p>SySL-1.0 (Synthetic Source License)。<a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a> を参照してください。</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">クイックスタート</a></li>\n<li><a href=\"/guides/architecture.html\">アーキテクチャ</a></li>\n</ul>","meta":{}},"ko":{"title":"소개","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>WASI 렌더링 Markdown 정적 사이트 도구 — 다국어 지원</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<strong>한국어</strong> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>소개</h2><p>Lagrange는 Markdown 폴더를 정적 다국어 문서 사이트로 변환합니다 — WASI로 렌더링되며, 내장 언어 전환기와 루트에서 영어로의 리다이렉트를 제공합니다. JavaScript 프레임워크도, mdBook도, Node 도구 체인도 필요 없습니다.</p><p>Lagrange는 <strong>자신의 문서를 직접 렌더링</strong>합니다: 이 README 옆에 있는 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span>\n트리는 Lagrange 자체로 빌드됩니다(<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). 게시된 사이트를 보고 계신다면,\n그것은 Lagrange에 의해 생성된 것입니다.</p><h2>빠른 시작</h2><p>이 저장소의 사이트를 빌드합니다:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span>을 열면 — 영어 문서로 리다이렉트됩니다.</p><p>같은 구조를 가진 어떤 docs 트리에도 Lagrange를 사용할 수 있습니다:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span>와 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span>는 모두 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>로 매핑됩니다. 루트 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span>를\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span>로 심링크하는 것이 GitHub 랜딩 페이지와 문서 인덱스를\n동기화하는 권장 방법입니다.</p><h2>사이트 배포</h2><p>Lagrange는 순수한 정적 디렉터리를 생성하므로 어디에나 배포할 수 있습니다.\n빌드는 단순히 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span> (또는 소스에서 사용할 때는\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>)입니다.</p><h3>GitHub Actions → GitHub Pages</h3><p>미리 만들어진 composite action이 저장소와 함께 Lagrange를 체크아웃하고 빌드를\n실행합니다. 이것이 Lagrange 자체에서 사용하는 방식입니다\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>빌드 명령어 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>, 빌드 출력\n디렉터리 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. 미리 빌드된 Lagrange를 사용하려면\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a>를\n미러링하고\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>를\n실행하세요. <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span>은 선택 사항이며 언어 전환기의 절대 링크에만 영향을 줍니다.</p><h3>Vercel</h3><p>프레임워크 프리셋 <strong>Other</strong>, 빌드 명령어\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>, 출력 디렉터리\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (Vercel은 Rust 도구 체인이 필요합니다 —\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> 런타임 빌더를\n사용하거나, 사전 CI 단계에서 빌드하고 정적 출력을 배포하세요.)</p><h2>특징</h2><ul><li><strong>pest 기반 Markdown 파서</strong> — 블록 + 인라인,\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown)을\n모델로 하였으며, raw-HTML-block 통과 기능으로 중앙 정렬된 README 마크업이\n그대로 유지됩니다.</li><li><strong>tairitsu VDom 렌더링</strong> — 문서가 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> 트리로 변환되어\n`render_to_html`을 통해 직렬화됩니다.</li><li><strong>다국어</strong> — 언어별로 하나의 디렉터리, 내장 언어 전환기,\n루트에서 영어로의 리다이렉트.</li><li><strong>자체 호스팅</strong> — Lagrange의 자체 문서는 Lagrange로 빌드됩니다.</li></ul><h2>라이선스</h2><p>SySL-1.0 (Synthetic Source License). <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>를 참고하세요.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">빠른 시작</a></li>\n<li><a href=\"/guides/architecture.html\">아키텍처</a></li>\n</ul>","meta":{}},"ru":{"title":"Введение","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>Генератор статических сайтов на Markdown с WASI-рендерингом — мультиязычный</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<strong>Русский</strong> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>Введение</h2><p>Lagrange превращает папку с Markdown-файлами в статический, многоязычный\nдокументационный сайт — с WASI-рендерингом, встроенным переключателем языков\nи корневым редиректом на английский. Никаких JavaScript-фреймворков, никакого\nmdBook, никакого инструментария Node.</p><p>Lagrange рендерит <strong>собственную документацию</strong>: дерево <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> рядом с этим\nREADME собирается самим Lagrange (<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>). Если вы читаете\nопубликованный сайт, он был создан с помощью Lagrange.</p><h2>Быстрый старт</h2><p>Сборка сайта для этого самого репозитория:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>Откройте <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span> — он перенаправляет в английскую книгу.</p><p>Направьте Lagrange на любое дерево документации с той же структурой:</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> и <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> оба отображаются в <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>; символьная ссылка\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span> на корневой <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> — рекомендуемый способ\nсинхронизации посадочной страницы GitHub и индекса документации.</p><h2>Развёртывание сайта</h2><p>Lagrange создаёт обычный статический каталог, поэтому развёртывается где\nугодно. Сборка выполняется командой <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span>\n(или <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span> при работе из исходного кода).</p><h3>GitHub Actions → GitHub Pages</h3><p>Готовый composite action извлекает Lagrange рядом с вашим репозиторием и\nзапускает сборку. Именно так использует его сам Lagrange\n(<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>):</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>Команда сборки <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>, выходной\nкаталог <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>. Для предварительно собранного Lagrange — зеркалируйте\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> и\nзапустите\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>.\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> необязателен и влияет только на абсолютные ссылки в\nпереключателе языков.</p><h3>Vercel</h3><p>Предустановка фреймворка <strong>Other</strong>, команда сборки\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>, выходной каталог\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>. (Vercel требуется инструментарий Rust — используйте\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> runtime builder,\nлибо соберите в предыдущем шаге CI и разверните статический вывод.)</p><h2>Возможности</h2><ul><li><strong>Парсер Markdown на основе pest</strong> — блочный + строчный, по образцу\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown),\nплюс сквозной пропуск сырых HTML-блоков, чтобы центрированная разметка\nREADME сохранялась.</li><li><strong>Рендеринг VDom tairitsu</strong> — документы становятся деревьями <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span>,\nсериализуются через `render_to_html`.</li><li><strong>Многоязычность</strong> — один каталог на язык, встроенный переключатель\nязыков и корневой редирект на английский.</li><li><strong>Самодокументирование</strong> — документация Lagrange собрана самим Lagrange.</li></ul><h2>Лицензия</h2><p>SySL-1.0 (Synthetic Source License). См. <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>.</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">Быстрый старт</a></li>\n<li><a href=\"/guides/architecture.html\">Архитектура</a></li>\n</ul>","meta":{}},"zhs":{"title":"简介","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>基于 WASI 渲染的 Markdown 静态站点设施 — 开箱即用多语言</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<strong>简体中文</strong> ·\n<a href=\"../zht/index.html\" class=\"hi-link\">繁體中文</a> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>简介</h2><p>Lagrange 把一个 Markdown 文件夹变成静态的多语言文档站点 —— WASI 渲染，\n内置语言切换器，根重定向到英文。无需 JavaScript 框架、无需 mdBook、\n无需 Node 工具链。</p><p>Lagrange 用它自身渲染自己的文档：README 旁边的 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> 目录树就是 Lagrange 构建的\n（<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>）。如果你正在阅读已发布的站点，它就是由 Lagrange 生成的。</p><h2>快速开始</h2><p>为本仓库构建站点：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>打开 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span>——它会重定向到英文文档。</p><p>将 Lagrange 指向任意同形文档树：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> 和 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> 都会被映射为 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>；推荐将 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span>\n创建为指向根目录 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> 的软链接，这样可以保持 GitHub 着陆页与文档索引同步。</p><h2>部署站点</h2><p>Lagrange 输出纯静态目录，因此可以部署到任何地方。构建命令就是\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span>（从源码使用时为 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>）。</p><h3>GitHub Actions → GitHub Pages</h3><p>提供了一个即用型复合 action，它会拉取 Lagrange 到你的仓库旁边并运行构建。Lagrange\n自身用的就是它（<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">../../.github/workflows/docs.yml</span></a>）：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>构建命令 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>，构建输出目录\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>。如果使用预构建的 Lagrange，镜像\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> 仓库并运行\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>。\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> 是可选的，仅影响语言切换器中的绝对链接。</p><h3>Vercel</h3><p>框架预设选 <strong>Other</strong>，构建命令\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>，输出目录 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>。\n（Vercel 需要 Rust 工具链——使用\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> 运行时构建器，或在上游\nCI 步骤中构建后部署静态输出。）</p><h2>特性</h2><ul><li><strong>基于 pest 的 Markdown 解析器</strong>——块级 + 行内，以\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown) 为蓝本，\n同时支持原始 HTML 块透传，使居中 README 标记能够原样保留。</li><li><strong>tairitsu VDom 渲染</strong>——文档变为 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> 树，通过 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">render_to_html</span> 序列化。</li><li><strong>多语言</strong>——每种语言一个目录、内置语言切换器、根重定向到英文。</li><li><strong>自托管</strong>——Lagrange 自身的文档由 Lagrange 构建。</li></ul><h2>许可</h2><p>SySL-1.0（Synthetic Source License）。见 <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>。</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">快速开始</a></li>\n<li><a href=\"/guides/architecture.html\">架构</a></li>\n</ul>","meta":{}},"zht":{"title":"簡介","body":"<div><p align=\"center\"><img src=\"https://raw.githubusercontent.com/celestia-island/lagrange/master/docs/logo.webp\" alt=\"Lagrange\" width=\"240\" /></p></div><div><h1 align=\"center\">Lagrange</h1></div><div><p align=\"center\"><strong>基於 WASI 繪製的 Markdown 靜態網站設施 — 開箱即用多語言</strong></p></div><div style=\"text-align:center\"><p><a href=\"https://sysl.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"License: SySL-1.0\" src=\"https://img.shields.io/badge/License-SySL--1.0-blue.svg\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://github.com/celestia-island/lagrange/actions/workflows/checks.yml\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Checks\" src=\"https://img.shields.io/github/actions/workflow/status/celestia-island/lagrange/checks.yml\" style=\"object-fit:cover\" class=\"hi-image \"></div></a>\n<a href=\"https://lagrange.docs.celestia.world\" class=\"hi-link\"><div class=\"hi-image-container\" style=\"position:relative;display:inline-block\"><img alt=\"Docs\" src=\"https://img.shields.io/badge/docs-lagrange.docs.celestia.world-blue\" style=\"object-fit:cover\" class=\"hi-image \"></div></a></p></div><div style=\"text-align:center\"><p><a href=\"../en/index.html\" class=\"hi-link\">English</a> ·\n<a href=\"../zhs/index.html\" class=\"hi-link\">简体中文</a> ·\n<strong>繁體中文</strong> ·\n<a href=\"../ja/index.html\" class=\"hi-link\">日本語</a> ·\n<a href=\"../ko/index.html\" class=\"hi-link\">한국어</a> ·\n<a href=\"../fr/index.html\" class=\"hi-link\">Français</a> ·\n<a href=\"../es/index.html\" class=\"hi-link\">Español</a> ·\n<a href=\"../ru/index.html\" class=\"hi-link\">Русский</a> ·\n<a href=\"../ar/index.html\" class=\"hi-link\">العربية</a></p></div><h2>簡介</h2><p>Lagrange 將一個 Markdown 資料夾轉換為靜態的多語言文件站點——以 WASI 繪製，內建語言切換器並將根目錄重定向到英文。無需 JavaScript 框架、無需 mdBook、無需 Node 工具鏈。</p><p>Lagrange 渲染<strong>自身的文件</strong>：此 README 旁邊的 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/</span> 目錄樹即由 Lagrange\n自身建構（<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">just docs</span>）。如果你正在閱讀發布的站點，那麼它正是由 Lagrange 產生的。</p><h2>快速開始</h2><p>為當前倉庫建構站點：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">git clone https://github.com/celestia-island/lagrange\ncd lagrange\ncargo run --release -- build --src docs --out target/site\n</code></pre></div><p>打開 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">target/site/index.html</span>——它會重定向到英文書籍。</p><p>將 Lagrange 指向任何具有相同結構的文件目錄樹：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-\">docs/\n├── logo.webp          # shared assets live at the docs root\n├── en/\n│   ├── README.md      # becomes &lt;site&gt;/en/index.html\n│   ├── SUMMARY.md     # drives the sidebar\n│   └── guides/*.md\n└── zhs/ …             # one directory per language\n</code></pre></div><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-bash\">lagrange build --src docs --out _site\n</code></pre></div><p><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span> 和 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.md</span> 都會映射到 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">index.html</span>；建議將 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">docs/en/README.md</span>\n符號連結到根目錄的 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">README.md</span>，以保持 GitHub 著陸頁和文件索引同步。</p><h2>部署站點</h2><p>Lagrange 輸出純靜態目錄，因此可以部署到任何地方。建構指令僅為\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">lagrange build --src docs --out &lt;dir&gt;</span>（從原始碼使用時則為\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build …</span>）。</p><h3>GitHub Actions → GitHub Pages</h3><p>一個現成的複合 action 會在你的倉庫旁檢出 Lagrange 並執行建構。\n這也是 Lagrange 自身使用的流程\n（<a href=\"../../.github/workflows/docs.yml\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">.github/workflows/docs.yml</span></a>）：</p><div class=\"hi-code-highlight\"><pre class=\"hi-code-highlight-code\"><code class=\"language-yaml\">jobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: celestia-island/lagrange/.github/actions/build@dev\n        with:\n          src: docs\n          out: _site\n      - run: echo \"your-project.docs.celestia.world\" &gt; _site/CNAME\n      - uses: actions/upload-pages-artifact@v3\n        with:\n          path: _site\n  deploy:\n    needs: build\n    runs-on: ubuntu-latest\n    environment:\n      name: github-pages\n      url: ${{ steps.deployment.outputs.page_url }}\n    steps:\n      - uses: actions/deploy-pages@v4\n</code></pre></div><h3>Cloudflare Pages</h3><p>建構指令 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out _site</span>，建構輸出目錄\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">_site</span>。若要使用預先建構好的 Lagrange，鏡像\n<a href=\"https://github.com/celestia-island/lagrange\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">celestia-island/lagrange</span></a> 並執行\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src $DOCS_DIR --site_url $CF_PAGES_URL --out _site</span>。\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">--site_url</span> 為可選項，僅影響語言切換器中的絕對連結。</p><h3>Vercel</h3><p>框架預設為 <strong>Other</strong>，建構指令\n<span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">cargo run --release -- build --src docs --out public</span>，輸出目錄 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">public</span>。\n（Vercel 需要 Rust 工具鏈——使用\n<a href=\"https://github.com/vercel-community/rust\" class=\"hi-link\"><span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">vercel-rust</span></a> 運行時建構器，\n或在先前的 CI 步驟中建構後部署靜態輸出。）</p><h2>特性</h2><ul><li><strong>基於 pest 的 Markdown 解析器</strong>——區塊 + 行內，以\n[ratatui-markdown](https://github.com/celestia-island/ratatui-markdown) 為藍本，\n外加原始 HTML 區塊透傳，使居中對齊的 README 標記能夠原樣保留。</li><li><strong>tairitsu VDom 渲染</strong>——文件轉換為 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">VNode</span> 樹，通過 <span class=\"hi-inline-flex hi-flex-1 hi-items-center hi-gap-2 hi-tag hi-tag-default hi-tag-code\">render_to_html</span> 序列化輸出。</li><li><strong>多語言</strong>——每種語言一個目錄、內置語言切換器，以及根目錄重定向到英文。</li><li><strong>自託管</strong>——Lagrange 自身的文件由 Lagrange 建構。</li></ul><h2>許可</h2><p>SySL-1.0（Synthetic Source License）。詳見 <a href=\"https://sysl.celestia.world\" class=\"hi-link\">LICENSE</a>。</p>","sidebar_html":"<h2>Contents</h2><ul>\n<li><a href=\"/index.html\">Lagrange</a></li>\n<li><a href=\"/guides/quickstart.html\">快速入門</a></li>\n<li><a href=\"/guides/architecture.html\">架構</a></li>\n</ul>","meta":{}}}</script>
+<script>
+(function(){
+ var D=JSON.parse(document.getElementById('lg-data').textContent);
+ var N={"ar":"العربية","en":"English","es":"Español","fr":"Français","ja":"日本語","ko":"한국어","ru":"Русский","zhs":"简体中文","zht":"繁體中文"};
+ var DL='en',CUR='en';
+ var BL={'zh':'zhs','zh-CN':'zhs','zh-Hans':'zhs','zh-TW':'zht','zh-Hant':'zht','zh-HK':'zht'};
+ function gL(){var q=new URLSearchParams(location.search).get('lang');if(q&&D[q])return q;var s=localStorage['lagrange-lang'];if(s&&D[s])return s;var bl=navigator.language||'';if(BL[bl])return BL[bl];var sh=bl.split('-')[0];if(BL[sh])return BL[sh];return D[sh]?sh:DL}
+ function sL(l){if(!D[l])l=DL;CUR=l;localStorage['lagrange-lang']=l;var u=new URL(location);u.searchParams.set('lang',l);history.replaceState(null,'',u);rL(l)}
+ function rL(l){
+  var p=D[l]||D[DL];if(!p)return;
+  document.documentElement.lang=l;document.title=p.title;
+  document.getElementById('lg-body').innerHTML=p.body;
+  var sb=document.getElementById('lg-sidebar');if(sb){sb.innerHTML=p.sidebar_html;var cp=location.pathname.replace(/\/+$/,'')||'/index.html';var links=sb.querySelectorAll('a');for(var i=0;i<links.length;i++){var h=links[i].getAttribute('href');if(h===cp||h+'/index.html'===cp||cp+'/index.html'===h)links[i].classList.add('active')}}
+  var cl=document.getElementById('lg-lang-cur');if(cl)cl.textContent=N[l]||l;
+  var os=document.querySelectorAll('.lg-lang-opt');for(var i=0;i<os.length;i++)os[i].classList.toggle('selected',os[i].dataset.lang===l);
+ }
+ /* ── language dropdown ── */
+ var sw=document.getElementById('lg-sw');sw.className='lg-lang-select';
+ sw.innerHTML='<button type="button" class="lg-lang-trigger"><span id="lg-lang-cur"></span><svg class="lg-lang-arrow" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d=""/></svg></button><div class="lg-lang-panel"></div>';
+ var trigger=sw.querySelector('.lg-lang-trigger');
+ var panel=sw.querySelector('.lg-lang-panel');
+ var ls=document.documentElement.dataset.langs?document.documentElement.dataset.langs.split(','):Object.keys(D).sort();
+ for(var i=0;i<ls.length;i++){var l=ls[i];var o=document.createElement('a');o.href='?lang='+l;o.className='lg-lang-opt';o.dataset.lang=l;o.textContent=N[l]||l;o.onclick=function(e){e.preventDefault();sL(this.dataset.lang);panel.classList.remove('open')};panel.appendChild(o)}
+ trigger.onclick=function(e){e.stopPropagation();panel.classList.toggle('open')};
+ document.addEventListener('click',function(e){if(!e.target.closest('#lg-sw'))panel.classList.remove('open')});
+
+ /* ── search (sharded inverted index) ── */
+ var si=document.getElementById('lg-search-input'),sr=document.getElementById('lg-search-results');
+ var META=null,SHARDS={},LOADING={};
+ function he(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+ function isCJK(c){return(c>='\u4e00'&&c<='\u9fff')||(c>='\u3400'&&c<='\u4dbf')||(c>='\u3040'&&c<='\u30ff')||(c>='\uac00'&&c<='\ud7af')||(c>='\uf900'&&c<='\ufaff')}
+ function tokenize(q){var t=[];var cs=q.split('');var i=0;while(i<cs.length){var c=cs[i];if(c.charCodeAt(0)<128&&c.match(/[a-z0-9]/i)){var w='';while(i<cs.length&&cs[i].match(/[a-z0-9]/i))w+=cs[i++].toLowerCase();if(w.length>=2)t.push(w)}else if(isCJK(c)){if(i+1<cs.length&&isCJK(cs[i+1]))t.push(c+cs[i+1]);i++}else{i++}}return t}
+ function loadShard(name,cb){
+  if(SHARDS[name]){cb(SHARDS[name]);return}
+  if(LOADING[name]){var iv=setInterval(function(){if(SHARDS[name]||!LOADING[name]){clearInterval(iv);SHARDS[name]&&cb(SHARDS[name])}},50);return}
+  LOADING[name]=true;
+  var x=new XMLHttpRequest();x.open('GET',name,true);x.onload=function(){try{SHARDS[name]=JSON.parse(x.responseText)}catch(e){SHARDS[name]={}}delete LOADING[name];cb(SHARDS[name])};x.onerror=function(){SHARDS[name]={};delete LOADING[name];cb({})};x.send()
+ }
+ function loadMeta(cb){
+  if(META){cb();return}
+  var x=new XMLHttpRequest();x.open('GET','search_meta.json',true);
+  x.onload=function(){try{META=JSON.parse(x.responseText)}catch(e){META={docs:[],shards:[]}};cb()};x.onerror=function(){META={docs:[],shards:[]};cb()};x.send()
+ }
+ function doSearch(q){
+  if(!q||q.length<2){sr.innerHTML='';sr.style.display='none';return}
+  loadMeta(function(){
+   var tokens=tokenize(q);if(!tokens.length){sr.innerHTML='';sr.style.display='none';return}
+   var L=CUR;var needed={};for(var i=0;i<tokens.length;i++){var c=tokens[i].charCodeAt(0)%16;needed[META.shards[c]]=true}
+   var names=Object.keys(needed);if(!names.length){sr.innerHTML='';sr.style.display='none';return}
+   var loaded=0;var all={};
+   function check(){
+    loaded++;if(loaded<names.length)return;
+    var sets=[];
+    for(var i=0;i<tokens.length;i++){
+     var s={};for(var j=0;j<names.length;j++){var idx=all[names[j]]||{};if(idx[tokens[i]])for(var k=0;k<idx[tokens[i]].length;k++)s[idx[tokens[i]][k]]=true}
+     sets.push(s)
+    }
+    var ids=sets[0];for(var i=1;i<sets.length;i++){var n={};for(var k in ids)if(sets[i][k])n[k]=true;ids=n}
+    var result=[];
+    for(var k in ids){var d=META.docs[k];if(d&&d.lang===L)result.push(d)}
+    result=result.slice(0,10);
+    if(!result.length){sr.innerHTML='<div class="lg-no">No results</div>';sr.style.display='block';return}
+    var h='';
+    for(var i=0;i<result.length;i++){var r=result[i];h+='<a href="'+he(r.url)+'?lang='+L+'" class="lg-hit"><b>'+he(r.title)+'</b>';if(r.snippet)h+='<span>'+r.snippet.replace(/</g,'&lt;')+'</span>';h+='</a>'}
+    sr.innerHTML=h;sr.style.display='block'
+   }
+   for(var i=0;i<names.length;i++){(function(n){loadShard(n,function(idx){all[n]=idx;check()})})(names[i])}
+  })
+ }
+ var dt;
+ if(si)si.oninput=function(){clearTimeout(dt);dt=setTimeout(function(){doSearch(si.value)},200)};
+ document.addEventListener('click',function(e){if(e.target.closest('.lg-search-box'))return;sr.style.display='none'});
+
+ /* ── init ── */
+ sL(gL());
+})();
+</script><script>/* lagrange overlay scrollbar — vanilla JS port of shittim-chest's SScrollContainer.
+ * Creates draggable .hi-obs-track + .hi-obs-thumb elements on any container
+ * with class .hi-scroll-container, hiding the native scrollbar.
+ */
+(function () {
+  "use strict";
+
+  function createScrollbar(container) {
+    if (container._lgScrollbar) return;
+    container._lgScrollbar = true;
+
+    // Ensure the container hides its native scrollbar.
+    container.classList.add("hi-scroll-container");
+
+    var track = document.createElement("div");
+    track.className = "hi-obs-track";
+    var thumb = document.createElement("div");
+    thumb.className = "hi-obs-thumb";
+    track.appendChild(thumb);
+
+    // Ensure container is positioned for the absolute track.
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative";
+    }
+    container.appendChild(track);
+
+    var isDragging = false;
+    var dragStartY = 0;
+    var dragStartScroll = 0;
+
+    function updateThumb() {
+      var maxScroll = container.scrollHeight - container.clientHeight;
+      if (maxScroll <= 0) {
+        track.style.opacity = "0";
+        return;
+      }
+      var ratio = container.clientHeight / container.scrollHeight;
+      var thumbH = Math.max(
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue("--hi-scroll-thumb-min")) || 20,
+        container.clientHeight * ratio
+      );
+      thumb.style.height = thumbH + "px";
+      var scrollRatio = container.scrollTop / maxScroll;
+      var trackH = container.clientHeight - 16; // insets
+      thumb.style.top = (scrollRatio * (trackH - thumbH) + 4) + "px";
+
+      // Show on scroll, fade after idle.
+      track.style.opacity = "1";
+      clearTimeout(container._lgScrollFade);
+      container._lgScrollFade = setTimeout(function () {
+        if (!isDragging) track.style.opacity = "0";
+      }, 800);
+    }
+
+    container.addEventListener("scroll", updateThumb);
+    container.addEventListener("mouseenter", function () {
+      track.classList.add("hi-obs-active");
+      updateThumb();
+    });
+    container.addEventListener("mouseleave", function () {
+      track.classList.remove("hi-obs-active");
+      clearTimeout(container._lgScrollFade);
+      container._lgScrollFade = setTimeout(function () {
+        if (!isDragging) track.style.opacity = "0";
+      }, 400);
+    });
+
+    // Drag the thumb to scroll.
+    thumb.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      isDragging = true;
+      dragStartY = e.clientY;
+      dragStartScroll = container.scrollTop;
+      thumb.style.background = "rgb(255 255 255 / 55%)";
+      document.body.style.userSelect = "none";
+    });
+
+    document.addEventListener("mousemove", function (e) {
+      if (!isDragging) return;
+      var maxScroll = container.scrollHeight - container.clientHeight;
+      var trackH = container.clientHeight - 16;
+      var thumbH = parseFloat(thumb.style.height) || 20;
+      var delta = e.clientY - dragStartY;
+      var scrollDelta = (delta / (trackH - thumbH)) * maxScroll;
+      container.scrollTop = dragStartScroll + scrollDelta;
+    });
+
+    document.addEventListener("mouseup", function () {
+      if (!isDragging) return;
+      isDragging = false;
+      thumb.style.background = "";
+      document.body.style.userSelect = "";
+    });
+
+    // Click on track to jump.
+    track.addEventListener("click", function (e) {
+      if (e.target === thumb) return;
+      var maxScroll = container.scrollHeight - container.clientHeight;
+      var trackH = container.clientHeight - 16;
+      var clickY = e.offsetY - 4;
+      var ratio = clickY / trackH;
+      container.scrollTop = ratio * maxScroll;
+    });
+
+    // ResizeObserver to update thumb on content changes.
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(updateThumb);
+      ro.observe(container);
+    }
+
+    updateThumb();
+  }
+
+  // Auto-init on all .hi-scroll-container elements.
+  function initAll() {
+    document.querySelectorAll(".hi-scroll-container").forEach(createScrollbar);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAll);
+  } else {
+    setTimeout(initAll, 50);
+  }
+
+  // Re-init on DOM mutations (for SPA-like content swaps).
+  if (window.MutationObserver) {
+    var mo = new MutationObserver(function (mutations) {
+      mutations.forEach(function (m) {
+        m.addedNodes.forEach(function (node) {
+          if (node.nodeType === 1) {
+            if (node.classList && node.classList.contains("hi-scroll-container")) {
+              createScrollbar(node);
+            }
+            if (node.querySelectorAll) {
+              node.querySelectorAll(".hi-scroll-container").forEach(createScrollbar);
+            }
+          }
+        });
+      });
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  }
+})();
+</script>
+<script>/* lagrange modal system — vanilla JS port of shittim-chest's usePopupManager.
+ * Stack-based popup management with z-index allocation and body-scroll locking.
+ * Supports modals, drawers, popovers, toasts, tooltips.
+ */
+(function () {
+  "use strict";
+
+  var Z_BASE = 1000;
+  var Z_STEP = 2;
+  var registry = [];
+  var scrollLockCount = 0;
+
+  function lockScroll() {
+    scrollLockCount++;
+    if (scrollLockCount === 1) {
+      document.body.style.overflow = "hidden";
+    }
+  }
+
+  function unlockScroll() {
+    scrollLockCount = Math.max(0, scrollLockCount - 1);
+    if (scrollLockCount === 0) {
+      document.body.style.overflow = "";
+    }
+  }
+
+  function register(kind, opts) {
+    opts = opts || {};
+    var id = "lg-popup-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
+    var z = Z_BASE + registry.length * Z_STEP;
+    var entry = { id: id, kind: kind, zIndex: z, locksScroll: opts.locksScroll !== false, title: opts.title || "" };
+    registry.push(entry);
+    if (entry.locksScroll) lockScroll();
+    return entry;
+  }
+
+  function unregister(id) {
+    var idx = registry.findIndex(function (e) { return e.id === id; });
+    if (idx < 0) return;
+    var entry = registry[idx];
+    registry.splice(idx, 1);
+    if (entry.locksScroll) unlockScroll();
+  }
+
+  function getStack() {
+    return registry.map(function (e) { return { id: e.id, kind: e.kind, zIndex: e.zIndex, title: e.title }; });
+  }
+
+  function getTop() {
+    return registry.length > 0 ? registry[registry.length - 1] : null;
+  }
+
+  // Create a modal overlay element.
+  function createModal(content, opts) {
+    opts = opts || {};
+    var entry = register("modal", { locksScroll: true, title: opts.title });
+    var overlay = document.createElement("div");
+    overlay.className = "hi-modal-overlay";
+    overlay.style.zIndex = entry.zIndex;
+    overlay.dataset.popupId = entry.id;
+
+    var dialog = document.createElement("div");
+    dialog.className = "hi-modal-dialog";
+    if (opts.width) dialog.style.maxWidth = opts.width;
+
+    var header = document.createElement("div");
+    header.className = "hi-modal-header";
+    var titleEl = document.createElement("span");
+    titleEl.className = "hi-modal-title";
+    titleEl.textContent = opts.title || "";
+    var closeBtn = document.createElement("button");
+    closeBtn.className = "hi-modal-close";
+    closeBtn.textContent = "×";
+    closeBtn.onclick = function () { closeModal(entry.id); };
+    header.appendChild(titleEl);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement("div");
+    body.className = "hi-modal-body hi-scroll-container";
+    if (typeof content === "string") {
+      body.innerHTML = content;
+    } else if (content) {
+      body.appendChild(content);
+    }
+
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    // Overlay click closes (only if clicking the overlay itself, not the dialog).
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay) closeModal(entry.id);
+    });
+
+    // ESC closes top modal.
+    if (!document._lgModalEsc) {
+      document._lgModalEsc = true;
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          var top = getTop();
+          if (top) closeModal(top.id);
+        }
+      });
+    }
+
+    return entry.id;
+  }
+
+  function closeModal(id) {
+    var overlay = document.querySelector('[data-popup-id="' + id + '"]');
+    if (overlay) {
+      overlay.classList.add("hi-modal-closing");
+      setTimeout(function () {
+        overlay.remove();
+        unregister(id);
+      }, 200);
+    } else {
+      unregister(id);
+    }
+  }
+
+  // Create a toast notification.
+  function createToast(message, opts) {
+    opts = opts || {};
+    var entry = register("toast", { locksScroll: false });
+    var el = document.createElement("div");
+    el.className = "hi-toast";
+    el.style.zIndex = entry.zIndex;
+    el.dataset.popupId = entry.id;
+    el.textContent = message;
+    document.body.appendChild(el);
+    var duration = opts.duration || 3000;
+    setTimeout(function () {
+      el.classList.add("hi-toast-closing");
+      setTimeout(function () {
+        el.remove();
+        unregister(entry.id);
+      }, 200);
+    }, duration);
+    return entry.id;
+  }
+
+  // Expose API.
+  window.lgModal = {
+    createModal: createModal,
+    closeModal: closeModal,
+    createToast: createToast,
+    register: register,
+    unregister: unregister,
+    getStack: getStack,
+    getTop: getTop,
+  };
+})();
+</script>
+<script>
+(function(){
+ document.querySelectorAll('.lg-live-block').forEach(function(block){
+  var tabs=block.querySelectorAll('.lg-live-tab');
+  var preview=block.querySelector('.lg-live-preview');
+  var source=block.querySelector('[data-lg-source]');
+  if(!tabs.length) return;
+  tabs.forEach(function(tab){
+   tab.onclick=function(){
+    tabs.forEach(function(t){t.classList.remove('active')});
+    tab.classList.add('active');
+    var isSource=tab.dataset.tab==='source';
+    if(preview) preview.style.display=isSource?'none':'';
+    if(source) source.style.display=isSource?'block':'none';
+   };
+  });
+ });
+})();
+</script></body>
+</html>
