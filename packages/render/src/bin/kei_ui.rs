@@ -1,5 +1,6 @@
 // kei_ui — full-screen aris-rendered UI for the kei OS.
 fn main() {
+    aris_render::init_logging();
     let html = r#"<!DOCTYPE html><html><head><style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -63,11 +64,11 @@ body {
         scale: 1.0,
     };
 
-    eprintln!("[kei_ui] rendering 1280x800 UI...");
+    tracing::info!("rendering 1280x800 UI...");
     let frame = match aris_render::render_html_with_font(html, &config) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("[kei_ui] render error: {:?}", e);
+            tracing::error!("render error: {:?}", e);
             std::process::exit(1);
         }
     };
@@ -78,8 +79,8 @@ body {
         .chunks_exact(4)
         .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
         .count();
-    eprintln!(
-        "[kei_ui] rendered: {}/{} non-black pixels ({:.1}%)",
+    tracing::info!(
+        "rendered: {}/{} non-black pixels ({:.1}%)",
         non_black,
         total,
         100.0 * non_black as f64 / total as f64
@@ -89,24 +90,24 @@ body {
     #[cfg(unix)]
     {
         if std::path::Path::new(&fb_path).exists() {
-            eprintln!("[kei_ui] opening {}...", fb_path);
+            tracing::info!("opening {}...", fb_path);
             match aris_render::FbDevBackend::open(&fb_path) {
                 Ok(mut fb) => {
                     let (fw, fh) = fb.resolution();
-                    eprintln!("[kei_ui] fb: {}x{}", fw, fh);
+                    tracing::info!("fb: {}x{}", fw, fh);
                     match fb.present(&frame) {
-                        Ok(()) => eprintln!("[kei_ui] presented to {} OK", fb_path),
-                        Err(e) => eprintln!("[kei_ui] present error: {}", e),
+                        Ok(()) => tracing::info!("presented to {} OK", fb_path),
+                        Err(e) => tracing::error!("present error: {}", e),
                     }
                 }
-                Err(e) => eprintln!("[kei_ui] fb open error: {}", e),
+                Err(e) => tracing::error!("fb open error: {}", e),
             }
         } else {
-            eprintln!("[kei_ui] {} not found, skipping fbdev", fb_path);
+            tracing::warn!("{} not found, skipping fbdev", fb_path);
         }
     }
 
-    eprintln!("[kei_ui] UI active. Keeping process alive...");
+    tracing::info!("UI active. Keeping process alive...");
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }

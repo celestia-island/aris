@@ -23,6 +23,25 @@ use anyrender::ImageRenderer;
 /// DejaVu Sans (latin-400) — SIL-compatible open-source license.
 const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/font.ttf");
 
+/// Initialize structured logging with timestamps and levels.
+///
+/// Call this at the top of every binary's `main()`:
+/// ```no_run
+/// aris_render::init_logging();
+/// ```
+/// Output format: `2026-07-11T10:30:45.123Z  INFO aris_render::fbdev: message`
+///
+/// Control verbosity with `RUST_LOG=debug`, `RUST_LOG=aris_render=trace`, etc.
+pub fn init_logging() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(true)
+        .init();
+}
+
 /// Configuration for the rendering pipeline.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {

@@ -1,21 +1,22 @@
 // kei_fbtest — direct framebuffer test via mmap (no per-write syscalls).
 // mmaps /dev/fb0 and writes pixels directly to the DMA buffer.
 fn main() {
-    eprintln!("[kei_fbtest] starting...");
+    aris_render::init_logging();
+    tracing::info!("starting...");
 
     #[cfg(unix)]
     {
         let fb_path = "/dev/fb0";
         if !std::path::Path::new(fb_path).exists() {
-            eprintln!("[kei_fbtest] {} not found!", fb_path);
+            tracing::info!("{} not found!", fb_path);
             return;
         }
 
-        eprintln!("[kei_fbtest] opening {}...", fb_path);
+        tracing::info!("opening {}...", fb_path);
         let file = match std::fs::OpenOptions::new().read(true).write(true).open(fb_path) {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("[kei_fbtest] open error: {}", e);
+                tracing::info!("open error: {}", e);
                 return;
             }
         };
@@ -25,7 +26,7 @@ fn main() {
         let fb_size = width * height * 4;
 
         // Try mmap
-        eprintln!("[kei_fbtest] attempting mmap ({} bytes)...", fb_size);
+        tracing::info!("attempting mmap ({} bytes)...", fb_size);
         use std::os::fd::AsRawFd;
         let ptr = unsafe {
             libc::mmap(
@@ -39,7 +40,7 @@ fn main() {
         };
 
         if ptr == libc::MAP_FAILED {
-            eprintln!("[kei_fbtest] mmap failed, falling back to write()");
+            tracing::info!("mmap failed, falling back to write()");
             // Fallback: just write a single blue row
             use std::io::{Seek, Write};
             let mut file = file;
@@ -48,9 +49,9 @@ fn main() {
             for _ in 0..height {
                 let _ = file.write_all(&blue_row);
             }
-            eprintln!("[kei_fbtest] wrote via fallback");
+            tracing::info!("wrote via fallback");
         } else {
-            eprintln!("[kei_fbtest] mmap OK at {:p}, drawing pattern...", ptr);
+            tracing::info!("mmap OK at {:p}, drawing pattern...", ptr);
 
             // Write directly to the mmap'd DMA buffer — no per-pixel syscalls!
             let fb = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, fb_size) };
@@ -72,17 +73,17 @@ fn main() {
                     }
                 }
                 if y % 200 == 0 {
-                    eprintln!("[kei_fbtest] drew row {}/{}", y, height);
+                    tracing::info!("drew row {}/{}", y, height);
                 }
             }
 
-            eprintln!("[kei_fbtest] pattern drawn, msync...");
+            tracing::info!("pattern drawn, msync...");
             unsafe { libc::msync(ptr, fb_size, libc::MS_SYNC); }
-            eprintln!("[kei_fbtest] msync done");
+            tracing::info!("msync done");
         }
     }
 
-    eprintln!("[kei_fbtest] done.");
+    tracing::info!("done.");
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3600));
     }

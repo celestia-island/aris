@@ -10,6 +10,7 @@ description = "HTML/CSS rendering pipeline for aris HMI — Blitz + Vello CPU + 
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true }
 libc = "0.2"
 memmap2 = "0.9"
 # blitz-dom: system_fonts is enabled via the "desktop" feature (see below).

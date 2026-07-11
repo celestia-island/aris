@@ -156,8 +156,8 @@ fn run_window_impl(
             if let Some(path) = &self.watch_path {
                 if let Ok(new_html) = std::fs::read_to_string(path) {
                     if new_html != self.html {
-                        eprintln!(
-                            "[winit] hot reload: {} → {} bytes",
+                        tracing::info!(
+                            "hot reload: {} → {} bytes",
                             self.html.len(),
                             new_html.len()
                         );
@@ -422,7 +422,7 @@ fn run_window_impl(
                         };
                         let mut dom_event = DomEvent::new(target, DomEventData::Click(pe));
                         doc.handle_dom_event(&mut dom_event, |ev: DomEvent| {
-                            eprintln!("[winit] DOM event: target={} type={:?}", ev.target, ev.data.kind());
+                            tracing::debug!("DOM event: target={} type={:?}", ev.target, ev.data.kind());
                         });
                         // Clicks may change DOM (onclick JS, toggled states).
                         self.needs_rerender = true;
@@ -446,7 +446,7 @@ fn run_window_impl(
                         match &event.logical_key {
                             Key::Named(NamedKey::Escape) => event_loop.exit(),
                             Key::Named(NamedKey::F5) => {
-                                eprintln!("[winit] manual reload (F5)");
+                                tracing::info!("manual reload (F5)");
                                 self.reload_html();
                                 if let Some(w) = &self.window { w.request_redraw(); }
                             }

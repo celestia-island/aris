@@ -13,6 +13,7 @@
 // Press F5 to force a reload, ESC to quit.
 
 fn main() {
+    aris_render::init_logging();
     let arg = std::env::args().nth(1);
     let config = aris_render::RenderConfig {
         width: 1024,
@@ -21,9 +22,9 @@ fn main() {
     };
 
     if let Some(path) = arg {
-        eprintln!("[aris-browser] loading {} (hot reload enabled)", path);
+        tracing::info!("loading {} (hot reload enabled)", path);
         if let Err(e) = aris_render::winit_backend::run_window_file(&path, &config) {
-            eprintln!("[aris-browser] error: {:?}", e);
+            tracing::error!("error: {:?}", e);
             std::process::exit(1);
         }
     } else {
@@ -69,9 +70,9 @@ button:hover { background:#bb9af7; }
 </div>
 </body></html>"#;
 
-        eprintln!("[aris-browser] opening window ({}x{})...", config.width, config.height);
+        tracing::info!("opening window ({}x{})...", config.width, config.height);
         if let Err(e) = aris_render::winit_backend::run_window(&html, &config) {
-            eprintln!("[aris-browser] error: {:?}", e);
+            tracing::error!("error: {:?}", e);
             std::process::exit(1);
         }
     }
