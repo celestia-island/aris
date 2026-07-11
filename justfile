@@ -3,7 +3,7 @@
 
 set unstable
 set shell := ["bash", "-c"]
-set windows-shell := ["wsl.exe", "bash", "-c"]
+set windows-shell := ["pwsh.exe", "-NoProfile", "-Command"]
 set lists
 
 import "./celestia-devtools.just"
@@ -163,19 +163,17 @@ dev-shell:
 # ── Development ────────────────────────────────────────────
 
 # Launch the aris browser in a winit desktop window.
-# Uses Windows-native cargo (not WSL) since winit needs a real display.
-# On Windows, this runs via cmd.exe to bypass the WSL shell setting.
 dev:
-    cmd.exe /c cargo run -p aris-render --features "desktop winit" --bin aris_browser
+    cargo run -p aris-render --features "desktop winit" --bin aris_browser
 
 dev-html FILE:
-    cmd.exe /c cargo run -p aris-render --features "desktop winit" --bin aris_browser -- {{FILE}}
+    cargo run -p aris-render --features "desktop winit" --bin aris_browser -- {{FILE}}
 
 dev-render:
-    cmd.exe /c "cargo run -p aris-render --bin render_lagrange -- tests/fixtures/lagrange_index.html"
+    cargo run -p aris-render --bin render_lagrange -- tests/fixtures/lagrange_index.html
 
 dev-wasm:
-    cmd.exe /c "cargo run -p aris-wasm --bin render_wasm -- tests/fixtures/tairitsu_website.wasm"
+    cargo run -p aris-wasm --bin render_wasm -- tests/fixtures/tairitsu_website.wasm
 
 clean:
     rm -rf output/ target/ build/
