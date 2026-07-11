@@ -71,6 +71,11 @@ incremental = true
 [profile.dev.package."*"]
 debug = 0
 
+# Optimize the renderer in dev builds — the per-pixel overlay/copy loops and
+# Vello rasterization need at least -O1 to avoid multi-frame input lag.
+[profile.dev.package.aris-render]
+opt-level = 1
+
 [profile.release]
 opt-level = "s"
 lto = "thin"

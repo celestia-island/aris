@@ -5,8 +5,9 @@
 //! Features:
 //! - **HiDPI**: renders at physical pixel resolution (logical × scale_factor)
 //! - **Hot reload**: watches the HTML file for changes and re-renders in-place
-//! - **Interactive**: persistent HtmlDocument with CSS :hover cursor changes,
-//!   click events, scroll, and keyboard input
+//! - **Instant hover**: overlay-based highlight drawn on the cached base frame
+//!   — no full CSS resolve() or Vello re-raster needed per mouse move
+//! - **Interactive**: CSS cursor changes, click events, scroll, keyboard input
 //! - **Single-instance**: kills previous aris_browser windows on startup
 
 #![cfg(feature = "winit")]
@@ -37,10 +38,6 @@ fn run_window_impl(
 ) -> anyhow::Result<()> {
     use blitz_html::HtmlDocument;
     use blitz_dom::DocumentConfig;
-    use blitz_traits::events::{
-        BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData,
-        PointerCoords, MouseEventButton, MouseEventButtons,
-    };
     use blitz_traits::shell::Viewport;
     use winit::application::ApplicationHandler;
     use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -74,21 +71,21 @@ fn run_window_impl(
         surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
         // Persistent document — survives across frames for hover/click state.
         doc: Option<HtmlDocument>,
-        cached_frame: Option<crate::Frame>,
+        /// The "base" frame — the fully rendered page without any hover overlay.
+        /// Only re-rendered on load/resize/hot-reload/click (not on hover).
+        base_frame: Option<crate::Frame>,
+        /// Pre-converted XRGB8888 u32 buffer of base_frame. Avoids re-doing the
+        /// 3M-pixel RGBA→XRGB loop on every hover redraw.
+        base_xrgb: Vec<u32>,
         phys_size: (u32, u32),
         scale_factor: f64,
-        /// Something changed (hover/click/resize) and a re-render is needed.
-        dirty: bool,
-        /// Document DOM/style changed and needs a full resolve() before painting.
-        needs_resolve: bool,
-        /// Throttle: minimum interval between hover-triggered re-renders.
-        last_render: Instant,
+        /// True when the base frame needs re-rendering (resize, reload, click).
+        needs_rerender: bool,
+        /// Previous hover rect (physical px) so we can restore only those pixels.
+        prev_hover_rect: Option<(i32, i32, i32, i32)>,
         last_poll: Instant,
         prev_cursor: WinitCursorIcon,
     }
-
-    /// Minimum time between hover-triggered re-renders (≈16 FPS for :hover updates).
-    const RENDER_THROTTLE: Duration = Duration::from_millis(60);
 
     impl App {
         fn build_doc(&mut self) {
@@ -108,11 +105,12 @@ fn run_window_impl(
             let mut doc = HtmlDocument::from_html(&self.html, doc_config);
             doc.resolve(0.0);
             self.doc = Some(doc);
-            self.needs_resolve = false;
-            self.dirty = true;
+            self.needs_rerender = true;
         }
 
-        fn render_doc(&mut self) {
+        /// Expensive: render the full page via Vello CPU rasterization, then
+        /// pre-convert to XRGB8888 for fast blitting.
+        fn render_base_frame(&mut self) {
             let Some(doc) = self.doc.as_mut() else {
                 return;
             };
@@ -120,11 +118,7 @@ fn run_window_impl(
             if pw == 0 || ph == 0 {
                 return;
             }
-            // Resolve any pending DOM/style changes (e.g. :hover snapshots) before painting.
-            if self.needs_resolve {
-                doc.resolve(0.0);
-                self.needs_resolve = false;
-            }
+            doc.resolve(0.0);
             let scale = self.scale_factor;
             let mut frame = crate::Frame::new(pw, ph);
             use anyrender::ImageRenderer;
@@ -135,8 +129,27 @@ fn run_window_impl(
                 },
                 &mut frame.rgba,
             );
-            self.cached_frame = Some(frame);
-            self.last_render = Instant::now();
+
+            // Pre-convert RGBA bytes → XRGB u32 for softbuffer (done ONCE per
+            // base render, not per hover redraw).
+            let pixel_count = (pw as usize) * (ph as usize);
+            let mut xrgb = Vec::with_capacity(pixel_count);
+            for i in 0..pixel_count {
+                let src = i * 4;
+                if src + 2 < frame.rgba.len() {
+                    let r = frame.rgba[src] as u32;
+                    let g = frame.rgba[src + 1] as u32;
+                    let b = frame.rgba[src + 2] as u32;
+                    xrgb.push((r << 16) | (g << 8) | b);
+                } else {
+                    xrgb.push(0);
+                }
+            }
+            self.base_xrgb = xrgb;
+            self.base_frame = Some(frame);
+            self.needs_rerender = false;
+            // Force full re-blit + overlay on next present.
+            self.prev_hover_rect = None;
         }
 
         fn reload_html(&mut self) {
@@ -167,14 +180,32 @@ fn run_window_impl(
             self.reload_html();
         }
 
-        fn present(&mut self) {
+        /// Get the bounding box (in CSS logical pixels) of the currently hovered node.
+        /// Returns None if no node is hovered or layout data is unavailable.
+        fn hover_rect_css(&self) -> Option<(f32, f32, f32, f32)> {
+            let doc = self.doc.as_ref()?;
+            let hover_id = doc.get_hover_node_id()?;
+            let node = doc.get_node(hover_id)?;
+            let pos = node.absolute_position(0.0, 0.0);
+            let w = node.final_layout.size.width;
+            let h = node.final_layout.size.height;
+            if w < 1.0 || h < 1.0 {
+                return None;
+            }
+            Some((pos.x, pos.y, w, h))
+        }
+
+        /// Fast present: memcpy base XRGB to softbuffer, then draw/clear hover
+        /// overlay incrementally. The per-pixel RGBA→XRGB conversion is done once
+        /// in render_base_frame; here we only touch the hover rect pixels.
+        fn present_with_overlay(&mut self) {
             let (pw, ph) = self.phys_size;
-            if pw == 0 || ph == 0 {
+            if pw == 0 || ph == 0 || self.base_xrgb.is_empty() {
                 return;
             }
-            let Some(frame) = self.cached_frame.as_ref() else {
-                return;
-            };
+            // Compute hover rect BEFORE borrowing surface mutably.
+            let hover_rect = self.hover_rect_css();
+            let scale = self.scale_factor;
             let Some(surface) = self.surface.as_mut() else {
                 return;
             };
@@ -182,65 +213,73 @@ fn run_window_impl(
                 NonZeroU32::new(pw).unwrap(),
                 NonZeroU32::new(ph).unwrap(),
             );
-            if let Ok(mut buffer) = surface.buffer_mut() {
-                let fw = frame.width as usize;
-                let fh = frame.height as usize;
-                let buf_len = buffer.len();
-                if fw * fh == buf_len {
-                    for i in 0..buf_len {
-                        let src = i * 4;
-                        if src + 2 < frame.rgba.len() {
-                            let r = frame.rgba[src] as u32;
-                            let g = frame.rgba[src + 1] as u32;
-                            let b = frame.rgba[src + 2] as u32;
-                            buffer[i] = (r << 16) | (g << 8) | b;
-                        }
-                    }
-                } else {
-                    let bh = buf_len / pw.max(1) as usize;
-                    let bw = buf_len / bh.max(1);
-                    for dy in 0..bh {
-                        let fy = if bh > 0 { dy * fh / bh } else { 0 };
-                        if fy >= fh { break; }
-                        let row_start = dy * bw;
-                        if row_start >= buf_len { break; }
-                        for dx in 0..bw {
-                            let fx = if bw > 0 { dx * fw / bw } else { 0 };
-                            if fx >= fw { break; }
-                            let src = (fy * fw + fx) * 4;
-                            if src + 2 >= frame.rgba.len() { break; }
-                            let r = frame.rgba[src] as u32;
-                            let g = frame.rgba[src + 1] as u32;
-                            let b = frame.rgba[src + 2] as u32;
-                            buffer[row_start + dx] = (r << 16) | (g << 8) | b;
+
+            let Ok(mut buffer) = surface.buffer_mut() else {
+                return;
+            };
+            let buf_len = buffer.len();
+            let buf_w = pw as usize;
+            let buf_h = ph as usize;
+            let xrgb = &self.base_xrgb;
+
+            // Fast memcpy: copy entire base XRGB buffer to softbuffer in one shot.
+            if xrgb.len() == buf_len {
+                buffer[..buf_len].copy_from_slice(xrgb);
+            } else {
+                // Size mismatch — fallback scaled copy (rare, only on resize).
+                let xw = (xrgb.len() as f64 / buf_h as f64).sqrt() as usize;
+                for dy in 0..buf_h {
+                    let fy = dy * (buf_h / buf_h.max(1));
+                    let row = dy * buf_w;
+                    for dx in 0..buf_w {
+                        if row + dx >= buf_len { break; }
+                        let fx = dx * xw / buf_w.max(1);
+                        let si = fy.min(buf_h - 1) * xw + fx.min(xw - 1);
+                        if si < xrgb.len() {
+                            buffer[row + dx] = xrgb[si];
                         }
                     }
                 }
-                let _ = buffer.present();
             }
-        }
 
-        fn make_pointer_event(&self, pos: winit::dpi::PhysicalPosition<f64>) -> BlitzPointerEvent {
-            // pos is in physical pixels; blitz uses CSS (logical) coordinates
-            let css_x = (pos.x / self.scale_factor) as f32;
-            let css_y = (pos.y / self.scale_factor) as f32;
-            BlitzPointerEvent {
-                id: BlitzPointerId::Mouse,
-                is_primary: true,
-                coords: PointerCoords {
-                    page_x: css_x,
-                    page_y: css_y,
-                    screen_x: css_x,
-                    screen_y: css_y,
-                    client_x: css_x,
-                    client_y: css_y,
-                },
-                button: MouseEventButton::Main,
-                buttons: MouseEventButtons::Primary,
-                mods: unsafe { core::mem::zeroed() },
-                details: Default::default(),
-                element: Default::default(),
+            // Draw hover highlight overlay — only on the hovered element's pixels.
+            if let Some((cx, cy, cw, ch)) = hover_rect {
+                let px = (cx * scale as f32) as i32;
+                let py = (cy * scale as f32) as i32;
+                let pw_px = (cw * scale as f32) as i32;
+                let ph_px = (ch * scale as f32) as i32;
+
+                for ry in 0..ph_px {
+                    let y = py + ry;
+                    if y < 0 || y as usize >= buf_h { continue; }
+                    let row = y as usize * buf_w;
+                    for rx in 0..pw_px {
+                        let x = px + rx;
+                        if x < 0 || x as usize >= buf_w { continue; }
+                        let idx = row + x as usize;
+                        if idx >= buf_len { break; }
+                        let pixel = buffer[idx];
+                        let r = (pixel >> 16) & 0xFF;
+                        let g = (pixel >> 8) & 0xFF;
+                        let b = pixel & 0xFF;
+                        // 2px bright cyan border, else white-blend fill.
+                        let on_border = ry < 2 || rx < 2 || ry >= ph_px - 2 || rx >= pw_px - 2;
+                        if on_border {
+                            buffer[idx] = 0x00FFFF00;
+                        } else {
+                            let nr = r + ((255 - r) * 22 / 100);
+                            let ng = g + ((255 - g) * 22 / 100);
+                            let nb = b + ((255 - b) * 22 / 100);
+                            buffer[idx] = (nr << 16) | (ng << 8) | nb;
+                        }
+                    }
+                }
+                self.prev_hover_rect = Some((px, py, pw_px, ph_px));
+            } else {
+                self.prev_hover_rect = None;
             }
+
+            let _ = buffer.present();
         }
 
         fn update_cursor_icon(&mut self) {
@@ -330,33 +369,28 @@ fn run_window_impl(
                 }
                 WindowEvent::RedrawRequested => {
                     self.check_file_mtime();
-                    if self.dirty {
-                        self.render_doc();
-                        self.dirty = false;
+                    // Only do expensive Vello re-raster if the page content changed.
+                    if self.needs_rerender {
+                        self.render_base_frame();
                     }
-                    self.present();
+                    // Present base frame + instant hover overlay.
+                    self.present_with_overlay();
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     let css_x = (position.x / self.scale_factor) as f32;
                     let css_y = (position.y / self.scale_factor) as f32;
-                    if let Some(doc) = self.doc.as_mut() {
-                        let changed = doc.set_hover_to(css_x, css_y);
-                        if changed {
-                            // Mark that :hover styles need re-resolution.
-                            self.needs_resolve = true;
-                            self.dirty = true;
-                        }
-                    }
-                    // Cursor icon update is cheap — do it immediately.
+                    let hover_changed = if let Some(doc) = self.doc.as_mut() {
+                        doc.set_hover_to(css_x, css_y)
+                    } else {
+                        false
+                    };
+                    // Cursor icon is instant — reads cached styles, no resolve().
                     self.update_cursor_icon();
-                    // Throttle the expensive re-render: only request a redraw if
-                    // enough time has passed since the last frame. This prevents
-                    // event-loop flooding on rapid mouse movement.
-                    if self.dirty {
-                        let elapsed = self.last_render.elapsed();
-                        if elapsed >= RENDER_THROTTLE {
-                            if let Some(w) = &self.window { w.request_redraw(); }
-                        }
+                    // If the hover target changed, we only need to re-draw the overlay,
+                    // NOT re-render the page. This is microseconds vs hundreds of ms.
+                    // RedrawRequested is always cheap here because needs_rerender=false.
+                    if hover_changed {
+                        if let Some(w) = &self.window { w.request_redraw(); }
                     }
                 }
                 WindowEvent::MouseInput {
@@ -364,16 +398,21 @@ fn run_window_impl(
                     button: MouseButton::Left,
                     ..
                 } => {
-                    // Dispatch click event to the document
+                    use blitz_traits::events::{
+                        BlitzPointerEvent, BlitzPointerId, DomEvent, DomEventData,
+                        PointerCoords, MouseEventButton, MouseEventButtons,
+                    };
                     if let Some(doc) = self.doc.as_mut() {
                         let target = doc.get_hover_node_id().unwrap_or(0);
+                        let css_x = 0.0; // coordinates not critical for click dispatch
+                        let css_y = 0.0;
                         let pe = BlitzPointerEvent {
                             id: BlitzPointerId::Mouse,
                             is_primary: true,
                             coords: PointerCoords {
-                                page_x: 0.0, page_y: 0.0,
-                                screen_x: 0.0, screen_y: 0.0,
-                                client_x: 0.0, client_y: 0.0,
+                                page_x: css_x, page_y: css_y,
+                                screen_x: css_x, screen_y: css_y,
+                                client_x: css_x, client_y: css_y,
                             },
                             button: MouseEventButton::Main,
                             buttons: MouseEventButtons::Primary,
@@ -385,20 +424,20 @@ fn run_window_impl(
                         doc.handle_dom_event(&mut dom_event, |ev: DomEvent| {
                             eprintln!("[winit] DOM event: target={} type={:?}", ev.target, ev.data.kind());
                         });
-                        self.needs_resolve = true;
-                        self.dirty = true;
+                        // Clicks may change DOM (onclick JS, toggled states).
+                        self.needs_rerender = true;
                     }
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
-                    let (dx, dy) = match delta {
+                    let (_dx, dy) = match delta {
                         winit::event::MouseScrollDelta::LineDelta(x, y) => (x as f64 * 30.0, y as f64 * 30.0),
                         winit::event::MouseScrollDelta::PixelDelta(p) => (p.x, p.y),
                     };
                     if let Some(doc) = self.doc.as_mut() {
                         let hover = doc.get_hover_node_id().unwrap_or(0);
-                        doc.scroll_node_by(hover, dy, dx, &mut |_| {});
-                        self.dirty = true;
+                        doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
+                        self.needs_rerender = true;
                         if let Some(w) = &self.window { w.request_redraw(); }
                     }
                 }
@@ -421,10 +460,7 @@ fn run_window_impl(
 
         fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
             self.check_file_mtime();
-            // Process deferred dirty state from throttled hover events.
-            // When the mouse stops moving, about_to_wait fires and we can
-            // finally render the pending :hover visual update.
-            if self.dirty && self.last_render.elapsed() >= RENDER_THROTTLE {
+            if self.needs_rerender {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -440,12 +476,12 @@ fn run_window_impl(
         context: None,
         surface: None,
         doc: None,
-        cached_frame: None,
+        base_frame: None,
+        base_xrgb: Vec::new(),
         phys_size: (0, 0),
         scale_factor: 1.0,
-        dirty: false,
-        needs_resolve: false,
-        last_render: Instant::now() - RENDER_THROTTLE,
+        needs_rerender: false,
+        prev_hover_rect: None,
         last_poll: Instant::now(),
         prev_cursor: WinitCursorIcon::Default,
     };
