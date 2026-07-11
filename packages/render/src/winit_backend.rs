@@ -77,10 +77,18 @@ fn run_window_impl(
         cached_frame: Option<crate::Frame>,
         phys_size: (u32, u32),
         scale_factor: f64,
+        /// Something changed (hover/click/resize) and a re-render is needed.
         dirty: bool,
+        /// Document DOM/style changed and needs a full resolve() before painting.
+        needs_resolve: bool,
+        /// Throttle: minimum interval between hover-triggered re-renders.
+        last_render: Instant,
         last_poll: Instant,
         prev_cursor: WinitCursorIcon,
     }
+
+    /// Minimum time between hover-triggered re-renders (≈16 FPS for :hover updates).
+    const RENDER_THROTTLE: Duration = Duration::from_millis(60);
 
     impl App {
         fn build_doc(&mut self) {
@@ -100,6 +108,7 @@ fn run_window_impl(
             let mut doc = HtmlDocument::from_html(&self.html, doc_config);
             doc.resolve(0.0);
             self.doc = Some(doc);
+            self.needs_resolve = false;
             self.dirty = true;
         }
 
@@ -111,8 +120,12 @@ fn run_window_impl(
             if pw == 0 || ph == 0 {
                 return;
             }
+            // Resolve any pending DOM/style changes (e.g. :hover snapshots) before painting.
+            if self.needs_resolve {
+                doc.resolve(0.0);
+                self.needs_resolve = false;
+            }
             let scale = self.scale_factor;
-            eprintln!("[winit] paint {}x{} (scale={:.1})", pw, ph, scale);
             let mut frame = crate::Frame::new(pw, ph);
             use anyrender::ImageRenderer;
             let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(pw, ph);
@@ -123,6 +136,7 @@ fn run_window_impl(
                 &mut frame.rgba,
             );
             self.cached_frame = Some(frame);
+            self.last_render = Instant::now();
         }
 
         fn reload_html(&mut self) {
@@ -251,7 +265,7 @@ fn run_window_impl(
             };
             if icon != self.prev_cursor {
                 if let Some(window) = &self.window {
-                    window.set_cursor_icon(icon);
+                    window.set_cursor(icon);
                 }
                 self.prev_cursor = icon;
             }
@@ -328,14 +342,21 @@ fn run_window_impl(
                     if let Some(doc) = self.doc.as_mut() {
                         let changed = doc.set_hover_to(css_x, css_y);
                         if changed {
-                            doc.resolve(0.0);
+                            // Mark that :hover styles need re-resolution.
+                            self.needs_resolve = true;
                             self.dirty = true;
                         }
                     }
-                    // Update cursor icon based on CSS cursor property
+                    // Cursor icon update is cheap — do it immediately.
                     self.update_cursor_icon();
+                    // Throttle the expensive re-render: only request a redraw if
+                    // enough time has passed since the last frame. This prevents
+                    // event-loop flooding on rapid mouse movement.
                     if self.dirty {
-                        if let Some(w) = &self.window { w.request_redraw(); }
+                        let elapsed = self.last_render.elapsed();
+                        if elapsed >= RENDER_THROTTLE {
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                        }
                     }
                 }
                 WindowEvent::MouseInput {
@@ -344,7 +365,6 @@ fn run_window_impl(
                     ..
                 } => {
                     // Dispatch click event to the document
-                    let scale = self.scale_factor;
                     if let Some(doc) = self.doc.as_mut() {
                         let target = doc.get_hover_node_id().unwrap_or(0);
                         let pe = BlitzPointerEvent {
@@ -365,10 +385,9 @@ fn run_window_impl(
                         doc.handle_dom_event(&mut dom_event, |ev: DomEvent| {
                             eprintln!("[winit] DOM event: target={} type={:?}", ev.target, ev.data.kind());
                         });
-                        doc.resolve(0.0);
+                        self.needs_resolve = true;
                         self.dirty = true;
                     }
-                    let _ = scale;
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -402,7 +421,10 @@ fn run_window_impl(
 
         fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
             self.check_file_mtime();
-            if self.dirty {
+            // Process deferred dirty state from throttled hover events.
+            // When the mouse stops moving, about_to_wait fires and we can
+            // finally render the pending :hover visual update.
+            if self.dirty && self.last_render.elapsed() >= RENDER_THROTTLE {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -422,6 +444,8 @@ fn run_window_impl(
         phys_size: (0, 0),
         scale_factor: 1.0,
         dirty: false,
+        needs_resolve: false,
+        last_render: Instant::now() - RENDER_THROTTLE,
         last_poll: Instant::now(),
         prev_cursor: WinitCursorIcon::Default,
     };
