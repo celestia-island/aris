@@ -128,31 +128,49 @@ impl FbDevBackend {
         let copy_h = frame.height.min(self.height);
         let bpp = 4; // Assume 32bpp (XRGB8888 / BgrReserved)
 
+        // Convert RGBA [R,G,B,A] → BGRX [B,G,R,X] for the framebuffer.
+        // kei's virtio-gpu uses B8G8R8X8 format (bytes in memory: B,G,R,X).
+        let mut bgrx: Vec<u8> = Vec::with_capacity((copy_w * copy_h * bpp) as usize);
+        for y in 0..copy_h {
+            for x in 0..copy_w {
+                let src = ((y * frame.width + x) * 4) as usize;
+                if src + 2 < frame.rgba.len() {
+                    bgrx.push(frame.rgba[src + 2]); // B
+                    bgrx.push(frame.rgba[src + 1]); // G
+                    bgrx.push(frame.rgba[src]);     // R
+                    bgrx.push(frame.rgba[src + 3]); // A → X
+                } else {
+                    bgrx.extend_from_slice(&[0, 0, 0, 0]);
+                }
+            }
+        }
+
         if let Some(mmap) = &mut self.mmap {
             // Direct pixel copy via mmap
             let dst = &mut mmap[..];
-            for y in 0..copy_h {
-                let src_offset = (y * frame.width * 4) as usize;
-                let dst_offset = (y * self.width * bpp) as usize;
-                let len = (copy_w * 4) as usize;
-                let src_end = src_offset + len;
-                let dst_end = dst_offset + len;
-                if src_end <= frame.rgba.len() && dst_end <= dst.len() {
-                    dst[dst_offset..dst_end].copy_from_slice(&frame.rgba[src_offset..src_end]);
+            let stride = (self.width * bpp) as usize;
+            let row_len = (copy_w * bpp) as usize;
+            for y in 0..copy_h as usize {
+                let src_offset = y * (copy_w as usize) * (bpp as usize);
+                let dst_offset = y * stride;
+                let src_end = src_offset + row_len;
+                let dst_end = dst_offset + row_len;
+                if src_end <= bgrx.len() && dst_end <= dst.len() {
+                    dst[dst_offset..dst_end].copy_from_slice(&bgrx[src_offset..src_end]);
                 }
             }
         } else {
             // Fallback: write via pwrite
             use std::io::{Seek, Write};
             self.file.seek(std::io::SeekFrom::Start(0))?;
-            // Write line by line to handle stride differences
-            for y in 0..copy_h {
-                let src_offset = (y * frame.width * 4) as usize;
-                let len = (copy_w * 4) as usize;
-                self.file.write_all(&frame.rgba[src_offset..src_offset + len])?;
+            let stride = (self.width * bpp) as usize;
+            let row_len = (copy_w * bpp) as usize;
+            for y in 0..copy_h as usize {
+                let src_offset = y * (copy_w as usize) * (bpp as usize);
+                self.file.write_all(&bgrx[src_offset..src_offset + row_len])?;
                 // Pad to stride if framebuffer width > frame width
-                if self.width > frame.width {
-                    let pad = ((self.width - frame.width) * 4) as usize;
+                if stride > row_len {
+                    let pad = stride - row_len;
                     let zeros = vec![0u8; pad];
                     self.file.write_all(&zeros)?;
                 }

@@ -19,6 +19,10 @@ pub mod winit_backend;
 
 use anyrender::ImageRenderer;
 
+/// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.
+/// DejaVu Sans (latin-400) — SIL-compatible open-source license.
+const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/font.ttf");
+
 /// Configuration for the rendering pipeline.
 #[derive(Debug, Clone)]
 pub struct RenderConfig {
@@ -93,6 +97,63 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     doc.resolve(0.0);
 
     // Paint to anyrender scene, then rasterize via Vello CPU
+    let mut frame = Frame::new(width, height);
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    renderer.render(
+        |scene| {
+            blitz_paint::paint_scene(scene, &mut doc, scale, width, height, 0, 0);
+        },
+        &mut frame.rgba,
+    );
+
+    Ok(frame)
+}
+
+/// Renders HTML with an embedded font, bypassing `system_fonts`/fontconfig.
+///
+/// This is for headless targets (aarch64-musl, kei fbdev) where fontconfig
+/// cannot be linked. The embedded DejaVu Sans is registered into a custom
+/// `FontContext` so text renders without system font discovery.
+pub fn render_html_with_font(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
+    let width = config.width;
+    let height = config.height;
+    let scale = config.scale as f64;
+
+    use blitz_html::HtmlDocument;
+    use blitz_dom::DocumentConfig;
+    use blitz_traits::shell::Viewport;
+    use parley::fontique::{Collection, CollectionOptions, SourceCache};
+    use parley::FontContext;
+    use std::sync::Arc;
+    use linebender_resource_handle::Blob;
+
+    // Build a FontContext with the embedded font — no system_fonts needed.
+    let mut font_ctx = FontContext {
+        source_cache: SourceCache::new_shared(),
+        collection: Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        }),
+    };
+    font_ctx
+        .collection
+        .register_fonts(Blob::new(Arc::new(EMBEDDED_FONT) as _), None);
+
+    let viewport = Viewport {
+        window_size: (width, height),
+        hidpi_scale: config.scale,
+        ..Default::default()
+    };
+
+    let doc_config = DocumentConfig {
+        viewport: Some(viewport),
+        font_ctx: Some(font_ctx),
+        ..Default::default()
+    };
+
+    let mut doc = HtmlDocument::from_html(html, doc_config);
+    doc.resolve(0.0);
+
     let mut frame = Frame::new(width, height);
     let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
     renderer.render(
