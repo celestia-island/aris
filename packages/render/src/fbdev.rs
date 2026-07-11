@@ -36,6 +36,30 @@ impl FbDevBackend {
     /// Opens the framebuffer device and queries its resolution.
     pub fn open(path: &str) -> io::Result<Self> {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
+        // Try ioctl to get resolution; fall back to 1280x800 if it fails
+        // (kei's fbdev ioctl can be unreliable in QEMU TCG mode).
+        let (width, height) = Self::query_resolution(&file).unwrap_or((1280, 800));
+        let fb_size = (width * height * 4) as usize;
+
+        tracing::info!(
+            "fbdev: {} x {} ({} bytes) — using write() path (mmap disabled for kei compat)",
+            width, height, fb_size
+        );
+
+        // Skip mmap — use write() path exclusively. The mmap path can trigger
+        // kernel panics on kei when the fbdev driver's mappable() handler
+        // touches the DMA-backed IoMem at PA 0x60000000.
+        Ok(Self {
+            file,
+            width,
+            height,
+            mmap: None,
+        })
+    }
+
+    /// Opens with mmap support (for real Linux, not kei).
+    pub fn open_with_mmap(path: &str) -> io::Result<Self> {
+        let file = OpenOptions::new().read(true).write(true).open(path)?;
 
         // Query variable screen info via FBIOGET_VSCREENINFO ioctl.
         // struct fb_var_screeninfo is 160 bytes on aarch64.
@@ -111,6 +135,38 @@ impl FbDevBackend {
             height,
             mmap,
         })
+    }
+
+    /// Query the framebuffer resolution via ioctl. Returns (width, height).
+    fn query_resolution(file: &std::fs::File) -> io::Result<(u32, u32)> {
+        #[repr(C)]
+        struct FbVarScreenInfo {
+            xres: u32,
+            yres: u32,
+            xres_virtual: u32,
+            yres_virtual: u32,
+            xoffset: u32,
+            yoffset: u32,
+            bits_per_pixel: u32,
+            _rest: [u8; 160 - 7 * 4],
+        }
+        const FBIOGET_VSCREENINFO: u64 = 0x4600;
+        let mut info = FbVarScreenInfo {
+            xres: 0, yres: 0, xres_virtual: 0, yres_virtual: 0,
+            xoffset: 0, yoffset: 0, bits_per_pixel: 0,
+            _rest: [0; 160 - 7 * 4],
+        };
+        unsafe {
+            let ret = libc::ioctl(
+                std::os::fd::AsRawFd::as_raw_fd(file),
+                FBIOGET_VSCREENINFO as _,
+                &mut info as *mut _ as *mut libc::c_void,
+            );
+            if ret < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok((info.xres, info.yres))
     }
 
     /// Returns the framebuffer resolution.
