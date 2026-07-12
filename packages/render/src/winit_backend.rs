@@ -758,6 +758,9 @@ impl ApplicationHandler for App {
             self.process_loads();
             self.pump_messages();
             self.apply_title();
+            if self.needs_rerender {
+                self.render_base_frame();
+            }
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
