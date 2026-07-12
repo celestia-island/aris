@@ -17,7 +17,11 @@ fn main() {
         }
 
         tracing::info!("opening {}...", fb_path);
-        let mut file = match std::fs::OpenOptions::new().read(true).write(true).open(fb_path) {
+        let mut file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fb_path)
+        {
             Ok(f) => f,
             Err(e) => {
                 tracing::info!("open error: {}", e);
@@ -35,22 +39,27 @@ fn main() {
 
         // BGRX colors (bytes: B, G, R, X) for kei virtio-gpu
         let header = [0xEFu8, 0xAF, 0x61, 0xFF]; // #61AFEF blue
-        let bg = [0x34u8, 0x2C, 0x28, 0xFF];     // #282C34 dark
-        let card = [0x2Bu8, 0x25, 0x21, 0xFF];   // #21252B card
+        let bg = [0x34u8, 0x2C, 0x28, 0xFF]; // #282C34 dark
+        let card = [0x2Bu8, 0x25, 0x21, 0xFF]; // #21252B card
         let addrbg = [0x23u8, 0x1F, 0x1B, 0xFF]; // address bar
         let white = [0xFFu8, 0xFF, 0xFF, 0xFF];
-        let green = [0x79u8, 0xC3, 0x98, 0xFF];  // #98C379
+        let green = [0x79u8, 0xC3, 0x98, 0xFF]; // #98C379
         let accent = [0x75u8, 0x6C, 0xE0, 0xFF]; // #E06C75
         let text_c = [0xBFu8, 0xB2, 0xAB, 0xFF]; // #ABB2BF
 
         for y in 0..height {
             for x in 0..width {
-                let c = if y < 50 { header }
-                    else if y >= 58 && y < 86 { addrbg }
-                    else if (y >= 100 && y < 180) || (y >= 195 && y < 275) || (y >= 290 && y < 370) { card }
-                    else { bg };
+                let c = if y < 50 {
+                    header
+                } else if y >= 58 && y < 86 {
+                    addrbg
+                } else if (y >= 100 && y < 180) || (y >= 195 && y < 275) || (y >= 290 && y < 370) {
+                    card
+                } else {
+                    bg
+                };
                 let idx = (y * width + x) * 4;
-                buf[idx..idx+4].copy_from_slice(&c);
+                buf[idx..idx + 4].copy_from_slice(&c);
             }
         }
 
@@ -59,15 +68,15 @@ fn main() {
             for y in 18..38 {
                 if (x % 10 < 5) && (y % 8 < 4) {
                     let idx = (y * width + x) * 4;
-                    buf[idx..idx+4].copy_from_slice(&white);
+                    buf[idx..idx + 4].copy_from_slice(&white);
                 }
             }
         }
         // Indicator lines
-        let draw_line = |buf: &mut [u8], y: usize, x0: usize, x1: usize, c: [u8;4]| {
+        let draw_line = |buf: &mut [u8], y: usize, x0: usize, x1: usize, c: [u8; 4]| {
             for x in x0..x1.min(width) {
                 let idx = (y * width + x) * 4;
-                buf[idx..idx+4].copy_from_slice(&c);
+                buf[idx..idx + 4].copy_from_slice(&c);
             }
         };
         draw_line(&mut buf, 130, 30, 200, green);

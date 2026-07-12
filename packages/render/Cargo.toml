@@ -48,10 +48,10 @@ bytes = { version = "1", optional = true }
 http = { version = "1", optional = true }
 # keyboard-types is a transitive dep of blitz-traits; we need it directly to
 # construct BlitzKeyEvent values when forwarding winit key events to blitz-dom.
-keyboard-types = "0.7"
+keyboard-types = { version = "0.7", optional = true }
 
 # Dev-only: PNG encoding for the offscreen_chrome test binary.
-png = "0.17"
+png = { version = "0.17", optional = true }
 
 [features]
 default = ["desktop", "render"]
@@ -59,7 +59,7 @@ default = ["desktop", "render"]
 # Use: cargo build --no-default-features --features fbdev
 fbdev = []
 # HTML rendering engine (Blitz DOM + Vello CPU + parley fonts).
-render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley"]
+render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley", "dep:keyboard-types", "dep:png"]
 # Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
 desktop = ["blitz-dom/system_fonts"]
