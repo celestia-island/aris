@@ -67,15 +67,47 @@ result is a smaller, simpler, and fully self-contained Rust codebase.
 ## Quick Start
 
 ```bash
-# Build the standalone browser
-cargo build -p aris-render --release
+# Build and run the interactive desktop browser (with JS + networking)
+cargo run -p aris-render --features "desktop winit js" --bin aris_browser
 
-# Render a web page to framebuffer
+# Navigate to a URL, file, or search query
+cargo run -p aris-render --features "desktop winit js" --bin aris_browser -- https://example.com
+cargo run -p aris-render --features "desktop winit js" --bin aris_browser -- ./local-page.html
+cargo run -p aris-render --features "desktop winit js" --bin aris_browser -- "search query"
+
+# Or use the just recipe
+just dev              # start page
+just dev-html FILE    # load a local HTML file
+
+# Render a web page to a PPM file (headless, no window)
 cargo run -p aris-render --bin render_lagrange -- example.html
-
-# Run in desktop window (winit backend)
-cargo run -p aris-render --bin render_window --features winit-backend
 ```
+
+## Browser features
+
+The `aris_browser` binary (`cargo run --bin aris_browser`) is a working desktop
+browser with:
+
+| Feature | Status |
+|---------|--------|
+| HTML/CSS rendering (html5ever + stylo + taffy + parley + Vello CPU) | ✅ |
+| Navigation: URL bar, link clicks, form submission, back/forward/reload | ✅ |
+| HTTP(S) + `file://` networking with subresource fetching (img, CSS, fonts) | ✅ |
+| Response caching + cookie storage | ✅ |
+| Browser chrome: back/forward/reload/close buttons, favicon, address bar | ✅ |
+| Mouse hover/click/scroll, keyboard text input into `<input>`/`<textarea>` | ✅ |
+| Scrollbar (draggable) + keyboard scrolling (Space/PgUp/PgDn/Home/End) | ✅ |
+| Right-click context menu (with text labels) | ✅ |
+| Find-in-page (Ctrl+F) with match highlights | ✅ |
+| Page zoom (Ctrl+= / Ctrl+- / Ctrl+0) | ✅ |
+| OS clipboard copy/paste (Ctrl+C / Ctrl+V) | ✅ |
+| Keyboard shortcuts (Ctrl+L, Ctrl+R/F5, Alt+Left/Right, Esc) | ✅ |
+| Bottom status bar (hovered link URL + loading indicator) | ✅ |
+| Page title → window title; window title reflects `<title>` | ✅ |
+| JavaScript: `<script>` execution (Boa), `document.write` SSR | ✅ |
+| JavaScript: interactive `onclick`, `addEventListener('click')` | ✅ |
+| JavaScript: DOM manipulation (`getElementById`, `createElement`, `appendChild`, `setAttribute`, `textContent`, `style`) | ✅ |
+| HiDPI super-sampled rendering | ✅ |
 
 See the [build guide](./docs/en/build/quickstart.md) for detailed instructions.
 
