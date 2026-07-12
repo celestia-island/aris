@@ -186,19 +186,19 @@ impl BrowserState {
                 let url = url.clone();
                 let state = Arc::clone(self);
                 // Spawn a fetch thread so we never block the render loop.
-                thread::spawn(move || {
-                    match fetch_text(&url) {
-                        Ok(html) => state.queue_load(html, url),
-                        Err(e) => {
-                            warn!("fetch {}: {}", url, e);
-                            let err_html = error_page(url.as_ref(), &e);
-                            state.queue_load(err_html, url);
-                        }
+                thread::spawn(move || match fetch_text(&url) {
+                    Ok(html) => state.queue_load(html, url),
+                    Err(e) => {
+                        warn!("fetch {}: {}", url, e);
+                        let err_html = error_page(url.as_ref(), &e);
+                        state.queue_load(err_html, url);
                     }
                 });
             }
             "file" => {
-                let path = url.to_file_path().unwrap_or_else(|_| PathBuf::from(url.path()));
+                let path = url
+                    .to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(url.path()));
                 let url = url.clone();
                 match std::fs::read_to_string(&path) {
                     Ok(html) => self.queue_load(html, url),
@@ -303,10 +303,7 @@ impl NetProvider for HttpNetProvider {
 fn load_url_bytes(client: &reqwest::blocking::Client, url: &Url) -> Result<Bytes, String> {
     match url.scheme() {
         "http" | "https" => {
-            let resp = client
-                .get(url.as_str())
-                .send()
-                .map_err(|e| e.to_string())?;
+            let resp = client.get(url.as_str()).send().map_err(|e| e.to_string())?;
             if !resp.status().is_success() {
                 return Err(format!("HTTP {}", resp.status()));
             }
@@ -332,10 +329,7 @@ fn fetch_text(url: &Url) -> Result<String, String> {
         .unwrap_or_else(|_| reqwest::blocking::Client::new());
     match url.scheme() {
         "http" | "https" => {
-            let resp = client
-                .get(url.as_str())
-                .send()
-                .map_err(|e| e.to_string())?;
+            let resp = client.get(url.as_str()).send().map_err(|e| e.to_string())?;
             if !resp.status().is_success() {
                 return Err(format!("HTTP {}", resp.status()));
             }
@@ -427,26 +421,27 @@ pub fn normalize_input_to_url(input: &str) -> Url {
         && matches!(
             url.scheme(),
             "http" | "https" | "file" | "about" | "data" | "ftp"
-        ) {
-            return url;
-        }
+        )
+    {
+        return url;
+    }
 
     // Existing local file path.
     let p = Path::new(trimmed);
     if p.exists()
-        && let Ok(url) = Url::from_file_path(canonicalize_path(p)) {
-            return url;
-        }
+        && let Ok(url) = Url::from_file_path(canonicalize_path(p))
+    {
+        return url;
+    }
 
     // Looks like a host (contains a dot, no spaces) → https://.
     let looks_like_host = !trimmed.contains(' ')
         && trimmed.contains('.')
         && !trimmed.starts_with('/')
         && !trimmed.contains(char::is_whitespace);
-    if looks_like_host
-        && let Ok(url) = Url::parse(&format!("https://{}", trimmed)) {
-            return url;
-        }
+    if looks_like_host && let Ok(url) = Url::parse(&format!("https://{}", trimmed)) {
+        return url;
+    }
 
     // Fallback: a web search.
     let q = url::form_urlencoded::Serializer::new(String::new())

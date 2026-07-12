@@ -22,14 +22,14 @@
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use crate::RenderConfig;
 use crate::browser::{
     BrowserNavigationProvider, BrowserShellProvider, BrowserState, HttpNetProvider,
 };
-use crate::RenderConfig;
 
 use blitz_dom::Document;
 use blitz_html::HtmlDocument;
@@ -65,9 +65,11 @@ pub fn run_window_url(url: &str, config: &RenderConfig) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
             (html, normalized, false)
         }
-        "about" | "data" => {
-            (crate::browser::about_or_data_html(&normalized), normalized, false)
-        }
+        "about" | "data" => (
+            crate::browser::about_or_data_html(&normalized),
+            normalized,
+            false,
+        ),
         _ => (loading_page(normalized.as_ref()), normalized, true),
     };
     run_window_impl(&html, Some(final_url), fetch_remote, config)
@@ -98,10 +100,9 @@ fn run_window_impl(
     let state = Arc::new(BrowserState::new());
     // For an http(s) initial URL, kick off the fetch immediately so the
     // loading page is replaced as soon as bytes arrive.
-    if fetch_remote
-        && let Some(url) = &initial_url {
-            state.navigate_input(url.as_str());
-        }
+    if fetch_remote && let Some(url) = &initial_url {
+        state.navigate_input(url.as_str());
+    }
     let mut app = App {
         config: config.clone(),
         window: None,
@@ -273,12 +274,13 @@ impl App {
         let caret_on = self.chrome.caret_visible();
         let hover_region = self.chrome.hover;
 
-        let Some(surface) = self.surface.as_mut() else { return };
-        let _ = surface.resize(
-            NonZeroU32::new(pw).unwrap(),
-            NonZeroU32::new(ph).unwrap(),
-        );
-        let Ok(mut buffer) = surface.buffer_mut() else { return };
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        let _ = surface.resize(NonZeroU32::new(pw).unwrap(), NonZeroU32::new(ph).unwrap());
+        let Ok(mut buffer) = surface.buffer_mut() else {
+            return;
+        };
         let buf_len = buffer.len();
         let buf_w = pw as usize;
         let buf_h = ph as usize;
@@ -364,9 +366,9 @@ impl App {
         let icon = if over_address || (!over_chrome && self.is_over_text()) {
             WinitCursorIcon::Text
         } else if over_chrome {
-            let region = self
-                .chrome
-                .region_at(self.last_mouse.0, self.last_mouse.1, self.css_size().0);
+            let region =
+                self.chrome
+                    .region_at(self.last_mouse.0, self.last_mouse.1, self.css_size().0);
             match region {
                 Some(ChromeRegion::Address) => WinitCursorIcon::Text,
                 Some(ChromeRegion::Back | ChromeRegion::Forward | ChromeRegion::Reload) => {
@@ -469,14 +471,15 @@ impl App {
 
     fn apply_title(&mut self) {
         if let Some(title) = self.state.take_title()
-            && let Some(window) = &self.window {
-                let display = if title.trim().is_empty() {
-                    "aris".to_string()
-                } else {
-                    format!("{} — aris", title)
-                };
-                window.set_title(&display);
-            }
+            && let Some(window) = &self.window
+        {
+            let display = if title.trim().is_empty() {
+                "aris".to_string()
+            } else {
+                format!("{} — aris", title)
+            };
+            window.set_title(&display);
+        }
     }
 
     /// Handle a chrome-originated action.
@@ -540,8 +543,11 @@ impl ApplicationHandler for App {
                 self.modifiers = m.state();
             }
             WindowEvent::Resized(size) => {
-                self.scale_factor =
-                    self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+                self.scale_factor = self
+                    .window
+                    .as_ref()
+                    .map(|w| w.scale_factor())
+                    .unwrap_or(1.0);
                 let pw = (size.width as f64 * self.scale_factor).round() as u32;
                 let ph = (size.height as f64 * self.scale_factor).round() as u32;
                 self.phys_size = (pw.max(1), ph.max(1));
@@ -572,8 +578,7 @@ impl ApplicationHandler for App {
                 self.last_mouse = (css_x, css_y);
                 let css_w = self.css_size().0;
                 if css_y < CHROME_HEIGHT_CSS {
-                    self.chrome.hover =
-                        self.chrome.region_at(css_x, css_y, css_w);
+                    self.chrome.hover = self.chrome.region_at(css_x, css_y, css_w);
                     self.update_cursor_icon();
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -588,10 +593,9 @@ impl ApplicationHandler for App {
                     .map(|d| d.set_hover_to(css_x, page_y))
                     .unwrap_or(false);
                 self.update_cursor_icon();
-                if hover_changed
-                    && let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                if hover_changed && let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: mstate,
@@ -641,10 +645,10 @@ impl ApplicationHandler for App {
                 let pressed = event.state == ElementState::Pressed;
                 // Address-bar input takes priority when focused.
                 if self.chrome.address_focused {
-                    if pressed
-                        && let Some(action) = self.chrome.handle_key(&event, self.modifiers) {
-                            self.handle_chrome_action(action);
-                        }
+                    if pressed && let Some(action) = self.chrome.handle_key(&event, self.modifiers)
+                    {
+                        self.handle_chrome_action(action);
+                    }
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -665,18 +669,14 @@ impl ApplicationHandler for App {
                             }
                             return;
                         }
-                        Key::Character(c)
-                            if ctrl && c.as_str().eq_ignore_ascii_case("r") =>
-                        {
+                        Key::Character(c) if ctrl && c.as_str().eq_ignore_ascii_case("r") => {
                             self.state.reload();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                             return;
                         }
-                        Key::Character(c)
-                            if ctrl && c.as_str().eq_ignore_ascii_case("l") =>
-                        {
+                        Key::Character(c) if ctrl && c.as_str().eq_ignore_ascii_case("l") => {
                             self.chrome.focus_address();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -688,15 +688,16 @@ impl ApplicationHandler for App {
                 }
                 // Forward to the document for text input / page keys.
                 if let Some(blitz_evt) = map_winit_key(&event, self.modifiers)
-                    && let Some(doc) = self.doc.as_mut() {
-                        let ui = if pressed {
-                            UiEvent::KeyDown(blitz_evt)
-                        } else {
-                            UiEvent::KeyUp(blitz_evt)
-                        };
-                        doc.handle_ui_event(ui);
-                        self.needs_rerender = true;
-                    }
+                    && let Some(doc) = self.doc.as_mut()
+                {
+                    let ui = if pressed {
+                        UiEvent::KeyDown(blitz_evt)
+                    } else {
+                        UiEvent::KeyUp(blitz_evt)
+                    };
+                    doc.handle_ui_event(ui);
+                    self.needs_rerender = true;
+                }
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -707,11 +708,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         // Drain async loads / redraw requests from providers.
-        if self
-            .state
-            .redraw_requested
-            .swap(false, Ordering::Relaxed)
-        {
+        if self.state.redraw_requested.swap(false, Ordering::Relaxed) {
             self.process_loads();
             self.pump_messages();
             self.apply_title();
@@ -725,9 +722,10 @@ impl ApplicationHandler for App {
             self.last_caret = now;
             self.chrome.toggle_caret();
             if self.chrome.address_focused
-                && let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                && let Some(window) = &self.window
+            {
+                window.request_redraw();
+            }
         }
     }
 }
@@ -756,7 +754,12 @@ impl ChromeLayout {
         x += btn + 8.0;
         let addr_w = (width - x - pad).max(60.0);
         let address = (x, (h - 26.0) / 2.0, addr_w, 26.0);
-        Self { back, forward, reload, address }
+        Self {
+            back,
+            forward,
+            reload,
+            address,
+        }
     }
 }
 
@@ -785,7 +788,12 @@ struct ChromeState {
 
 impl ChromeState {
     fn new() -> Self {
-        Self { address: String::new(), address_focused: false, hover: None, caret_blink: true }
+        Self {
+            address: String::new(),
+            address_focused: false,
+            hover: None,
+            caret_blink: true,
+        }
     }
 
     fn set_url(&mut self, url: &str) {
@@ -807,9 +815,8 @@ impl ChromeState {
 
     fn region_at(&self, x: f32, y: f32, width: f32) -> Option<ChromeRegion> {
         let l = ChromeLayout::compute(width);
-        let in_rect = |r: (f32, f32, f32, f32)| {
-            x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3
-        };
+        let in_rect =
+            |r: (f32, f32, f32, f32)| x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3;
         if in_rect(l.back) {
             Some(ChromeRegion::Back)
         } else if in_rect(l.forward) {
@@ -987,7 +994,6 @@ fn draw_chrome(
     let btn_disabled = 0x555566;
     let addr_bg = if focused { 0x1A1B26 } else { 0x24243A };
     let addr_border = if focused { 0x7AA2F7 } else { 0x3A3A4E };
-    let text_color_dim = 0x9AA5CE;
     let accent = 0x7AA2F7;
 
     // Fill chrome background.
@@ -1004,7 +1010,11 @@ fn draw_chrome(
     let to_phys = |v: f32| (v * scale) as usize;
 
     // Buttons.
-    let draw_arrow = |buffer: &mut [u32], rect: (f32, f32, f32, f32), enabled: bool, hovered: bool, fwd: bool| {
+    let draw_arrow = |buffer: &mut [u32],
+                      rect: (f32, f32, f32, f32),
+                      enabled: bool,
+                      hovered: bool,
+                      fwd: bool| {
         let color = if !enabled {
             btn_disabled
         } else if hovered {
@@ -1090,33 +1100,59 @@ fn draw_chrome(
         }
     }
 
-    // Text presence indicator (thin underline scaled to length) + caret.
-    let text_pad = to_phys(4.0);
-    let char_w = to_phys(6.0);
+    // Render the address-bar text via the same Vello pipeline used for page
+    // content, then alpha-blend it onto the chrome bar. This gives crisp,
+    // real (not indicator-bar) text at the display's full resolution.
+    let text_pad = to_phys(6.0);
     let avail_w = aw.saturating_sub(text_pad * 2);
-    if !display.is_empty() {
-        let indicator_w = avail_w.min(display.chars().count() * char_w);
-        for y in 0..2 {
-            for x in 0..indicator_w {
-                let bx = ax + text_pad + x;
-                let by = ay + ah - 4 - y;
-                if by < chrome_h {
-                    let idx = by * buf_w + bx;
-                    if idx < buffer.len() {
-                        buffer[idx] = text_color_dim;
+    if !display.is_empty() && avail_w > 4 {
+        // Render at physical resolution; the strip is (avail_w x ah).
+        if let Some(glyphs) = render_text_strip(display, avail_w, ah, scale) {
+            let gw = glyphs.width;
+            let gh = glyphs.height;
+            // Visible text width (clip to available).
+            let vis_w = gw.min(avail_w);
+            for ty in 0..gh.min(ah) {
+                for tx in 0..vis_w {
+                    let sidx = (ty * gw + tx) * 4;
+                    if sidx + 3 >= glyphs.rgba.len() {
+                        continue;
+                    }
+                    let a = glyphs.rgba[sidx + 3] as u32;
+                    if a == 0 {
+                        continue;
+                    }
+                    let bx = ax + text_pad + tx;
+                    let by = ay + ty;
+                    if by < chrome_h && bx < buf_w {
+                        let idx = by * buf_w + bx;
+                        if idx < buffer.len() {
+                            let tr = glyphs.rgba[sidx] as u32;
+                            let tg = glyphs.rgba[sidx + 1] as u32;
+                            let tb = glyphs.rgba[sidx + 2] as u32;
+                            let dst = buffer[idx];
+                            let dr = (dst >> 16) & 0xFF;
+                            let dg = (dst >> 8) & 0xFF;
+                            let db = dst & 0xFF;
+                            let nr = (tr * a + dr * (255 - a)) / 255;
+                            let ng = (tg * a + dg * (255 - a)) / 255;
+                            let nb = (tb * a + db * (255 - a)) / 255;
+                            buffer[idx] = (nr << 16) | (ng << 8) | nb;
+                        }
                     }
                 }
             }
-        }
-    }
-    if focused && caret_on {
-        let cx = ax + text_pad + (display.chars().count() * char_w).min(avail_w);
-        for y in 2..ah.saturating_sub(2) {
-            let by = ay + y;
-            if by < chrome_h {
-                let idx = by * buf_w + cx;
-                if idx < buffer.len() {
-                    buffer[idx] = accent;
+            // Caret just past the rendered text.
+            if focused && caret_on {
+                let cx = ax + text_pad + vis_w + 1;
+                for y in 3..ah.saturating_sub(3) {
+                    let by = ay + y;
+                    if by < chrome_h && cx < buf_w {
+                        let idx = by * buf_w + cx;
+                        if idx < buffer.len() {
+                            buffer[idx] = accent;
+                        }
+                    }
                 }
             }
         }
@@ -1130,6 +1166,90 @@ fn plot(buffer: &mut [u32], buf_w: usize, x: usize, y: usize, color: u32) {
             buffer[idx] = color;
         }
     }
+}
+
+/// A rendered text strip (RGBA) plus its dimensions.
+struct TextStrip {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+/// Render a single line of text into an RGBA buffer at the given size, using
+/// the same blitz + Vello pipeline as page content. Returns `None` if the
+/// rasterizer produces no content. The buffer is `width × height` RGBA8.
+///
+/// `scale` is the window scale factor; the strip is rendered at physical
+/// resolution so text stays sharp on HiDPI displays.
+fn render_text_strip(text: &str, width: usize, height: usize, scale: f32) -> Option<TextStrip> {
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::shell::Viewport;
+
+    if width == 0 || height == 0 {
+        return None;
+    }
+    // Render the text in a transparent document. We use a div sized to the
+    // strip so the layout matches the chrome address bar.
+    let html = format!(
+        "<!DOCTYPE html><html><head><style>\
+         html,body{{margin:0;padding:0;background:transparent;overflow:hidden;}}\
+         .t{{font-family:system-ui,sans-serif;font-size:13px;color:#9aa5ce;\
+         white-space:nowrap;padding:0;line-height:{h}px;}}\
+         </style></head><body><div class=\"t\">{}</div></body></html>",
+        crate::browser::escape_html(text),
+        h = height
+    );
+    let viewport = Viewport {
+        window_size: (width as u32, height as u32),
+        hidpi_scale: scale,
+        ..Default::default()
+    };
+    let doc_config = DocumentConfig {
+        viewport: Some(viewport),
+        ..Default::default()
+    };
+    let mut doc = HtmlDocument::from_html(&html, doc_config);
+    doc.resolve(0.0);
+
+    let mut frame = crate::Frame::new(width as u32, height as u32);
+    use anyrender::ImageRenderer;
+    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width as u32, height as u32);
+    renderer.render(
+        |scene| {
+            blitz_paint::paint_scene(
+                scene,
+                &mut doc,
+                scale as f64,
+                width as u32,
+                height as u32,
+                0,
+                0,
+            );
+        },
+        &mut frame.rgba,
+    );
+
+    // Vello renders onto a black background by default; we want transparency so
+    // the strip alpha-blends over the chrome bar. Recover alpha: any pixel the
+    // rasterizer lit (non-zero color) is treated as opaque text, everything
+    // else transparent. This is a heuristic but works for solid-color text.
+    for chunk in frame.rgba.chunks_exact_mut(4) {
+        let lit = chunk[0] != 0 || chunk[1] != 0 || chunk[2] != 0;
+        // If lit, set alpha to 255 (the text color is already there). Else 0.
+        if !lit {
+            // Clear to transparent (premultiplied black stays black, alpha 0).
+            chunk[3] = 0;
+        } else {
+            chunk[3] = 255;
+        }
+    }
+
+    Some(TextStrip {
+        rgba: frame.rgba,
+        width,
+        height,
+    })
 }
 
 // ── Built-in pages ──────────────────────────────────────────

@@ -81,7 +81,10 @@ fn main() {
             // Exit non-zero if the render is essentially blank, so CI/verifiers
             // can detect a broken pipeline.
             if pct < 10 {
-                eprintln!("FAIL: non-black pixel ratio {}% is below 10% threshold", pct);
+                eprintln!(
+                    "FAIL: non-black pixel ratio {}% is below 10% threshold",
+                    pct
+                );
                 std::process::exit(2);
             }
         }

@@ -55,7 +55,11 @@ pub struct RenderConfig {
 
 impl Default for RenderConfig {
     fn default() -> Self {
-        Self { width: 1280, height: 800, scale: 1.0 }
+        Self {
+            width: 1280,
+            height: 800,
+            scale: 1.0,
+        }
     }
 }
 
@@ -69,7 +73,11 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width, height, rgba: vec![0; (width * height * 4) as usize] }
+        Self {
+            width,
+            height,
+            rgba: vec![0; (width * height * 4) as usize],
+        }
     }
 
     pub fn save_ppm(&self, path: &str) -> anyhow::Result<()> {
@@ -97,8 +105,8 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     let scale = config.scale as f64;
 
     // Use blitz-html's HtmlDocument to parse HTML properly
-    use blitz_html::HtmlDocument;
     use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
     use blitz_traits::shell::Viewport;
 
     let viewport = Viewport {
@@ -141,13 +149,13 @@ pub fn render_html_with_font(html: &str, config: &RenderConfig) -> anyhow::Resul
     let height = config.height;
     let scale = config.scale as f64;
 
-    use blitz_html::HtmlDocument;
     use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
     use blitz_traits::shell::Viewport;
-    use parley::fontique::{Collection, CollectionOptions, SourceCache};
-    use parley::FontContext;
-    use std::sync::Arc;
     use linebender_resource_handle::Blob;
+    use parley::FontContext;
+    use parley::fontique::{Collection, CollectionOptions, SourceCache};
+    use std::sync::Arc;
 
     // Build a FontContext with the embedded font — no system_fonts needed.
     let mut font_ctx = FontContext {

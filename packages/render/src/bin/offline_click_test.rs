@@ -64,16 +64,17 @@ h1{margin:0;} a{display:block;margin:8px 0;font-size:16px;}</style>
     let mut link_box: Option<(f32, f32, f32, f32)> = None;
     for (id, node) in tree.iter() {
         if let Some(el) = node.element_data()
-            && format!("{:?}", el.name.local).contains("'a'") {
-                let pos = node.absolute_position(0.0, 0.0);
-                let w = node.final_layout.size.width;
-                let h = node.final_layout.size.height;
-                println!("found <a> node {id} at ({}, {}) {}x{}", pos.x, pos.y, w, h);
-                if link_id.is_none() {
-                    link_id = Some(id);
-                    link_box = Some((pos.x, pos.y, w, h));
-                }
+            && format!("{:?}", el.name.local).contains("'a'")
+        {
+            let pos = node.absolute_position(0.0, 0.0);
+            let w = node.final_layout.size.width;
+            let h = node.final_layout.size.height;
+            println!("found <a> node {id} at ({}, {}) {}x{}", pos.x, pos.y, w, h);
+            if link_id.is_none() {
+                link_id = Some(id);
+                link_box = Some((pos.x, pos.y, w, h));
             }
+        }
     }
 
     let (id, (x, y, w, h)) = link_id

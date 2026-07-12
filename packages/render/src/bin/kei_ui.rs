@@ -86,7 +86,9 @@ body {
         100.0 * non_black as f64 / total as f64
     );
 
-    let fb_path = std::env::args().nth(1).unwrap_or_else(|| "/dev/fb0".to_string());
+    let fb_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/dev/fb0".to_string());
     #[cfg(unix)]
     {
         if std::path::Path::new(&fb_path).exists() {

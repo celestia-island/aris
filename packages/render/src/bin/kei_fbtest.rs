@@ -13,7 +13,11 @@ fn main() {
         }
 
         tracing::info!("opening {}...", fb_path);
-        let file = match std::fs::OpenOptions::new().read(true).write(true).open(fb_path) {
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fb_path)
+        {
             Ok(f) => f,
             Err(e) => {
                 tracing::info!("open error: {}", e);
@@ -45,7 +49,9 @@ fn main() {
             use std::io::{Seek, Write};
             let mut file = file;
             let _ = file.seek(std::io::SeekFrom::Start(0));
-            let blue_row: Vec<u8> = (0..width).flat_map(|_| [0xEFu8, 0xAF, 0x61, 0xFF]).collect();
+            let blue_row: Vec<u8> = (0..width)
+                .flat_map(|_| [0xEFu8, 0xAF, 0x61, 0xFF])
+                .collect();
             for _ in 0..height {
                 let _ = file.write_all(&blue_row);
             }
@@ -63,13 +69,22 @@ fn main() {
                 for x in 0..width {
                     let idx = (y * width + x) * 4;
                     if y < 60 {
-                        fb[idx..idx+4].copy_from_slice(&blue_pixel);
+                        fb[idx..idx + 4].copy_from_slice(&blue_pixel);
                     } else if x < third {
-                        fb[idx] = 0x34; fb[idx+1] = 0x2C; fb[idx+2] = 0x28; fb[idx+3] = 0xFF;
+                        fb[idx] = 0x34;
+                        fb[idx + 1] = 0x2C;
+                        fb[idx + 2] = 0x28;
+                        fb[idx + 3] = 0xFF;
                     } else if x < third * 2 {
-                        fb[idx] = 0x79; fb[idx+1] = 0xC3; fb[idx+2] = 0x98; fb[idx+3] = 0xFF;
+                        fb[idx] = 0x79;
+                        fb[idx + 1] = 0xC3;
+                        fb[idx + 2] = 0x98;
+                        fb[idx + 3] = 0xFF;
                     } else {
-                        fb[idx] = 0x75; fb[idx+1] = 0x6C; fb[idx+2] = 0xE0; fb[idx+3] = 0xFF;
+                        fb[idx] = 0x75;
+                        fb[idx + 1] = 0x6C;
+                        fb[idx + 2] = 0xE0;
+                        fb[idx + 3] = 0xFF;
                     }
                 }
                 if y % 200 == 0 {
@@ -78,7 +93,9 @@ fn main() {
             }
 
             tracing::info!("pattern drawn, msync...");
-            unsafe { libc::msync(ptr, fb_size, libc::MS_SYNC); }
+            unsafe {
+                libc::msync(ptr, fb_size, libc::MS_SYNC);
+            }
             tracing::info!("msync done");
         }
     }

@@ -43,7 +43,9 @@ impl FbDevBackend {
 
         tracing::info!(
             "fbdev: {} x {} ({} bytes) — using write() path (mmap disabled for kei compat)",
-            width, height, fb_size
+            width,
+            height,
+            fb_size
         );
 
         // Skip mmap — use write() path exclusively. The mmap path can trigger
@@ -114,11 +116,7 @@ impl FbDevBackend {
         );
 
         // Try mmap for direct pixel access.
-        let mmap = match unsafe {
-            memmap2::MmapOptions::new()
-                .len(fb_size)
-                .map_mut(&file)
-        } {
+        let mmap = match unsafe { memmap2::MmapOptions::new().len(fb_size).map_mut(&file) } {
             Ok(m) => {
                 tracing::info!("fbdev: mmap successful ({} bytes)", fb_size);
                 Some(m)
@@ -152,8 +150,13 @@ impl FbDevBackend {
         }
         const FBIOGET_VSCREENINFO: u64 = 0x4600;
         let mut info = FbVarScreenInfo {
-            xres: 0, yres: 0, xres_virtual: 0, yres_virtual: 0,
-            xoffset: 0, yoffset: 0, bits_per_pixel: 0,
+            xres: 0,
+            yres: 0,
+            xres_virtual: 0,
+            yres_virtual: 0,
+            xoffset: 0,
+            yoffset: 0,
+            bits_per_pixel: 0,
             _rest: [0; 160 - 7 * 4],
         };
         unsafe {
@@ -193,7 +196,7 @@ impl FbDevBackend {
                 if src + 2 < frame.rgba.len() {
                     bgrx.push(frame.rgba[src + 2]); // B
                     bgrx.push(frame.rgba[src + 1]); // G
-                    bgrx.push(frame.rgba[src]);     // R
+                    bgrx.push(frame.rgba[src]); // R
                     bgrx.push(frame.rgba[src + 3]); // A → X
                 } else {
                     bgrx.extend_from_slice(&[0, 0, 0, 0]);
@@ -223,7 +226,8 @@ impl FbDevBackend {
             let row_len = (copy_w * bpp) as usize;
             for y in 0..copy_h as usize {
                 let src_offset = y * (copy_w as usize) * (bpp as usize);
-                self.file.write_all(&bgrx[src_offset..src_offset + row_len])?;
+                self.file
+                    .write_all(&bgrx[src_offset..src_offset + row_len])?;
                 // Pad to stride if framebuffer width > frame width
                 if stride > row_len {
                     let pad = stride - row_len;

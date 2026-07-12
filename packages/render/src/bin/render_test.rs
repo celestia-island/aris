@@ -8,12 +8,23 @@ h1 { color:#E06C75; font-size:48px; margin:20px; }
 .box { background:#61AFEF; width:200px; height:100px; margin:20px; }
 </style></head><body><h1>Hello kei!</h1><div class="box"></div></body></html>"#;
 
-    let config = aris_render::RenderConfig { width: 800, height: 600, scale: 1.0 };
+    let config = aris_render::RenderConfig {
+        width: 800,
+        height: 600,
+        scale: 1.0,
+    };
     match aris_render::render_html(html, &config) {
         Ok(frame) => {
-            let non_black = frame.rgba.chunks_exact(4)
-                .filter(|px| px[0]>10 || px[1]>10 || px[2]>10).count();
-            tracing::info!("Non-black: {}/{}", non_black, frame.width as usize * frame.height as usize);
+            let non_black = frame
+                .rgba
+                .chunks_exact(4)
+                .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
+                .count();
+            tracing::info!(
+                "Non-black: {}/{}",
+                non_black,
+                frame.width as usize * frame.height as usize
+            );
 
             // Try /dev/fb0 first (Linux/kei fbdev)
             #[cfg(unix)]
@@ -32,12 +43,17 @@ h1 { color:#E06C75; font-size:48px; margin:20px; }
             }
 
             // Also save PPM
-            let path = std::env::args().nth(1).unwrap_or_else(|| "render_test.ppm".to_string());
+            let path = std::env::args()
+                .nth(1)
+                .unwrap_or_else(|| "render_test.ppm".to_string());
             match frame.save_ppm(&path) {
                 Ok(()) => tracing::info!("Saved: {}", path),
                 Err(e) => tracing::info!("Save error: {}", e),
             }
         }
-        Err(e) => { tracing::info!("Render error: {:?}", e); std::process::exit(1); }
+        Err(e) => {
+            tracing::info!("Render error: {:?}", e);
+            std::process::exit(1);
+        }
     }
 }
