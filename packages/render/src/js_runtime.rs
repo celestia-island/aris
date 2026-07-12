@@ -1583,48 +1583,63 @@ fn install_dom_globals(ctx: &mut Context) {
         ("MathMLElement", 1),
     ];
     for (name, nt) in all_types {
+        let nt = nt.clone();
         let ctor_fn = NativeFunction::from_copy_closure(move |_t, _a, ctx| {
+            // Use with_object_proto — the constructor's .prototype is set below.
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
             Ok(obj.into())
         });
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
-    }
 
-    // Set up prototype chains: HTMLElement extends Element extends Node.
-    // This makes `element instanceof HTMLElement` work if the element's
-    // prototype chain includes HTMLElement.prototype.
-    let global = ctx.global_object();
-    if let (Ok(node_val), Ok(elem_val), Ok(html_val)) = (
-        global.get(boa_engine::js_string!("Node"), ctx),
-        global.get(boa_engine::js_string!("Element"), ctx),
-        global.get(boa_engine::js_string!("HTMLElement"), ctx),
-    ) {
-        if let (Some(elem_ctor), Some(html_ctor)) = (elem_val.as_object(), html_val.as_object()) {
-            let _ = html_ctor.set_prototype(Some(elem_ctor.clone()));
-            let proto = node_val.as_object().cloned().unwrap_or_else(|| {
-                boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
-            });
-            let _ = elem_ctor.set_prototype(Some(proto));
+        // Create a .prototype object on the constructor so instanceof works.
+        // JS `instanceof` checks: object.__proto__ === Constructor.prototype
+        // (walking up the prototype chain).
+        let global = ctx.global_object();
+        if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object().cloned() {
+                // Create a prototype object that inherits from Object.prototype.
+                let proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let _ = proto.insert_property(
+                    boa_engine::js_string!("constructor"),
+                    pd(ctor_obj.clone().into()),
+                );
+                let _ = ctor_obj.insert_property(
+                    boa_engine::js_string!("prototype"),
+                    pd(proto.into()),
+                );
+            }
         }
     }
 
-    // Make all HTMLxxxElement constructors have HTMLElement as prototype.
-    for (name, _) in all_types
-        .iter()
-        .filter(|(n, _)| n.starts_with("HTML") && *n != "HTMLElement")
-    {
-        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(*name), ctx) {
-            if let Some(ctor) = ctor_val.as_object() {
-                if let Ok(html_val) = ctx
-                    .global_object()
-                    .get(boa_engine::js_string!("HTMLElement"), ctx)
-                {
-                    let proto = html_val.as_object().cloned().unwrap_or_else(|| {
-                        boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
-                    });
-                    let _ = ctor.set_prototype(Some(proto));
-                }
+    // Set up prototype chain links between constructors' .prototype objects:
+    // Node.prototype ← Element.prototype ← HTMLElement.prototype ← HTMLDivElement.prototype
+    let get_proto = |name: &str, ctx: &mut Context| -> Option<boa_engine::JsObject> {
+        let global = ctx.global_object();
+        let ctor = global.get(boa_engine::js_string!(name), ctx).ok()?;
+        let ctor_obj = ctor.as_object()?.clone();
+        let proto_val = ctor_obj.get(boa_engine::js_string!("prototype"), ctx).ok()?;
+        proto_val.as_object().cloned()
+    };
+
+    // Link: HTMLElement.prototype.__proto__ = Element.prototype.__proto__ = Node.prototype
+    if let (Some(node_proto), Some(elem_proto), Some(html_proto)) = (
+        get_proto("Node", ctx),
+        get_proto("Element", ctx),
+        get_proto("HTMLElement", ctx),
+    ) {
+        let _ = elem_proto.set_prototype(Some(node_proto.clone()));
+        let _ = html_proto.set_prototype(Some(elem_proto.clone()));
+    }
+
+    // Link all HTMLxxxElement.prototype to HTMLElement.prototype
+    if let Some(html_proto) = get_proto("HTMLElement", ctx) {
+        for (name, _) in all_types
+            .iter()
+            .filter(|(n, _)| n.starts_with("HTML") && *n != "HTMLElement")
+        {
+            if let Some(p) = get_proto(name, ctx) {
+                let _ = p.set_prototype(Some(html_proto.clone()));
             }
         }
     }
