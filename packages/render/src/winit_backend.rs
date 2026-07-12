@@ -259,7 +259,12 @@ impl App {
             let rt = self
                 .js
                 .get_or_insert_with(crate::js_runtime::JsRuntime::new);
-            rt.bind_and_run(&mut doc, &combined);
+            let url = self
+                .current_url
+                .as_ref()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            rt.bind_and_run_with_url(&mut doc, &combined, &url);
         }
 
         self.doc = Some(doc);
@@ -1173,8 +1178,7 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
-                    if ctrl
-                        && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "-")
+                    if ctrl && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "-")
                     {
                         self.zoom = (self.zoom / 1.2).max(0.2);
                         self.build_doc();
@@ -1183,8 +1187,7 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
-                    if ctrl
-                        && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "0")
+                    if ctrl && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "0")
                     {
                         self.zoom = 1.0;
                         self.build_doc();

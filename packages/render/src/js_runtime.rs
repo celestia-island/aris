@@ -85,6 +85,12 @@ impl JsRuntime {
     /// run the given `<script>` source, applying any recorded ops and harvesting
     /// newly-registered listeners.
     pub fn bind_and_run(&mut self, doc: &mut BaseDocument, script_src: &str) {
+        self.bind_and_run_with_url(doc, script_src, "")
+    }
+
+    /// As [`bind_and_run`] but also installs/reinstalls the `window` global
+    /// with `location.href` set to the current document URL.
+    pub fn bind_and_run_with_url(&mut self, doc: &mut BaseDocument, script_src: &str, url: &str) {
         // Drain pending ops from any prior run first (none expected here).
         self.apply_ops(doc);
         // Refresh the id snapshot + query index by rebuilding the bridge.
@@ -102,6 +108,7 @@ impl JsRuntime {
         self.listeners.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
+        install_window(&mut self.ctx, url.to_string());
         if !script_src.trim().is_empty() {
             let _ = self.ctx.eval(Source::from_bytes(script_src));
         }
@@ -333,6 +340,53 @@ fn read_pending(v: &JsValue) -> Option<u32> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Install a `window` global with `location` (href getter) and `alert`.
+fn install_window(ctx: &mut Context, url: String) {
+    use boa_engine::object::ObjectInitializer;
+    use boa_engine::property::Attribute;
+
+    // Build the location object with an href property.
+    let location = ObjectInitializer::new(ctx)
+        .property(
+            boa_engine::js_string!("href"),
+            JsValue::from(boa_engine::js_string!(url.as_str())),
+            Attribute::all(),
+        )
+        .build();
+
+    // alert(message) — logs the message (a real modal would block; we trace).
+    let alert = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, _caps, ctx| {
+            let msg = args.first()
+                .and_then(|v| v.to_string(ctx).ok().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            tracing::info!("[js alert] {}", msg);
+            Ok(JsValue::undefined())
+        },
+        (),
+    );
+
+    let window = ObjectInitializer::new(ctx)
+        .property(
+            boa_engine::js_string!("location"),
+            location,
+            Attribute::all(),
+        )
+        .function(alert, boa_engine::js_string!("alert"), 1)
+        .build();
+
+    let global = ctx.global_object();
+    let _ = global.insert_property(
+        boa_engine::js_string!("window"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(window)
+            .writable(true)
+            .enumerable(false)
+            .configurable(true)
+            .build(),
+    );
+}
+
 /// Install a `console` global with `log`/`warn`/`error`/`info` methods that
 /// forward to tracing.
 fn install_console(ctx: &mut Context) {
