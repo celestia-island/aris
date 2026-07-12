@@ -1,8 +1,39 @@
 # aris — 项目状态与计划 (PLAN)
 
-> 本文件于 **2026-07-11** 更新，记录项目当前状态、近期进展与后续计划。
+> 本文件于 **2026-07-13** 更新，记录项目当前状态、近期进展与后续计划。
 > 定位已于 2026-07-10 变更为「基于 servo 的浏览器引擎」——详见第 6 节。
 > 原有工业网关发行版计划已保留于文末「既有详细计划（存档）」。
+
+## 0. 浏览器功能状态（2026-07-13）
+
+aris_browser 现在是一个功能完整的桌面浏览器：
+
+### 已实现
+
+| 功能 | 状态 |
+|------|------|
+| HTML/CSS 渲染 (html5ever + stylo + taffy + parley + Vello CPU) | ✅ |
+| SVG 图片渲染 (usvg) + data: URI | ✅ |
+| 多标签页 (Ctrl+T/W/Tab，标签栏 UI) | ✅ |
+| 导航 (URL/链接/表单/历史/后退前进) | ✅ |
+| HTTP(S) + file:// 网络 (子资源/缓存/cookies) | ✅ |
+| 浏览器外壳 (Lucide 图标/地址栏/favicon/状态栏/关闭) | ✅ |
+| 鼠标+键盘交互 (悬停/点击/滚动/文本输入) | ✅ |
+| 右键菜单、Ctrl+F 查找、Ctrl+=缩放 | ✅ |
+| JS: `<script>` + onclick + addEventListener + DOM 操作 | ✅ |
+| JS: console.log + window.location + setTimeout/setInterval | ✅ |
+| 剪贴板 (Ctrl+C/V)、暗色模式检测、可拖拽滚动条 | ✅ |
+| 历史持久化 (重启恢复)、真实 favicon 抓取 | ✅ |
+| 下载管理 (Content-Disposition → ~/Downloads/) | ✅ |
+
+### 远期目标（需要架构级工作）
+
+| 功能 | 难度 | 说明 |
+|------|------|------|
+| Canvas 2D API | 中 | 需要 Boa 绑定 + 离屏 RGBA 缓冲区 + 合成 |
+| WebGL | 极难 | 需要 GPU 管线；aris 用 CPU 光栅化 (vello_cpu)，没有 OpenGL 上下文 |
+| WebRTC | 极难 | 需要 P2P 信令 + 媒体编解码 + SDP/ICE |
+| 内联 `<svg>` 元素渲染 | 中 | blitz-dom 的 svg feature 只处理 `<img src=*.svg>`，内联 SVG 需要自定义 paint |
 
 ## 1. 项目概述
 
