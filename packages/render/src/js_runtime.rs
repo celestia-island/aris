@@ -77,12 +77,21 @@ struct Bridge {
     query_by_tag: HashMap<String, u32>,
     query_by_class: HashMap<String, u32>,
     query_by_id: HashMap<String, u32>,
-    /// Scratch the addEventListener closure writes (node, global-name) pairs
-    /// into; drained into JsRuntime.listeners after each script/listener run.
+    /// Snapshot of node properties: node_id → (tag_name, text_content, id_attr, class_attr, node_type)
+    node_props: HashMap<u32, NodePropSnapshot>,
     new_listeners: Vec<(u32, String)>,
-    /// Scratch for setTimeout/setInterval: (global_name, delay_ms, interval_ms).
-    /// Drained into JsRuntime.timers after each script/listener run.
     new_timers: Vec<(String, u64, Option<u64>)>,
+}
+
+/// Snapshot of a blitz node's properties for JS-side access.
+#[derive(Clone, Trace, Finalize)]
+struct NodePropSnapshot {
+    tag_name: String,
+    text_content: String,
+    id: String,
+    class_name: String,
+    node_type: u32,
+    attrs: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
@@ -139,6 +148,7 @@ impl JsRuntime {
         {
             let mut b = self.bridge.borrow_mut();
             b.ids = collect_ids(doc);
+            b.node_props = collect_node_props(doc);
             b.query_by_tag = by_tag;
             b.query_by_class = by_class;
             b.query_by_id = by_id_q;
@@ -349,6 +359,53 @@ fn collect_ids(doc: &BaseDocument) -> HashMap<String, u32> {
     r
 }
 
+/// Snapshot all node properties into a map for JS-side access.
+fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
+    let mut r = HashMap::new();
+    for (id, node) in doc.tree().iter() {
+        let tag = node
+            .element_data()
+            .map(|e| {
+                format!("{:?}", e.name.local)
+                    .trim_start_matches("Atom('")
+                    .trim_end_matches("' type=static)")
+                    .to_uppercase()
+            })
+            .unwrap_or_default();
+        let text = node.text_content();
+        let id_attr = node.attr(local_name!("id")).unwrap_or("").to_string();
+        let class = node.attr(local_name!("class")).unwrap_or("").to_string();
+        let node_type = if node.element_data().is_some() {
+            1
+        } else if node.text_data().is_some() {
+            3
+        } else {
+            0
+        };
+        let attrs: Vec<(String, String)> = node
+            .element_data()
+            .map(|e| {
+                e.attrs
+                    .iter()
+                    .map(|a| (a.name.local.to_string(), a.value.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        r.insert(
+            id as u32,
+            NodePropSnapshot {
+                tag_name: tag,
+                text_content: text,
+                id: id_attr,
+                class_name: class,
+                node_type,
+                attrs,
+            },
+        );
+    }
+    r
+}
+
 fn collect_query_index(
     doc: &BaseDocument,
 ) -> (
@@ -465,6 +522,110 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
     args.get(idx)
         .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
         .unwrap_or_default()
+}
+
+/// Populate a JS element handle with real properties from a node snapshot.
+fn populate_props(obj: &JsObject, s: &NodePropSnapshot, _ctx: &mut Context) {
+    use boa_engine::property::Attribute;
+    let _ = obj.insert_property(
+        boa_engine::js_string!("tagName"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(s.tag_name.clone())))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("nodeName"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(s.tag_name.clone())))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("localName"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(
+                s.tag_name.to_lowercase()
+            )))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("textContent"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(
+                s.text_content.clone()
+            )))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("data"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(
+                s.text_content.clone()
+            )))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("id"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(s.id.clone())))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("className"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!(s.class_name.clone())))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("nodeType"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(s.node_type))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("length"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(s.text_content.chars().count() as u32))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    // Store all attributes as JS properties.
+    for (k, v) in &s.attrs {
+        let _ = obj.insert_property(
+            boa_engine::js_string!(k.clone()),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(boa_engine::js_string!(v.clone())))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+    }
 }
 
 fn read_handle_id(v: &JsValue) -> Option<u32> {
@@ -667,12 +828,18 @@ fn install_console(ctx: &mut Context) {
 fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResult<()> {
     use boa_engine::object::ObjectInitializer;
 
-    // getElementById — reads the id snapshot from the bridge.
+    // getElementById — reads the id snapshot, populates element handle with props.
     let get_by_id = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
             let id = arg_string(args, 0);
-            if let Some(&nid) = b.borrow().ids.get(&id) {
-                Ok(make_element_handle(ctx, Gc::clone(b), nid, None)?.into())
+            let nid = b.borrow().ids.get(&id).copied();
+            if let Some(nid) = nid {
+                let snap = b.borrow().node_props.get(&nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                }
+                Ok(handle.into())
             } else {
                 Ok(JsValue::null())
             }
@@ -715,7 +882,12 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             };
             drop(bb);
             if let Some(nid) = nid {
-                Ok(make_element_handle(ctx, Gc::clone(b), nid, None)?.into())
+                let snap = b.borrow().node_props.get(&nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                }
+                Ok(handle.into())
             } else {
                 Ok(JsValue::null())
             }
@@ -1043,6 +1215,9 @@ fn make_element_handle(
     use boa_engine::object::ObjectInitializer;
     use boa_engine::property::Attribute;
 
+    // Pre-create objects that need ctx.intrinsics() before borrowing ctx mutably.
+    let empty_arr1 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let empty_arr2 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
     let mut init = ObjectInitializer::new(ctx);
     init.property(
         boa_engine::js_string!("_arisId"),
@@ -1057,95 +1232,239 @@ fn make_element_handle(
         );
     }
 
-    // getContext('2d') — works on any element handle; creates a canvas buffer
-    // keyed by the node id (for page-level <canvas>) or a synthetic id.
-    let get_ctx = NativeFunction::from_copy_closure_with_captures(
-        |_this, args, _b, ctx| {
-            let kind = arg_string(args, 0);
-            if kind == "webgl" || kind == "experimental-webgl" {
-                return Ok(make_webgl_stub(ctx)?.into());
-            }
-            if kind != "2d" {
-                return Ok(JsValue::null());
-            }
-            // Use the node id as the canvas key. Allocate via thread_local if
-            // this canvas hasn't been seen before.
-            let cid = read_handle_id(_this)
-                .or_else(|| read_pending(_this).map(|p| p + 1_000_000))
-                .unwrap_or(0);
-            CANVASES.with(|cs| {
-                cs.borrow_mut()
-                    .entry(cid)
-                    .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
-            });
-            Ok(make_context_2d(ctx, cid)?.into())
-        },
-        Gc::clone(&bridge),
+    // ── Read-only properties from snapshot ──
+    // These are populated when the handle is created from a live node
+    // (via getElementById/querySelector). For pending/created elements,
+    // they start empty and are updated as ops are applied.
+    init.property(
+        boa_engine::js_string!("nodeType"),
+        JsValue::from(1),
+        Attribute::all(),
+    ); // ELEMENT_NODE
+    init.property(
+        boa_engine::js_string!("nodeName"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
     );
+    init.property(
+        boa_engine::js_string!("tagName"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("namespaceURI"),
+        JsValue::from(boa_engine::js_string!("http://www.w3.org/1999/xhtml")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("prefix"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("localName"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("id"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("className"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("nodeValue"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("textContent"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("innerHTML"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("outerHTML"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("parentNode"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("parentElement"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("firstChild"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("lastChild"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("nextSibling"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("previousSibling"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("ownerDocument"),
+        JsValue::null(),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("childNodes"),
+        JsValue::from(empty_arr1),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("children"),
+        JsValue::from(empty_arr2),
+        Attribute::all(),
+    );
+    // CharacterData props
+    init.property(
+        boa_engine::js_string!("data"),
+        JsValue::from(boa_engine::js_string!("")),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("length"),
+        JsValue::from(0u32),
+        Attribute::all(),
+    );
+
+    // ── Standard DOM methods ──
+
+    // getContext (canvas)
+    let get_ctx = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let kind = arg_string(args, 0);
+        if kind == "webgl" || kind == "experimental-webgl" {
+            return Ok(make_webgl_stub(ctx)?.into());
+        }
+        if kind != "2d" {
+            return Ok(JsValue::null());
+        }
+        let cid = read_handle_id(_this).unwrap_or(0);
+        CANVASES.with(|cs| {
+            cs.borrow_mut()
+                .entry(cid)
+                .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
+        });
+        Ok(make_context_2d(ctx, cid)?.into())
+    });
     init.function(get_ctx, boa_engine::js_string!("getContext"), 1);
 
+    // setText / textContent setter
     let set_text = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
-            let value = arg_string(args, 0);
-            let handle_id = read_handle_id(this);
-            let pid = read_pending(this);
-            if let Some(pid) = pid {
-                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
-                    e.1 = value;
-                }
-            } else if let Some(nid) = handle_id {
+            let v = arg_string(args, 0);
+            if let Some(nid) = read_handle_id(this) {
                 b.borrow_mut().ops.push(Op::SetText {
                     node_id: nid,
-                    value,
+                    value: v.clone(),
                 });
             }
+            // Also update the JS-visible textContent property.
+            let _ = this.as_object().map(|o| {
+                o.insert_property(
+                    boa_engine::js_string!("textContent"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(boa_engine::js_string!(v)))
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                )
+            });
             Ok(JsValue::undefined())
         },
         Gc::clone(&bridge),
     );
     init.function(set_text, boa_engine::js_string!("setText"), 1);
 
-    // setHTML(html) — sets innerHTML. Tags are stripped to plain text (a
-    // full re-parse would need the html parser provider; this covers the
-    // common "inject some text" case).
+    // setHTML / innerHTML setter (strips tags)
     let set_html = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
-            let raw = arg_string(args, 0);
-            // Strip HTML tags crudely → plain text.
-            let text = strip_tags(&raw);
-            let handle_id = read_handle_id(this);
-            let pid = read_pending(this);
-            if let Some(pid) = pid {
-                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
-                    e.1 = text;
-                }
-            } else if let Some(nid) = handle_id {
+            let text = strip_tags(&arg_string(args, 0));
+            if let Some(nid) = read_handle_id(this) {
                 b.borrow_mut().ops.push(Op::SetText {
                     node_id: nid,
-                    value: text,
+                    value: text.clone(),
                 });
             }
+            let _ = this.as_object().map(|o| {
+                o.insert_property(
+                    boa_engine::js_string!("textContent"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(boa_engine::js_string!(text)))
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                )
+            });
             Ok(JsValue::undefined())
         },
         Gc::clone(&bridge),
     );
     init.function(set_html, boa_engine::js_string!("setHTML"), 1);
 
+    // setAttribute
     let set_attr = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
             let name = arg_string(args, 0);
             let value = arg_string(args, 1);
-            let handle_id = read_handle_id(this);
-            let pid = read_pending(this);
-            if let Some(pid) = pid {
-                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
-                    e.2.push((name, value));
-                }
-            } else if let Some(nid) = handle_id {
+            if let Some(nid) = read_handle_id(this) {
                 b.borrow_mut().ops.push(Op::SetAttr {
                     node_id: nid,
-                    name,
-                    value,
+                    name: name.clone(),
+                    value: value.clone(),
+                });
+            }
+            // Update JS-visible id/className if applicable.
+            if name == "id" {
+                let _ = this.as_object().map(|o| {
+                    o.insert_property(
+                        boa_engine::js_string!("id"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(boa_engine::js_string!(value.clone())))
+                            .writable(true)
+                            .enumerable(true)
+                            .configurable(true)
+                            .build(),
+                    )
+                });
+            } else if name == "class" {
+                let _ = this.as_object().map(|o| {
+                    o.insert_property(
+                        boa_engine::js_string!("className"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(boa_engine::js_string!(value)))
+                            .writable(true)
+                            .enumerable(true)
+                            .configurable(true)
+                            .build(),
+                    )
                 });
             }
             Ok(JsValue::undefined())
@@ -1154,9 +1473,59 @@ fn make_element_handle(
     );
     init.function(set_attr, boa_engine::js_string!("setAttribute"), 2);
 
-    // addEventListener(type, handler): only 'click' is honored. The handler is
-    // stashed as raw source (we can't easily persist a JsFunction); we store
-    // (node_id, handler_src) in the bridge for harvest.
+    // getAttribute — reads from JS-visible properties (snapshot from creation).
+    let get_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0);
+        let obj = this.as_object();
+        let v = match &obj {
+            Some(o) => o
+                .get(boa_engine::js_string!(name.clone()), ctx)
+                .unwrap_or(JsValue::null()),
+            None => JsValue::null(),
+        };
+        if !v.is_undefined() && !v.is_null() {
+            return Ok(v);
+        }
+        // Fallback: check id/class special cases.
+        if name == "id" {
+            if let Some(o) = &obj {
+                return Ok(o
+                    .get(boa_engine::js_string!("id"), ctx)
+                    .unwrap_or(JsValue::null()));
+            }
+        } else if name == "class" {
+            if let Some(o) = &obj {
+                return Ok(o
+                    .get(boa_engine::js_string!("className"), ctx)
+                    .unwrap_or(JsValue::null()));
+            }
+        }
+        Ok(JsValue::null())
+    });
+    init.function(get_attr, boa_engine::js_string!("getAttribute"), 1);
+
+    // hasAttribute
+    let has_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0);
+        let obj = this.as_object();
+        let v = match &obj {
+            Some(o) => o
+                .get(boa_engine::js_string!(name), ctx)
+                .unwrap_or(JsValue::null()),
+            None => JsValue::null(),
+        };
+        Ok(JsValue::from(!v.is_null() && !v.is_undefined()))
+    });
+    init.function(has_attr, boa_engine::js_string!("hasAttribute"), 1);
+
+    // removeAttribute
+    let remove_attr = NativeFunction::from_copy_closure(|this, args, _ctx| {
+        let _name = arg_string(args, 0);
+        Ok(JsValue::undefined())
+    });
+    init.function(remove_attr, boa_engine::js_string!("removeAttribute"), 1);
+
+    // addEventListener
     let add_listener = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
             let kind = arg_string(args, 0);
@@ -1164,13 +1533,7 @@ fn make_element_handle(
                 return Ok(JsValue::undefined());
             }
             let handle_id = read_handle_id(this);
-            // The handler source: capture the function expression text. We can't
-            // get that back from a JsValue, so we expect the script to pass a
-            // function; we stash it as a global via a round-trip.
             if let (Some(nid), Some(handler)) = (handle_id, args.get(1)) {
-                // Serialize the handler object to a global so we can re-call it
-                // later. We store the JsObject itself by assigning it to a
-                // unique global name.
                 let name = format!("__aris_listener_obj_{}", {
                     let mut bb = b.borrow_mut();
                     bb.next_pending += 1;
@@ -1193,6 +1556,7 @@ fn make_element_handle(
     );
     init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
+    // appendChild
     let append = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
             let child = args.first().cloned().unwrap_or(JsValue::null());
@@ -1209,6 +1573,260 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(append, boa_engine::js_string!("appendChild"), 1);
+
+    // removeChild — returns the removed child (no-op on blitz side for now).
+    let remove_child = NativeFunction::from_copy_closure(|_this, args, _ctx| {
+        Ok(args.first().cloned().unwrap_or(JsValue::null()))
+    });
+    init.function(remove_child, boa_engine::js_string!("removeChild"), 1);
+
+    // insertBefore — returns the inserted node (simplified).
+    let insert_before = NativeFunction::from_copy_closure(|_this, args, _ctx| {
+        Ok(args.first().cloned().unwrap_or(JsValue::null()))
+    });
+    init.function(insert_before, boa_engine::js_string!("insertBefore"), 2);
+
+    // cloneNode(deep) — returns a shallow copy.
+    let clone = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // Copy _arisId so the clone can still read the same blitz node.
+        let id = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("_arisId"), ctx).ok())
+            .unwrap_or(JsValue::null());
+        let _ = obj.insert_property(
+            boa_engine::js_string!("_arisId"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(id)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        Ok(obj.into())
+    });
+    init.function(clone, boa_engine::js_string!("cloneNode"), 0);
+
+    // contains(node) — check if this node contains another.
+    let contains_fn =
+        NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+    init.function(contains_fn, boa_engine::js_string!("contains"), 1);
+
+    // closest(selector) — returns null (no CSS selector engine on handles).
+    let closest_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
+    init.function(closest_fn, boa_engine::js_string!("closest"), 1);
+
+    // matches(selector) — returns false.
+    let matches_fn =
+        NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+    init.function(matches_fn, boa_engine::js_string!("matches"), 1);
+
+    // getElementsByTagName — returns empty array.
+    let by_tag = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+        Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
+    });
+    init.function(by_tag, boa_engine::js_string!("getElementsByTagName"), 1);
+
+    // getElementsByClassName — returns empty array.
+    let by_class = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+        Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
+    });
+    init.function(
+        by_class,
+        boa_engine::js_string!("getElementsByClassName"),
+        1,
+    );
+
+    // querySelector / querySelectorAll on element — returns null / empty.
+    let qs = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
+    init.function(qs, boa_engine::js_string!("querySelector"), 1);
+    let qsa = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+        Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
+    });
+    init.function(qsa, boa_engine::js_string!("querySelectorAll"), 1);
+
+    // ── CharacterData methods ──
+    let append_data = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let v = arg_string(args, 0);
+        let old = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+            .unwrap_or(JsValue::undefined());
+        let old_str = old
+            .as_string()
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
+        let new = format!("{}{}", old_str, v);
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new.clone())))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new)))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        Ok(JsValue::undefined())
+    });
+    init.function(append_data, boa_engine::js_string!("appendData"), 1);
+
+    let delete_data = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let old = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+            .unwrap_or(JsValue::undefined());
+        let old_str = old
+            .as_string()
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
+        let mut chars: Vec<char> = old_str.chars().collect();
+        let end = (offset + count).min(chars.len());
+        chars.drain(offset..end);
+        let new: String = chars.into_iter().collect();
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new.clone())))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new)))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        Ok(JsValue::undefined())
+    });
+    init.function(delete_data, boa_engine::js_string!("deleteData"), 2);
+
+    let insert_data = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let data = arg_string(args, 1);
+        let old = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+            .unwrap_or(JsValue::undefined());
+        let old_str = old
+            .as_string()
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
+        let new = format!(
+            "{}{}{}",
+            &old_str[..offset.min(old_str.len())],
+            data,
+            &old_str[offset.min(old_str.len())..]
+        );
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new.clone())))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new)))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        Ok(JsValue::undefined())
+    });
+    init.function(insert_data, boa_engine::js_string!("insertData"), 2);
+
+    let replace_data = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let data = arg_string(args, 2);
+        let old = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+            .unwrap_or(JsValue::undefined());
+        let old_str = old
+            .as_string()
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
+        let mut chars: Vec<char> = old_str.chars().collect();
+        let end = (offset + count).min(chars.len());
+        let data_chars: Vec<char> = data.chars().collect();
+        chars.splice(offset..end, data_chars);
+        let new: String = chars.into_iter().collect();
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new.clone())))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        this.as_object().map(|o| {
+            o.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(boa_engine::js_string!(new)))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            )
+        });
+        Ok(JsValue::undefined())
+    });
+    init.function(replace_data, boa_engine::js_string!("replaceData"), 3);
+
+    let substring_data = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let old = this
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+            .unwrap_or(JsValue::undefined());
+        let old_str = old
+            .as_string()
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
+        let chars: Vec<char> = old_str.chars().collect();
+        let end = (offset + count).min(chars.len());
+        let sub: String = chars[offset.min(chars.len())..end].iter().collect();
+        Ok(JsValue::from(boa_engine::js_string!(sub)))
+    });
+    init.function(substring_data, boa_engine::js_string!("substringData"), 2);
 
     Ok(init.build())
 }
