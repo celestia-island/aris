@@ -92,6 +92,7 @@ impl JsRuntime {
         install_console(&mut ctx);
         install_window(&mut ctx, String::new());
         install_timers(&mut ctx, &bridge);
+        install_webrtc_stubs(&mut ctx);
         Self {
             ctx,
             listeners: HashMap::new(),
@@ -735,6 +736,9 @@ fn make_canvas_handle(
     let get_context = NativeFunction::from_copy_closure_with_captures(
         move |_this, args, b, ctx| {
             let kind = arg_string(args, 0);
+            if kind == "webgl" || kind == "experimental-webgl" {
+                return Ok(make_webgl_stub(ctx)?.into());
+            }
             if kind != "2d" {
                 return Ok(JsValue::null());
             }
@@ -766,7 +770,6 @@ fn make_context_2d(
     canvas_id: u32,
 ) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
-    
 
     // fillRect(x, y, w, h)
     let fill_rect = NativeFunction::from_copy_closure_with_captures(
@@ -842,6 +845,191 @@ fn make_context_2d(
     Ok(obj)
 }
 
+/// Build a WebGL no-op stub context. All GL methods are no-ops; constants are
+/// set to plausible values. Lets WebGL-using scripts run without crashing.
+fn make_webgl_stub(ctx: &mut Context) -> JsResult<JsObject> {
+    use boa_engine::object::ObjectInitializer;
+    use boa_engine::property::Attribute;
+
+    let mut init = ObjectInitializer::new(ctx);
+    for (name, val) in [
+        ("DEPTH_BUFFER_BIT", 256u32),
+        ("COLOR_BUFFER_BIT", 16384),
+        ("TRIANGLES", 4),
+        ("ARRAY_BUFFER", 34962),
+        ("STATIC_DRAW", 35044),
+        ("VERTEX_SHADER", 35633),
+        ("FRAGMENT_SHADER", 35632),
+        ("COMPILE_STATUS", 35713),
+        ("LINK_STATUS", 35714),
+        ("TEXTURE_2D", 3553),
+        ("RGBA", 6408),
+        ("FLOAT", 5126),
+        ("NO_ERROR", 0),
+    ] {
+        init.property(
+            boa_engine::js_string!(name),
+            JsValue::from(val),
+            Attribute::all(),
+        );
+    }
+    // All GL methods as no-ops (create a fresh NativeFunction per call since
+    // NativeFunction is not Copy).
+    for name in [
+        "activeTexture",
+        "attachShader",
+        "bindBuffer",
+        "bindTexture",
+        "blendFunc",
+        "bufferData",
+        "clear",
+        "clearColor",
+        "compileShader",
+        "createProgram",
+        "cullFace",
+        "deleteBuffer",
+        "deleteProgram",
+        "deleteShader",
+        "deleteTexture",
+        "depthFunc",
+        "depthMask",
+        "disable",
+        "disableVertexAttribArray",
+        "drawArrays",
+        "drawElements",
+        "enable",
+        "enableVertexAttribArray",
+        "finish",
+        "flush",
+        "generateMipmap",
+        "getProgramInfoLog",
+        "getShaderInfoLog",
+        "getShaderSource",
+        "linkProgram",
+        "pixelStorei",
+        "shaderSource",
+        "texImage2D",
+        "texParameteri",
+        "texSubImage2D",
+        "uniform1f",
+        "uniform1i",
+        "uniform2f",
+        "uniform3f",
+        "uniform4f",
+        "uniformMatrix4fv",
+        "useProgram",
+        "vertexAttribPointer",
+        "viewport",
+        "scissor",
+        "getParameter",
+        "getExtension",
+        "getContextAttributes",
+    ] {
+        let nf = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+        init.function(nf, boa_engine::js_string!(name), 0);
+    }
+    // Methods returning specific values.
+    let get_error = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(0u32)));
+    init.function(get_error, boa_engine::js_string!("getError"), 0);
+    let get_loc = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(0i32)));
+    init.function(get_loc, boa_engine::js_string!("getAttribLocation"), 2);
+    init.function(
+        NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(0i32))),
+        boa_engine::js_string!("getUniformLocation"),
+        2,
+    );
+    let get_bool = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(true)));
+    init.function(get_bool, boa_engine::js_string!("getShaderParameter"), 2);
+    init.function(
+        NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true))),
+        boa_engine::js_string!("getProgramParameter"),
+        2,
+    );
+    // create* return truthy stub objects.
+    for name in ["createShader", "createBuffer", "createTexture"] {
+        let nf = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+            Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
+        });
+        init.function(nf, boa_engine::js_string!(name), 1);
+    }
+    init.property(
+        boa_engine::js_string!("drawingBufferWidth"),
+        JsValue::from(300),
+        Attribute::all(),
+    );
+    init.property(
+        boa_engine::js_string!("drawingBufferHeight"),
+        JsValue::from(150),
+        Attribute::all(),
+    );
+    Ok(init.build())
+}
+
+/// Install WebRTC + navigator stubs so pages using these APIs don't crash.
+fn install_webrtc_stubs(ctx: &mut Context) {
+    use boa_engine::object::ObjectInitializer;
+    use boa_engine::property::Attribute;
+
+    // RTCPeerConnection: constructor returning an object with no-op methods.
+    let rtc_ctor = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+        let mut init = ObjectInitializer::new(ctx);
+        for name in [
+            "createOffer",
+            "createAnswer",
+            "setLocalDescription",
+            "setRemoteDescription",
+            "addIceCandidate",
+            "createDataChannel",
+            "getStats",
+            "close",
+            "addTrack",
+        ] {
+            let nf = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+            init.function(nf, boa_engine::js_string!(name), 0);
+        }
+        init.property(
+            boa_engine::js_string!("localDescription"),
+            JsValue::null(),
+            Attribute::all(),
+        );
+        Ok(init.build().into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("RTCPeerConnection"), 0, rtc_ctor);
+
+    // navigator with userAgent + mediaDevices.getUserMedia.
+    let get_user_media =
+        NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    let media_devices = ObjectInitializer::new(ctx)
+        .function(get_user_media, boa_engine::js_string!("getUserMedia"), 1)
+        .build();
+    let navigator = ObjectInitializer::new(ctx)
+        .property(
+            boa_engine::js_string!("mediaDevices"),
+            media_devices,
+            Attribute::all(),
+        )
+        .property(
+            boa_engine::js_string!("userAgent"),
+            JsValue::from(boa_engine::js_string!("aris/0.1")),
+            Attribute::all(),
+        )
+        .build();
+    let global = ctx.global_object();
+    let _ = global.insert_property(
+        boa_engine::js_string!("navigator"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(navigator)
+            .writable(true)
+            .enumerable(false)
+            .configurable(true)
+            .build(),
+    );
+
+    // WebSocket stub.
+    let ws_ctor = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    let _ = ctx.register_global_callable(boa_engine::js_string!("WebSocket"), 0, ws_ctor);
+}
+
 fn make_element_handle(
     ctx: &mut Context,
     bridge: Gc<GcRefCell<Bridge>>,
@@ -870,6 +1058,9 @@ fn make_element_handle(
     let get_ctx = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
             let kind = arg_string(args, 0);
+            if kind == "webgl" || kind == "experimental-webgl" {
+                return Ok(make_webgl_stub(ctx)?.into());
+            }
             if kind != "2d" {
                 return Ok(JsValue::null());
             }
