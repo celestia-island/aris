@@ -19,6 +19,8 @@
 
 use std::collections::HashMap;
 
+use boa_engine::property::Attribute;
+
 // Thread-local canvas buffer map: Boa closures can't capture non-Trace types,
 // so canvas buffers are accessed via this thread_local. The render loop is
 // single-threaded, so this is safe.
@@ -92,6 +94,10 @@ struct NodePropSnapshot {
     class_name: String,
     node_type: u32,
     attrs: Vec<(String, String)>,
+    /// Child node IDs (in document order).
+    child_ids: Vec<u32>,
+    /// Parent node ID (0 = no parent / root).
+    parent_id: u32,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
@@ -391,6 +397,8 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
                     .collect()
             })
             .unwrap_or_default();
+        let child_ids: Vec<u32> = node.children.iter().map(|&c| c as u32).collect();
+        let parent_id = node.parent.map(|p| p as u32).unwrap_or(0);
         r.insert(
             id as u32,
             NodePropSnapshot {
@@ -400,6 +408,8 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
                 class_name: class,
                 node_type,
                 attrs,
+                child_ids,
+                parent_id,
             },
         );
     }
@@ -525,106 +535,97 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
 }
 
 /// Populate a JS element handle with real properties from a node snapshot.
-fn populate_props(obj: &JsObject, s: &NodePropSnapshot, _ctx: &mut Context) {
-    use boa_engine::property::Attribute;
-    let _ = obj.insert_property(
-        boa_engine::js_string!("tagName"),
+fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
+    let pd = |val: JsValue| {
         boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(s.tag_name.clone())))
+            .value(val)
             .writable(true)
             .enumerable(true)
             .configurable(true)
-            .build(),
-    );
-    let _ = obj.insert_property(
-        boa_engine::js_string!("nodeName"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(s.tag_name.clone())))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
-    );
+            .build()
+    };
+    let s_str = |v: &str| JsValue::from(boa_engine::js_string!(v.to_string()));
+
+    let _ = obj.insert_property(boa_engine::js_string!("tagName"), pd(s_str(&s.tag_name)));
+    let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd(s_str(&s.tag_name)));
     let _ = obj.insert_property(
         boa_engine::js_string!("localName"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(
-                s.tag_name.to_lowercase()
-            )))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
+        pd(s_str(&s.tag_name.to_lowercase())),
     );
     let _ = obj.insert_property(
         boa_engine::js_string!("textContent"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(
-                s.text_content.clone()
-            )))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
+        pd(s_str(&s.text_content)),
     );
-    let _ = obj.insert_property(
-        boa_engine::js_string!("data"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(
-                s.text_content.clone()
-            )))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
-    );
-    let _ = obj.insert_property(
-        boa_engine::js_string!("id"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(s.id.clone())))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
-    );
+    let _ = obj.insert_property(boa_engine::js_string!("data"), pd(s_str(&s.text_content)));
+    let _ = obj.insert_property(boa_engine::js_string!("id"), pd(s_str(&s.id)));
     let _ = obj.insert_property(
         boa_engine::js_string!("className"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!(s.class_name.clone())))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
+        pd(s_str(&s.class_name)),
     );
     let _ = obj.insert_property(
         boa_engine::js_string!("nodeType"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(s.node_type))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
+        pd(JsValue::from(s.node_type)),
     );
     let _ = obj.insert_property(
         boa_engine::js_string!("length"),
-        boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(s.text_content.chars().count() as u32))
-            .writable(true)
-            .enumerable(true)
-            .configurable(true)
-            .build(),
+        pd(JsValue::from(s.text_content.chars().count() as u32)),
     );
+
     // Store all attributes as JS properties.
     for (k, v) in &s.attrs {
-        let _ = obj.insert_property(
-            boa_engine::js_string!(k.clone()),
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(JsValue::from(boa_engine::js_string!(v.clone())))
-                .writable(true)
-                .enumerable(true)
-                .configurable(true)
-                .build(),
+        let _ = obj.insert_property(boa_engine::js_string!(k.clone()), pd(s_str(v)));
+    }
+
+    // Build childNodes array with real child handles.
+    let child_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    for (i, &cid) in s.child_ids.iter().enumerate() {
+        // Create a lightweight handle for each child — we can't call
+        // make_element_handle here (it needs the bridge), so create a
+        // minimal object with _arisId and basic properties.
+        let child_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ =
+            child_obj.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(cid)));
+        // Set nodeType based on whether it's a text node (we don't have the
+        // snapshot here, but tag_name empty means text node).
+        let _ = child_obj.insert_property(
+            boa_engine::js_string!("_childIndex"),
+            pd(JsValue::from(i as u32)),
         );
+        let _ = child_arr.insert_property(i as u32, pd(child_obj.into()));
+    }
+    let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(child_arr.into()));
+    let _ = obj.insert_property(
+        boa_engine::js_string!("childElementCount"),
+        pd(JsValue::from(s.child_ids.len() as u32)),
+    );
+    // firstChild / lastChild
+    if let Some(&first) = s.child_ids.first() {
+        let fc = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = fc.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(first)));
+        let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(fc.into()));
+    } else {
+        let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
+    }
+    if let Some(&last) = s.child_ids.last() {
+        let lc = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = lc.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(last)));
+        let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd(lc.into()));
+    } else {
+        let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
+    }
+
+    // parentNode / parentElement
+    if s.parent_id > 0 {
+        let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = pn.insert_property(
+            boa_engine::js_string!("_arisId"),
+            pd(JsValue::from(s.parent_id)),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(pn.clone().into()));
+        let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(pn.into()));
+    } else {
+        let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+        let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
     }
 }
 
@@ -736,7 +737,6 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
 
 fn install_window(ctx: &mut Context, url: String) {
     use boa_engine::object::ObjectInitializer;
-    use boa_engine::property::Attribute;
 
     // Build the location object with an href property.
     let location = ObjectInitializer::new(ctx)
@@ -860,10 +860,41 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 let mut bb = b.borrow_mut();
                 let pid = bb.next_pending;
                 bb.next_pending += 1;
-                bb.pending.insert(pid, (tag, String::new(), Vec::new()));
+                bb.pending
+                    .insert(pid, (tag.clone(), String::new(), Vec::new()));
                 pid
             };
-            Ok(make_element_handle(ctx, Gc::clone(b), 0, Some(pid))?.into())
+            let handle = make_element_handle(ctx, Gc::clone(b), 0, Some(pid))?;
+            // Populate with proper tag name so createElement('div').tagName === 'DIV'.
+
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let upper = tag.to_uppercase();
+            let _ = handle.insert_property(
+                boa_engine::js_string!("tagName"),
+                pd(JsValue::from(boa_engine::js_string!(upper.clone()))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("nodeName"),
+                pd(JsValue::from(boa_engine::js_string!(upper))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("localName"),
+                pd(JsValue::from(boa_engine::js_string!(tag.to_lowercase()))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("namespaceURI"),
+                pd(JsValue::from(boa_engine::js_string!(
+                    "http://www.w3.org/1999/xhtml"
+                ))),
+            );
+            Ok(handle.into())
         },
         Gc::clone(&bridge),
     );
@@ -918,7 +949,6 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
 /// Canvas buffers are in the thread_local CANVASES map.
 fn make_canvas_handle(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
-    use boa_engine::property::Attribute;
 
     let get_context = NativeFunction::from_copy_closure(move |_this, args, ctx| {
         let kind = arg_string(args, 0);
@@ -1025,7 +1055,6 @@ fn make_context_2d(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
 /// set to plausible values. Lets WebGL-using scripts run without crashing.
 fn make_webgl_stub(ctx: &mut Context) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
-    use boa_engine::property::Attribute;
 
     let mut init = ObjectInitializer::new(ctx);
     for (name, val) in [
@@ -1144,7 +1173,6 @@ fn make_webgl_stub(ctx: &mut Context) -> JsResult<JsObject> {
 /// Install WebRTC + navigator stubs so pages using these APIs don't crash.
 fn install_webrtc_stubs(ctx: &mut Context) {
     use boa_engine::object::ObjectInitializer;
-    use boa_engine::property::Attribute;
 
     // RTCPeerConnection: constructor returning an object with no-op methods.
     let rtc_ctor = NativeFunction::from_copy_closure(|_this, _args, ctx| {
@@ -1213,7 +1241,6 @@ fn make_element_handle(
     pending: Option<u32>,
 ) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
-    use boa_engine::property::Attribute;
 
     // Pre-create objects that need ctx.intrinsics() before borrowing ctx mutably.
     let empty_arr1 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
