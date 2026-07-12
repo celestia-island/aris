@@ -204,3 +204,12 @@ dev-wasm:
 clean:
     rm -rf output/ target/ build/
     cargo clean
+
+# ── Conformance ────────────────────────────────────────────
+
+# Run the W3C-style conformance suite and regenerate the report.
+conformance:
+    RUST_LOG="" cargo run -p aris-render --features "desktop winit js" --bin conformance_test > /tmp/aris_conformance.json
+    python scripts/conformance/report.py /tmp/aris_conformance.json > docs/guides/conformance-report.md
+    @echo "Report written to docs/guides/conformance-report.md"
+    cat docs/guides/conformance-report.md | head -5

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 // so canvas buffers are accessed via this thread_local. The render loop is
 // single-threaded, so this is safe.
 thread_local! {
-    static CANVASES: std::cell::RefCell<HashMap<u32, crate::canvas::Canvas2D>> =
+    pub(crate) static CANVASES: std::cell::RefCell<HashMap<u32, crate::canvas::Canvas2D>> =
         std::cell::RefCell::new(HashMap::new());
     static NEXT_CANVAS_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }

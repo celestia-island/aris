@@ -437,6 +437,10 @@ impl App {
         renderer.render(
             |scene| {
                 blitz_paint::paint_scene(scene, doc, scale, pw, page_h, 0, 0);
+                // Composite canvas 2D scenes onto the page at each <canvas>
+                // element's layout position.
+                #[cfg(feature = "js")]
+                composite_canvases(scene, doc, scale);
             },
             &mut frame.rgba,
         );
@@ -3117,6 +3121,49 @@ fn run_scripts_ssr(html: &str) -> String {
         return html.replace("</body>", &format!("{}\n</body>", body));
     }
     html.to_string()
+}
+
+/// Composite canvas 2D scenes onto the page render. Finds every `<canvas>`
+/// element in the document, gets its layout position, and appends the
+/// corresponding recorded Scene (from the thread_local CANVASES map) at that
+/// position with the appropriate transform.
+#[cfg(feature = "js")]
+fn composite_canvases(
+    scene: &mut impl anyrender::PaintScene,
+    doc: &blitz_dom::BaseDocument,
+    scale: f64,
+) {
+    use anyrender::PaintScene;
+    use kurbo::Affine;
+
+    // Find all <canvas> elements and their layout positions.
+    for (node_id, node) in doc.tree().iter() {
+        let is_canvas = node
+            .element_data()
+            .map(|e| format!("{:?}", e.name.local).contains("'canvas'"))
+            .unwrap_or(false);
+        if !is_canvas {
+            continue;
+        }
+        let pos = node.absolute_position(0.0, 0.0);
+        let w = node.final_layout.size.width;
+        let h = node.final_layout.size.height;
+        if w < 1.0 || h < 1.0 {
+            continue;
+        }
+        // The canvas element's node id is the key into CANVASES.
+        let cid = node_id as u32;
+        crate::js_runtime::CANVASES.with(|cs| {
+            let cs = cs.borrow();
+            if let Some(canvas) = cs.get(&cid) {
+                if canvas.has_content() {
+                    let tf = Affine::translate((pos.x as f64 * scale, pos.y as f64 * scale))
+                        * Affine::scale(scale);
+                    scene.append_scene(canvas.scene().clone(), tf);
+                }
+            }
+        });
+    }
 }
 
 // ── Built-in pages ──────────────────────────────────────────
