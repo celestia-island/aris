@@ -71,6 +71,7 @@ impl JsRuntime {
         let bridge = Gc::new(GcRefCell::new(Bridge::default()));
         let _ = install_document(&mut ctx, Gc::clone(&bridge));
         install_console(&mut ctx);
+        install_window(&mut ctx, String::new());
         Self {
             ctx,
             listeners: HashMap::new(),

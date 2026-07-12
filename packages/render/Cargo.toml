@@ -16,15 +16,17 @@ memmap2 = "0.9"
 # blitz-dom: system_fonts is enabled via the "desktop" feature (see below).
 # Without it, blitz-dom creates an empty font collection. On musl/kei, the
 # fontconfig dependency can't cross-compile, so we only enable it on desktop.
-blitz-dom = { version = "=0.3.0-alpha.6", default-features = false }
-blitz-paint = { version = "=0.3.0-alpha.6", default-features = false }
-blitz-traits = "=0.3.0-alpha.6"
-blitz-html = "=0.3.0-alpha.6"
-anyrender = "0.11"
-anyrender_vello_cpu = "0.14"
+# These are optional so fbdev-only builds (kei_fbtest) stay slim and avoid
+# pulling in heavy musl-incompatible runtime deps.
+blitz-dom = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
+blitz-paint = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
+blitz-traits = { version = "=0.3.0-alpha.6", optional = true }
+blitz-html = { version = "=0.3.0-alpha.6", optional = true }
+anyrender = { version = "0.11", optional = true }
+anyrender_vello_cpu = { version = "0.14", optional = true }
 # For embedded font registration (render_html_with_font).
-linebender_resource_handle = "0.1"
-parley = { version = "0.10", default-features = false, features = ["std"] }
+linebender_resource_handle = { version = "0.1", optional = true }
+parley = { version = "0.10", default-features = false, features = ["std"], optional = true }
 
 # Boa JS engine (optional)
 aris-js = { path = "../js", optional = true }
@@ -52,8 +54,12 @@ keyboard-types = "0.7"
 png = "0.17"
 
 [features]
-default = ["desktop"]
+default = ["desktop", "render"]
+# Minimal fbdev-only build: no Blitz/Vello, just Frame + FbDevBackend.
+# Use: cargo build --no-default-features --features fbdev
 fbdev = []
+# HTML rendering engine (Blitz DOM + Vello CPU + parley fonts).
+render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley"]
 # Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
 desktop = ["blitz-dom/system_fonts"]

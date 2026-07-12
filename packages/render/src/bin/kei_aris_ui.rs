@@ -21,38 +21,75 @@ fn main() {
     tracing::info!("frame allocated: {}x{}", width, height);
 
     // Colors as RGBA bytes (aris Frame uses RGBA)
-    let bg = [0x28, 0x2C, 0x34, 0xFF];       // dark background
-    let header = [0x61, 0xAF, 0xEF, 0xFF];   // blue header
-    let card = [0x21, 0x25, 0x2B, 0xFF];     // card bg
-    let accent = [0xE0, 0x6C, 0x75, 0xFF];   // red
-    let green = [0x98, 0xC3, 0x79, 0xFF];    // green
-    let text = [0xAB, 0xB2, 0xBF, 0xFF];     // light text
+    let bg = [0x28, 0x2C, 0x34, 0xFF]; // dark background
+    let header = [0x61, 0xAF, 0xEF, 0xFF]; // blue header
+    let card = [0x21, 0x25, 0x2B, 0xFF]; // card bg
+    let accent = [0xE0, 0x6C, 0x75, 0xFF]; // red
+    let green = [0x98, 0xC3, 0x79, 0xFF]; // green
+    let text = [0xAB, 0xB2, 0xBF, 0xFF]; // light text
     let white = [0xFF, 0xFF, 0xFF, 0xFF];
 
-    let put = |frame: &mut [u8], w: u32, x: u32, y: u32, c: [u8;4]| {
+    let put = |frame: &mut [u8], w: u32, x: u32, y: u32, c: [u8; 4]| {
         let idx = ((y * w + x) * 4) as usize;
         if idx + 3 < frame.len() {
-            frame[idx..idx+4].copy_from_slice(&c);
+            frame[idx..idx + 4].copy_from_slice(&c);
         }
     };
-    let fill = |frame: &mut [u8], w: u32, h: u32, x0: u32, y0: u32, fw: u32, fh: u32, c: [u8;4]| {
-        for y in y0..(y0+fh).min(h) {
-            for x in x0..(x0+fw).min(w) {
-                put(frame, w, x, y, c);
+    let fill =
+        |frame: &mut [u8], w: u32, h: u32, x0: u32, y0: u32, fw: u32, fh: u32, c: [u8; 4]| {
+            for y in y0..(y0 + fh).min(h) {
+                for x in x0..(x0 + fw).min(w) {
+                    put(frame, w, x, y, c);
+                }
             }
-        }
-    };
+        };
 
     // Background
     fill(&mut frame.rgba, width, height, 0, 0, width, height, bg);
     // Header bar
     fill(&mut frame.rgba, width, height, 0, 0, width, 50, header);
     // Address bar
-    fill(&mut frame.rgba, width, height, 10, 58, width - 20, 28, [0x1B, 0x1F, 0x23, 0xFF]);
+    fill(
+        &mut frame.rgba,
+        width,
+        height,
+        10,
+        58,
+        width - 20,
+        28,
+        [0x1B, 0x1F, 0x23, 0xFF],
+    );
     // Cards
-    fill(&mut frame.rgba, width, height, 20, 100, width - 40, 80, card);
-    fill(&mut frame.rgba, width, height, 20, 195, width - 40, 80, card);
-    fill(&mut frame.rgba, width, height, 20, 290, width - 40, 80, card);
+    fill(
+        &mut frame.rgba,
+        width,
+        height,
+        20,
+        100,
+        width - 40,
+        80,
+        card,
+    );
+    fill(
+        &mut frame.rgba,
+        width,
+        height,
+        20,
+        195,
+        width - 40,
+        80,
+        card,
+    );
+    fill(
+        &mut frame.rgba,
+        width,
+        height,
+        20,
+        290,
+        width - 40,
+        80,
+        card,
+    );
 
     // Simple text-like patterns (colored dots representing text)
     // "KEI BROWSER" title area — white dots
@@ -80,7 +117,9 @@ fn main() {
     tracing::info!("frame rendered, presenting to fb0...");
 
     // Present via aris-render FbDevBackend (the aris core fbdev path)
-    let fb_path = std::env::args().nth(1).unwrap_or_else(|| "/dev/fb0".to_string());
+    let fb_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/dev/fb0".to_string());
     match aris_render::FbDevBackend::open(&fb_path) {
         Ok(mut fb) => {
             let (fw, fh) = fb.resolution();

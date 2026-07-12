@@ -26,10 +26,12 @@ pub mod js_interactive;
 #[cfg(feature = "js")]
 pub mod js_runtime;
 
+#[cfg(feature = "render")]
 use anyrender::ImageRenderer;
 
 /// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.
 /// DejaVu Sans (latin-400) — SIL-compatible open-source license.
+#[cfg(feature = "render")]
 const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/font.ttf");
 
 /// Initialize structured logging with timestamps and levels.
@@ -105,6 +107,7 @@ impl Frame {
 }
 
 /// Renders an HTML string into a pixel buffer using Blitz + Vello CPU.
+#[cfg(feature = "render")]
 pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     let width = config.width;
     let height = config.height;
@@ -150,6 +153,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
 /// This is for headless targets (aarch64-musl, kei fbdev) where fontconfig
 /// cannot be linked. The embedded DejaVu Sans is registered into a custom
 /// `FontContext` so text renders without system font discovery.
+#[cfg(feature = "render")]
 pub fn render_html_with_font(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     let width = config.width;
     let height = config.height;
@@ -212,6 +216,7 @@ pub fn render_html_with_font(html: &str, config: &RenderConfig) -> anyhow::Resul
 ///
 /// Without the `js` feature, this is equivalent to [`render_html`].
 #[cfg(feature = "js")]
+#[cfg(feature = "render")]
 pub fn render_html_with_js(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     let result = aris_js::execute_scripts(html);
     if !result.errors.is_empty() {
