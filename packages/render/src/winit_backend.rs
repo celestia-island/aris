@@ -210,6 +210,10 @@ impl App {
         };
 
         let mut doc = HtmlDocument::from_html(&html_to_parse, doc_config);
+        // Clamp the root to the viewport so wide content can't force the page
+        // wider than the window (a common cause of "uses maximized width"
+        // symptoms on HiDPI displays where layout scales unexpectedly).
+        doc.add_user_agent_stylesheet("html,body{max-width:100vw;overflow-x:hidden;}");
         doc.resolve(0.0);
         self.doc = Some(doc);
         self.needs_rerender = true;
