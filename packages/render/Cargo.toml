@@ -34,6 +34,17 @@ winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 
+# Browser chrome: HTTP networking + URL parsing (only needed for the desktop
+# browser, not for the headless/fbdev kiosk renderer). Kept optional so musl
+# cross-compile and kei fbdev builds stay slim.
+url = { version = "2", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip"], optional = true }
+bytes = { version = "1", optional = true }
+http = { version = "1", optional = true }
+# keyboard-types is a transitive dep of blitz-traits; we need it directly to
+# construct BlitzKeyEvent values when forwarding winit key events to blitz-dom.
+keyboard-types = "0.7"
+
 [features]
 default = ["desktop"]
 fbdev = []
@@ -42,5 +53,6 @@ fbdev = []
 desktop = ["blitz-dom/system_fonts"]
 # Execute <script> blocks via Boa before rendering.
 js = ["dep:aris-js"]
-# Desktop window output via winit + softbuffer (Windows/Linux/macOS).
-winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle"]
+# Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with
+# a full browser chrome: address bar, back/forward, HTTP networking.
+winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http"]

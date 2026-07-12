@@ -17,6 +17,9 @@ pub use fbdev::FbDevBackend;
 #[cfg(feature = "winit")]
 pub mod winit_backend;
 
+#[cfg(feature = "winit")]
+pub mod browser;
+
 use anyrender::ImageRenderer;
 
 /// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.
