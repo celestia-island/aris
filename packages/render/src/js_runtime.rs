@@ -317,6 +317,21 @@ fn create_and_append(
 
 // ── Boa document/handle installation ───────────────────────
 
+/// Strip HTML tags from a string, leaving plain text.
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
 fn arg_string(args: &[JsValue], idx: usize) -> String {
     args.get(idx)
         .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
@@ -357,7 +372,8 @@ fn install_window(ctx: &mut Context, url: String) {
     // alert(message) — logs the message (a real modal would block; we trace).
     let alert = NativeFunction::from_copy_closure_with_captures(
         |_this, args, _caps, ctx| {
-            let msg = args.first()
+            let msg = args
+                .first()
                 .and_then(|v| v.to_string(ctx).ok().map(|s| s.to_std_string_escaped()))
                 .unwrap_or_default();
             tracing::info!("[js alert] {}", msg);
@@ -547,6 +563,32 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(set_text, boa_engine::js_string!("setText"), 1);
+
+    // setHTML(html) — sets innerHTML. Tags are stripped to plain text (a
+    // full re-parse would need the html parser provider; this covers the
+    // common "inject some text" case).
+    let set_html = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, _ctx| {
+            let raw = arg_string(args, 0);
+            // Strip HTML tags crudely → plain text.
+            let text = strip_tags(&raw);
+            let handle_id = read_handle_id(this);
+            let pid = read_pending(this);
+            if let Some(pid) = pid {
+                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
+                    e.1 = text;
+                }
+            } else if let Some(nid) = handle_id {
+                b.borrow_mut().ops.push(Op::SetText {
+                    node_id: nid,
+                    value: text,
+                });
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
+    init.function(set_html, boa_engine::js_string!("setHTML"), 1);
 
     let set_attr = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, _ctx| {
