@@ -133,7 +133,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     // Create a FontContext with the embedded font registered.
     // Use Blob::from_vec to avoid Arc<dyn AsRef<[u8]>> vtable dispatch
     // (which produces NULL on kei's VM).
-    use linebender_resource_handle::Blob;
+    
     use parley::FontContext;
     use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
@@ -144,11 +144,11 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
             system_fonts: false,
         }),
     };
-    font_ctx
-        .collection
-        .register_fonts(Blob::from_vec(EMBEDDED_FONT.to_vec()), None);
+    let font_blob: parley::fontique::Blob<u8> =
+        parley::fontique::Blob::new(std::sync::Arc::new(EMBEDDED_FONT.to_vec()));
+    font_ctx.collection.register_fonts(font_blob, None);
 
-    let viewport = Viewport {
+    let viewport: Viewport = Viewport {
         window_size: (width, height),
         hidpi_scale: config.scale,
         ..Default::default()

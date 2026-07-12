@@ -24,6 +24,9 @@ blitz-traits = { version = "=0.3.0-alpha.6", optional = true }
 blitz-html = { version = "=0.3.0-alpha.6", optional = true }
 anyrender = { version = "0.11", optional = true }
 anyrender_vello_cpu = { version = "0.14", optional = true }
+# kurbo + peniko for Canvas 2D vector geometry (must match anyrender's versions).
+kurbo = "0.13"
+peniko = "0.6"
 # For embedded font registration (render_html_with_font).
 linebender_resource_handle = { version = "0.1", optional = true }
 parley = { version = "0.10", default-features = false, features = ["std"], optional = true }

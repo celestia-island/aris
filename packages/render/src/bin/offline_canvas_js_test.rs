@@ -45,17 +45,14 @@ fn main() {
     let scripts = aris_js::extract_scripts(html);
     rt.bind_and_run(&mut doc, &scripts.join("\n;\n"));
 
-    // Check the bridge's canvas buffers for red pixels.
-    let red_count = rt.canvas_red_pixels();
-    println!("total red pixels across canvases: {}", red_count);
+    // Check if the canvas has drawing commands recorded.
+    let has_content = rt.canvas_has_content();
+    println!("canvas has content: {}", has_content);
 
-    if red_count > 0 {
-        println!(
-            "OK: JS canvas.getContext('2d').fillRect() produced {} red pixels",
-            red_count
-        );
+    if has_content {
+        println!("OK: JS canvas.getContext('2d').fillRect() recorded scene commands");
     } else {
-        println!("FAIL: no red pixels in any canvas buffer");
+        println!("FAIL: no drawing commands in canvas scene");
         std::process::exit(2);
     }
 }

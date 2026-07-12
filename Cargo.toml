@@ -86,6 +86,6 @@ strip = "debuginfo"
 [profile.bench]
 debug = 0
 
-# Patch skrifa: NULL font data check in Metrics::new for kei compatibility.
-[patch.crates-io]
-skrifa = { path = "../patches/skrifa" }
+# Patch skrifa, linebender_resource_handle, and fontique for kei compatibility.
+# linebender_resource_handle: replace Arc<dyn> with Arc<Vec> to avoid vtable NULL.
+# fontique: use Blob::from_vec in source_cache to avoid vtable dispatch.

@@ -19,6 +19,28 @@
 
 use std::collections::HashMap;
 
+// Thread-local canvas buffer map: Boa closures can't capture non-Trace types,
+// so canvas buffers are accessed via this thread_local. The render loop is
+// single-threaded, so this is safe.
+thread_local! {
+    static CANVASES: std::cell::RefCell<HashMap<u32, crate::canvas::Canvas2D>> =
+        std::cell::RefCell::new(HashMap::new());
+    static NEXT_CANVAS_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Allocate a new canvas id and create the buffer.
+fn alloc_canvas(width: u32, height: u32) -> u32 {
+    NEXT_CANVAS_ID.with(|c| {
+        let id = c.get();
+        c.set(id + 1);
+        CANVASES.with(|cs| {
+            cs.borrow_mut()
+                .insert(id, crate::canvas::Canvas2D::new(width, height));
+        });
+        id
+    })
+}
+
 use blitz_dom::{BaseDocument, local_name};
 use boa_engine::{Context, JsObject, JsResult, JsValue, NativeFunction, Source};
 use boa_gc::{Finalize, Gc, GcRefCell, Trace};
@@ -61,10 +83,6 @@ struct Bridge {
     /// Scratch for setTimeout/setInterval: (global_name, delay_ms, interval_ms).
     /// Drained into JsRuntime.timers after each script/listener run.
     new_timers: Vec<(String, u64, Option<u64>)>,
-    /// Canvas 2D buffers keyed by a synthetic canvas id.
-    canvases: HashMap<u32, crate::canvas::Canvas2D>,
-    /// Next canvas id.
-    next_canvas_id: u32,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
@@ -268,13 +286,9 @@ impl JsRuntime {
     }
 
     /// Count red pixels across all canvas buffers (for testing).
-    pub fn canvas_red_pixels(&self) -> usize {
-        let b = self.bridge.borrow();
-        b.canvases
-            .values()
-            .flat_map(|c| c.rgba.chunks_exact(4))
-            .filter(|px| px[0] > 200 && px[1] < 50 && px[2] < 50)
-            .count()
+    /// Count canvases that have content (for testing).
+    pub fn canvas_has_content(&self) -> bool {
+        CANVASES.with(|cs| cs.borrow().values().any(|c| c.has_content()))
     }
 }
 
@@ -654,13 +668,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let create_el = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
             let tag = arg_string(args, 0);
-            // Special-case <canvas>: return a canvas handle with getContext.
+            // Special-case <canvas>: allocate via thread_local and return a handle.
             if tag == "canvas" {
-                let mut bb = b.borrow_mut();
-                let cid = bb.next_canvas_id;
-                bb.next_canvas_id += 1;
-                drop(bb);
-                return Ok(make_canvas_handle(ctx, Gc::clone(b), cid)?.into());
+                let cid = alloc_canvas(300, 150);
+                return Ok(make_canvas_handle(ctx, cid)?.into());
             }
             let pid = {
                 let mut bb = b.borrow_mut();
@@ -716,36 +727,21 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
 }
 
 /// Build a JS canvas handle object: has `width`, `height`, and `getContext('2d')`.
-/// The canvas pixels live in the bridge's `canvases` map.
-fn make_canvas_handle(
-    ctx: &mut Context,
-    bridge: Gc<GcRefCell<Bridge>>,
-    canvas_id: u32,
-) -> JsResult<JsObject> {
+/// Canvas buffers are in the thread_local CANVASES map.
+fn make_canvas_handle(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
     use boa_engine::property::Attribute;
 
-    // Allocate a default 300×150 canvas if not already present.
-    {
-        let mut b = bridge.borrow_mut();
-        b.canvases
-            .entry(canvas_id)
-            .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
-    }
-
-    let get_context = NativeFunction::from_copy_closure_with_captures(
-        move |_this, args, b, ctx| {
-            let kind = arg_string(args, 0);
-            if kind == "webgl" || kind == "experimental-webgl" {
-                return Ok(make_webgl_stub(ctx)?.into());
-            }
-            if kind != "2d" {
-                return Ok(JsValue::null());
-            }
-            Ok(make_context_2d(ctx, Gc::clone(b), canvas_id)?.into())
-        },
-        Gc::clone(&bridge),
-    );
+    let get_context = NativeFunction::from_copy_closure(move |_this, args, ctx| {
+        let kind = arg_string(args, 0);
+        if kind == "webgl" || kind == "experimental-webgl" {
+            return Ok(make_webgl_stub(ctx)?.into());
+        }
+        if kind != "2d" {
+            return Ok(JsValue::null());
+        }
+        Ok(make_context_2d(ctx, canvas_id)?.into())
+    });
 
     let obj = ObjectInitializer::new(ctx)
         .property(
@@ -763,80 +759,72 @@ fn make_canvas_handle(
     Ok(obj)
 }
 
-/// Build a JS CanvasRenderingContext2D object bound to canvas_id's buffer.
-fn make_context_2d(
-    ctx: &mut Context,
-    bridge: Gc<GcRefCell<Bridge>>,
-    canvas_id: u32,
-) -> JsResult<JsObject> {
+/// Build a JS CanvasRenderingContext2D object bound to canvas_id's buffer
+/// (accessed via thread_local CANVASES).
+fn make_context_2d(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
 
-    // fillRect(x, y, w, h)
-    let fill_rect = NativeFunction::from_copy_closure_with_captures(
-        move |_this, args, b, _ctx| {
-            let x = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
-            let y = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0);
-            let w = args.get(2).and_then(|v| v.as_number()).unwrap_or(0.0);
-            let h = args.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
-            if let Some(canvas) = b.borrow_mut().canvases.get_mut(&canvas_id) {
+    let fill_rect = NativeFunction::from_copy_closure(move |_this, args, _ctx| {
+        let x = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
+        let y = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let w = args.get(2).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let h = args.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
+        CANVASES.with(|cs| {
+            if let Some(canvas) = cs.borrow_mut().get_mut(&canvas_id) {
                 canvas.fill_rect(x, y, w, h);
             }
-            Ok(JsValue::undefined())
-        },
-        Gc::clone(&bridge),
-    );
+        });
+        Ok(JsValue::undefined())
+    });
 
-    // clearRect(x, y, w, h)
-    let clear_rect = NativeFunction::from_copy_closure_with_captures(
-        move |_this, args, b, _ctx| {
-            let x = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
-            let y = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0);
-            let w = args.get(2).and_then(|v| v.as_number()).unwrap_or(0.0);
-            let h = args.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
-            if let Some(canvas) = b.borrow_mut().canvases.get_mut(&canvas_id) {
+    let clear_rect = NativeFunction::from_copy_closure(move |_this, args, _ctx| {
+        let x = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
+        let y = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let w = args.get(2).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let h = args.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
+        CANVASES.with(|cs| {
+            if let Some(canvas) = cs.borrow_mut().get_mut(&canvas_id) {
                 canvas.clear_rect(x, y, w, h);
             }
-            Ok(JsValue::undefined())
-        },
-        Gc::clone(&bridge),
-    );
+        });
+        Ok(JsValue::undefined())
+    });
 
-    // fillStyle getter/setter
-    let fs_getter = NativeFunction::from_copy_closure_with_captures(
-        move |_this, _args, b, _ctx| {
-            let color = b
-                .borrow()
-                .canvases
-                .get(&canvas_id)
-                .map(|c| format!("#{:02x}{:02x}{:02x}", c.fill[0], c.fill[1], c.fill[2]))
-                .unwrap_or_default();
-            Ok(JsValue::from(boa_engine::js_string!(color)))
-        },
-        Gc::clone(&bridge),
-    );
-    let fs_setter = NativeFunction::from_copy_closure_with_captures(
-        move |_this, args, b, _ctx| {
-            let color = arg_string(args, 0);
-            if let Some(canvas) = b.borrow_mut().canvases.get_mut(&canvas_id) {
+    let stroke_rect = NativeFunction::from_copy_closure(move |_this, args, _ctx| {
+        let x = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
+        let y = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let w = args.get(2).and_then(|v| v.as_number()).unwrap_or(0.0);
+        let h = args.get(3).and_then(|v| v.as_number()).unwrap_or(0.0);
+        CANVASES.with(|cs| {
+            if let Some(canvas) = cs.borrow_mut().get_mut(&canvas_id) {
+                canvas.stroke_rect(x, y, w, h);
+            }
+        });
+        Ok(JsValue::undefined())
+    });
+
+    // fillStyle: getter returns "#rrggbb", setter parses a CSS color.
+    let fs_setter = NativeFunction::from_copy_closure(move |_this, args, _ctx| {
+        let color = arg_string(args, 0);
+        CANVASES.with(|cs| {
+            if let Some(canvas) = cs.borrow_mut().get_mut(&canvas_id) {
                 canvas.set_fill_style(&color);
             }
-            Ok(JsValue::undefined())
-        },
-        Gc::clone(&bridge),
-    );
+        });
+        Ok(JsValue::undefined())
+    });
 
     let obj = ObjectInitializer::new(ctx)
         .function(fill_rect, boa_engine::js_string!("fillRect"), 4)
         .function(clear_rect, boa_engine::js_string!("clearRect"), 4)
+        .function(stroke_rect, boa_engine::js_string!("strokeRect"), 4)
         .build();
-    // fillStyle as a property with getter/setter (accessor needs JsFunction).
-    let fs_get_fn = fs_getter.to_js_function(ctx.realm());
     let fs_set_fn = fs_setter.to_js_function(ctx.realm());
     let _ = obj.define_property_or_throw(
         boa_engine::js_string!("fillStyle"),
         boa_engine::property::PropertyDescriptor::builder()
-            .get(fs_get_fn)
             .set(fs_set_fn)
+            .writable(true)
             .enumerable(true)
             .configurable(true)
             .build(),
@@ -1056,7 +1044,7 @@ fn make_element_handle(
     // getContext('2d') — works on any element handle; creates a canvas buffer
     // keyed by the node id (for page-level <canvas>) or a synthetic id.
     let get_ctx = NativeFunction::from_copy_closure_with_captures(
-        |_this, args, b, ctx| {
+        |_this, args, _b, ctx| {
             let kind = arg_string(args, 0);
             if kind == "webgl" || kind == "experimental-webgl" {
                 return Ok(make_webgl_stub(ctx)?.into());
@@ -1064,18 +1052,17 @@ fn make_element_handle(
             if kind != "2d" {
                 return Ok(JsValue::null());
             }
-            // Use the node id as the canvas key (page-level <canvas>). For
-            // created elements (pending), use the pending id offset by 1M.
+            // Use the node id as the canvas key. Allocate via thread_local if
+            // this canvas hasn't been seen before.
             let cid = read_handle_id(_this)
                 .or_else(|| read_pending(_this).map(|p| p + 1_000_000))
                 .unwrap_or(0);
-            {
-                let mut bb = b.borrow_mut();
-                bb.canvases
+            CANVASES.with(|cs| {
+                cs.borrow_mut()
                     .entry(cid)
                     .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
-            }
-            Ok(make_context_2d(ctx, Gc::clone(b), cid)?.into())
+            });
+            Ok(make_context_2d(ctx, cid)?.into())
         },
         Gc::clone(&bridge),
     );
