@@ -70,6 +70,7 @@ impl JsRuntime {
         let mut ctx = Context::default();
         let bridge = Gc::new(GcRefCell::new(Bridge::default()));
         let _ = install_document(&mut ctx, Gc::clone(&bridge));
+        install_console(&mut ctx);
         Self {
             ctx,
             listeners: HashMap::new(),
@@ -331,6 +332,50 @@ fn read_pending(v: &JsValue) -> Option<u32> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Install a `console` global with `log`/`warn`/`error`/`info` methods that
+/// forward to tracing.
+fn install_console(ctx: &mut Context) {
+    use boa_engine::object::ObjectInitializer;
+    let mk = |level: &'static str| {
+        NativeFunction::from_copy_closure_with_captures(
+            move |_this, args, _caps, ctx| {
+                let parts: Vec<String> = args
+                    .iter()
+                    .map(|v| {
+                        v.to_string(ctx)
+                            .map(|s| s.to_std_string_escaped())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let msg = parts.join(" ");
+                match level {
+                    "warn" => tracing::warn!("[js] {}", msg),
+                    "error" => tracing::error!("[js] {}", msg),
+                    _ => tracing::info!("[js] {}", msg),
+                }
+                Ok(JsValue::undefined())
+            },
+            (),
+        )
+    };
+    let console = ObjectInitializer::new(ctx)
+        .function(mk("log"), boa_engine::js_string!("log"), 1)
+        .function(mk("info"), boa_engine::js_string!("info"), 1)
+        .function(mk("warn"), boa_engine::js_string!("warn"), 1)
+        .function(mk("error"), boa_engine::js_string!("error"), 1)
+        .build();
+    let global = ctx.global_object();
+    let _ = global.insert_property(
+        boa_engine::js_string!("console"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(console)
+            .writable(true)
+            .enumerable(false)
+            .configurable(true)
+            .build(),
+    );
+}
+
 fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResult<()> {
     use boa_engine::object::ObjectInitializer;
 
