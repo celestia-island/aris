@@ -153,10 +153,11 @@ impl JsRuntime {
         self.apply_ops(doc);
         // Refresh the id snapshot + query index by rebuilding the bridge.
         let (by_tag, by_class, by_id_q) = collect_query_index(doc);
+        let doc_snapshot = collect_node_props(doc);
         {
             let mut b = self.bridge.borrow_mut();
             b.ids = collect_ids(doc);
-            b.node_props = collect_node_props(doc);
+            b.node_props = doc_snapshot.clone();
             b.query_by_tag = by_tag;
             b.query_by_class = by_class;
             b.query_by_id = by_id_q;
@@ -169,6 +170,12 @@ impl JsRuntime {
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
         install_window(&mut self.ctx, url.to_string());
+
+        // Populate document.documentElement / body / head with real element
+        // handles from the bridge snapshots.
+        self.populate_doc_elements(&doc_snapshot);
+
+        let _ = url;
         if !script_src.trim().is_empty() {
             let _ = self.ctx.eval(Source::from_bytes(script_src));
         }
@@ -317,6 +324,75 @@ impl JsRuntime {
 
     pub fn bridge(&self) -> &Gc<GcRefCell<Bridge>> {
         &self.bridge
+    }
+
+    /// Find html/body/head elements in node_props and populate document's
+    /// documentElement/body/head properties with real element handles.
+    fn populate_doc_elements(&mut self, snapshot: &HashMap<u32, NodePropSnapshot>) {
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+
+        // Find html, body, head node IDs.
+        let mut html_id: Option<u32> = None;
+        let mut head_id: Option<u32> = None;
+        let mut body_id: Option<u32> = None;
+        for (&nid, s) in snapshot.iter() {
+            let tag_lower = s.tag_name.to_lowercase();
+            if tag_lower == "html" && html_id.is_none() {
+                html_id = Some(nid);
+            } else if tag_lower == "head" && head_id.is_none() {
+                head_id = Some(nid);
+            } else if tag_lower == "body" && body_id.is_none() {
+                body_id = Some(nid);
+            }
+        }
+
+        let doc_val = self
+            .ctx
+            .global_object()
+            .get(boa_engine::js_string!("document"), &mut self.ctx)
+            .ok();
+        let Some(doc_obj) = doc_val.as_ref().and_then(|v| v.as_object()).cloned() else {
+            return;
+        };
+
+        let bridge = Gc::clone(&self.bridge);
+
+        // Helper: create + populate handle for a node.
+        let mk = |nid: u32, snap: &NodePropSnapshot, ctx: &mut Context| {
+            let handle =
+                make_element_handle(ctx, Gc::clone(&bridge), nid, None).unwrap_or_else(|_| {
+                    boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
+                });
+            populate_props(&handle, snap, ctx);
+            handle.into()
+        };
+
+        if let Some(nid) = html_id {
+            if let Some(s) = snapshot.get(&nid) {
+                let handle = mk(nid, s, &mut self.ctx);
+                let _ =
+                    doc_obj.insert_property(boa_engine::js_string!("documentElement"), pd(handle));
+            }
+        }
+        if let Some(nid) = head_id {
+            if let Some(s) = snapshot.get(&nid) {
+                let handle = mk(nid, s, &mut self.ctx);
+                let _ = doc_obj.insert_property(boa_engine::js_string!("head"), pd(handle));
+            }
+        }
+        if let Some(nid) = body_id {
+            if let Some(s) = snapshot.get(&nid) {
+                let handle = mk(nid, s, &mut self.ctx);
+                let _ = doc_obj.insert_property(boa_engine::js_string!("body"), pd(handle));
+            }
+        }
     }
 
     /// Count red pixels across all canvas buffers (for testing).
@@ -1223,7 +1299,11 @@ fn install_dom_globals(ctx: &mut Context) {
             )),
         );
 
-        // document.documentElement, document.body, document.head — return first matching element.
+        // document.documentElement, document.body, document.head — these are
+        // populated lazily by the bridge's node_props snapshots. We install
+        // getters that look up the bridge for html/body/head nodes.
+        // For now, set them to null; they'll be overwritten by populate_doc_props
+        // in bind_and_run if the document has the relevant elements.
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("documentElement"),
             pd(JsValue::null()),
