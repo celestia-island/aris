@@ -335,6 +335,7 @@ impl App {
         let caret_on = self.chrome.caret_visible();
         let hover_region = self.chrome.hover;
         let menu = self.context_menu.clone();
+        let scrollbar = self.scrollbar_metrics();
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -415,12 +416,45 @@ impl App {
             }
         }
 
+        // Scrollbar for the document viewport, if the page is scrollable.
+        if let Some(sb) = scrollbar {
+            draw_scrollbar(&mut buffer, buf_w, buf_h, chrome_phys, scale, sb);
+        }
+
         // Context menu overlay (top-most).
         if let Some(menu) = &menu {
             draw_context_menu(&mut buffer, buf_w, buf_h, scale, menu);
         }
 
         let _ = buffer.present();
+    }
+
+    /// Compute scrollbar geometry (content height, scroll position) for the
+    /// document's scrollable root, if the content overflows the viewport.
+    fn scrollbar_metrics(&self) -> Option<ScrollbarMetrics> {
+        let doc = self.doc.as_ref()?;
+        // Find the body element (the usual scroll container).
+        let body_id = doc.tree().iter().find_map(|(id, n)| {
+            n.element_data()
+                .filter(|e| format!("{:?}", e.name.local).contains("'body'"))
+                .map(|_| id)
+        })?;
+        let body = doc.get_node(body_id)?;
+        let chrome_phys = (CHROME_HEIGHT_CSS * self.scale_factor as f32).round();
+        let viewport_h_css =
+            (self.phys_size.1 as f32 / self.scale_factor as f32) - CHROME_HEIGHT_CSS;
+        // Content height: the body's content box height.
+        let content_h = body.final_layout.size.height;
+        if content_h <= viewport_h_css + 1.0 {
+            return None; // not scrollable
+        }
+        let scroll_y = body.scroll_offset.y as f32;
+        Some(ScrollbarMetrics {
+            content_h,
+            viewport_h: viewport_h_css,
+            scroll_y,
+            _chrome_phys: chrome_phys,
+        })
     }
 
     fn update_cursor_icon(&mut self) {
@@ -1600,6 +1634,57 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u32, u32, u32) {
         ((g1 + m) * 255.0).round() as u32,
         ((b1 + m) * 255.0).round() as u32,
     )
+}
+
+/// Scrollbar geometry, in CSS px.
+struct ScrollbarMetrics {
+    content_h: f32,
+    viewport_h: f32,
+    scroll_y: f32,
+    _chrome_phys: f32,
+}
+
+/// Draw a vertical scrollbar on the right edge of the page area.
+fn draw_scrollbar(
+    buffer: &mut [u32],
+    buf_w: usize,
+    buf_h: usize,
+    chrome_phys: usize,
+    scale: f32,
+    sb: ScrollbarMetrics,
+) {
+    let track_w = (10.0 * scale) as usize;
+    let track_x = buf_w.saturating_sub(track_w);
+    let track_y = chrome_phys;
+    let track_h = buf_h.saturating_sub(chrome_phys);
+    if track_h == 0 || sb.content_h <= 0.0 {
+        return;
+    }
+    // Track background (subtle).
+    let track_bg = 0x111118;
+    for y in 0..track_h {
+        for x in 0..track_w {
+            let idx = (track_y + y) * buf_w + (track_x + x);
+            if idx < buffer.len() {
+                buffer[idx] = track_bg;
+            }
+        }
+    }
+    // Thumb: height proportional to viewport/content, position by scroll_y.
+    let thumb_h = ((sb.viewport_h / sb.content_h) * track_h as f32) as usize;
+    let thumb_h = thumb_h.max(track_w); // never smaller than the track width
+    let max_scroll = (sb.content_h - sb.viewport_h).max(1.0);
+    let thumb_y = track_y + ((sb.scroll_y / max_scroll) * (track_h - thumb_h) as f32) as usize;
+    let thumb_color = 0x6E6E80;
+    let thumb_h = thumb_h.min(track_h);
+    for y in 0..thumb_h {
+        for x in 0..track_w {
+            let idx = (thumb_y + y) * buf_w + (track_x + x);
+            if idx < buffer.len() {
+                buffer[idx] = thumb_color;
+            }
+        }
+    }
 }
 
 /// Fill an axis-aligned rounded rectangle.
