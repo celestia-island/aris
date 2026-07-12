@@ -189,7 +189,24 @@ impl App {
             doc_config.base_url = Some(url.to_string());
         }
 
-        let mut doc = HtmlDocument::from_html(&self.current_html, doc_config);
+        // Pre-process inline <script> blocks via Boa when the `js` feature is
+        // enabled. This is SSR-style: scripts run once at load time, and any
+        // `document.write` output is spliced into the HTML before parsing.
+        // Full interactive DOM↔JS binding (onclick etc.) is a larger project.
+        let html_to_parse: String = if cfg!(feature = "js") {
+            #[cfg(feature = "js")]
+            {
+                run_scripts_ssr(&self.current_html)
+            }
+            #[cfg(not(feature = "js"))]
+            {
+                self.current_html.clone()
+            }
+        } else {
+            self.current_html.clone()
+        };
+
+        let mut doc = HtmlDocument::from_html(&html_to_parse, doc_config);
         doc.resolve(0.0);
         self.doc = Some(doc);
         self.needs_rerender = true;
@@ -261,9 +278,10 @@ impl App {
             if let Some(href) = node.attr(blitz_dom::local_name!("href")) {
                 // Resolve relative to the base URL for display.
                 if let Some(base) = &self.current_url
-                    && let Ok(resolved) = base.join(href) {
-                        return Some(resolved.to_string());
-                    }
+                    && let Ok(resolved) = base.join(href)
+                {
+                    return Some(resolved.to_string());
+                }
                 return Some(href.to_string());
             }
             id = node.parent?;
@@ -1275,6 +1293,23 @@ fn render_text_strip(text: &str, width: usize, height: usize, scale: f32) -> Opt
         width,
         height,
     })
+}
+
+/// Run inline `<script>` blocks via Boa and splice any `document.write`
+/// output into the HTML before it is parsed. SSR-style only: scripts execute
+/// once at load; there is no interactive DOM binding yet.
+#[cfg(feature = "js")]
+fn run_scripts_ssr(html: &str) -> String {
+    let result = aris_js::execute_scripts(html);
+    for e in &result.errors {
+        tracing::warn!("[js] {}", e);
+    }
+    if let Some(body) = result.document_props.get("body") {
+        if !body.is_empty() {
+            return html.replace("</body>", &format!("{}\n</body>", body));
+        }
+    }
+    html.to_string()
 }
 
 // ── Built-in pages ──────────────────────────────────────────

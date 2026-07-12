@@ -188,12 +188,12 @@ dev-shell:
 
 # ── Development ────────────────────────────────────────────
 
-# Launch the aris browser in a winit desktop window.
+# Launch the aris browser in a winit desktop window (with JS + networking).
 dev:
-    cargo run -p aris-render --features "desktop winit" --bin aris_browser
+    cargo run -p aris-render --features "desktop winit js" --bin aris_browser
 
 dev-html FILE:
-    cargo run -p aris-render --features "desktop winit" --bin aris_browser -- {{FILE}}
+    cargo run -p aris-render --features "desktop winit js" --bin aris_browser -- {{FILE}}
 
 dev-render:
     cargo run -p aris-render --bin render_lagrange -- tests/fixtures/lagrange_index.html
