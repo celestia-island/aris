@@ -26,6 +26,9 @@ pub mod js_interactive;
 #[cfg(feature = "js")]
 pub mod js_runtime;
 
+#[cfg(feature = "js")]
+pub mod canvas;
+
 #[cfg(feature = "render")]
 use anyrender::ImageRenderer;
 

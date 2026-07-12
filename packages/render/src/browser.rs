@@ -481,7 +481,7 @@ fn data_uri_base64_decode(input: &str) -> Result<Bytes, String> {
         count += 6;
         if count >= 8 {
             count -= 8;
-            buf.push(((bits >> count) as u8));
+            buf.push((bits >> count) as u8);
         }
     }
     Ok(Bytes::from(buf))
