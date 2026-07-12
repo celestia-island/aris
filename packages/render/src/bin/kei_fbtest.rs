@@ -91,11 +91,18 @@ fn main() {
         draw_line(&mut buf, 425, 20, 200, accent);
         draw_line(&mut buf, 427, 20, 200, accent);
 
-        let m = b"kei_fbtest: writing to fb0\n";
+        let m = b"kei_fbtest: writing rows to fb0\n";
         unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
 
-        use std::io::Write;
-        let _ = file.write_all(&buf);
+        // Write row-by-row (each row = width*4 bytes) to avoid large single
+        // write() calls that hang in the kernel fb write_at path.
+        use std::io::{Seek, Write};
+        let row_bytes = width * bpp;
+        for y in 0..height {
+            let _ = file.seek(std::io::SeekFrom::Start((y * row_bytes) as u64));
+            let row_start = y * row_bytes;
+            let _ = file.write_all(&buf[row_start..row_start + row_bytes]);
+        }
 
         let m = b"kei_fbtest: done\n";
         unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
