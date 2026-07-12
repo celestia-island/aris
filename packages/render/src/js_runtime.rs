@@ -464,6 +464,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
                 boa_engine::js_string!(name.clone()),
                 boa_engine::property::PropertyDescriptor::builder()
                     .value(JsValue::from(cb.clone()))
+                    .enumerable(false)
                     .writable(true)
                     .configurable(true)
                     .build(),
@@ -493,6 +494,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
                 boa_engine::js_string!(name.clone()),
                 boa_engine::property::PropertyDescriptor::builder()
                     .value(JsValue::from(cb.clone()))
+                    .enumerable(false)
                     .writable(true)
                     .configurable(true)
                     .build(),
@@ -509,6 +511,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
         boa_engine::property::PropertyDescriptor::builder()
             .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), set_timeout).build())
             .writable(true)
+            .enumerable(false)
             .configurable(true)
             .build(),
     );
@@ -519,6 +522,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), set_interval).build(),
             )
             .writable(true)
+            .enumerable(false)
             .configurable(true)
             .build(),
     );
