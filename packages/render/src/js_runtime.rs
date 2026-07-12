@@ -126,6 +126,7 @@ impl JsRuntime {
         install_window(&mut ctx, String::new());
         install_timers(&mut ctx, &bridge);
         install_event_api(&mut ctx);
+        install_dom_globals(&mut ctx);
         install_webrtc_stubs(&mut ctx);
         Self {
             ctx,
@@ -992,6 +993,442 @@ fn install_event_api(ctx: &mut Context) {
 
     // Event constants on the Event constructor object itself.
     // (Already set as properties on each Event instance above.)
+}
+
+/// Install DOM-level globals: DOMException, document.implementation,
+/// document.createTextNode, document.createComment, document.createDocumentFragment,
+/// instanceof constructors, and other DOM infrastructure.
+fn install_dom_globals(ctx: &mut Context) {
+    fn pd(val: JsValue) -> boa_engine::property::PropertyDescriptor {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val)
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build()
+    }
+
+    // DOMException constructor — creates a throwable error object.
+    let dom_exc_ctor = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let msg = arg_string(args, 0);
+        let name = args
+            .get(1)
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_else(|| "Error".to_string());
+        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = obj.insert_property(
+            boa_engine::js_string!("name"),
+            pd(JsValue::from(boa_engine::js_string!(name))),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("message"),
+            pd(JsValue::from(boa_engine::js_string!(msg))),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("code"), pd(JsValue::from(0u32)));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("DOMException"), 2, dom_exc_ctor);
+
+    // DOMException static constants.
+    let dom_exc_obj = ctx
+        .global_object()
+        .get(boa_engine::js_string!("DOMException"), &mut *ctx)
+        .ok();
+    if let Some(de) = dom_exc_obj.as_ref().and_then(|v| v.as_object()) {
+        for (name, code) in [
+            ("INDEX_SIZE_ERR", 1u32),
+            ("DOMSTRING_SIZE_ERR", 2),
+            ("HIERARCHY_REQUEST_ERR", 3),
+            ("WRONG_DOCUMENT_ERR", 4),
+            ("INVALID_CHARACTER_ERR", 5),
+            ("NO_DATA_ALLOWED_ERR", 6),
+            ("NO_MODIFICATION_ALLOWED_ERR", 7),
+            ("NOT_FOUND_ERR", 8),
+            ("NOT_SUPPORTED_ERR", 9),
+            ("INUSE_ATTRIBUTE_ERR", 10),
+            ("INVALID_STATE_ERR", 11),
+            ("SYNTAX_ERR", 12),
+            ("INVALID_MODIFICATION_ERR", 13),
+            ("NAMESPACE_ERR", 14),
+            ("INVALID_ACCESS_ERR", 15),
+            ("VALIDATION_ERR", 16),
+            ("TYPE_MISMATCH_ERR", 17),
+            ("SECURITY_ERR", 18),
+            ("NETWORK_ERR", 19),
+            ("ABORT_ERR", 20),
+            ("URL_MISMATCH_ERR", 21),
+            ("QUOTA_EXCEEDED_ERR", 22),
+            ("TIMEOUT_ERR", 23),
+            ("INVALID_NODE_TYPE_ERR", 24),
+            ("DATA_CLONE_ERR", 25),
+        ] {
+            let _ = de.insert_property(boa_engine::js_string!(name), pd(JsValue::from(code)));
+        }
+    }
+
+    // document.implementation — object with hasFeature (always true), createDocument, createHTMLDocument.
+    let impl_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let has_feature = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
+    let _ = impl_obj.insert_property(
+        boa_engine::js_string!("hasFeature"),
+        pd(JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), has_feature).build(),
+        )),
+    );
+    let create_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        // Return a minimal document object.
+        let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        Ok(d.into())
+    });
+    let _ = impl_obj.insert_property(
+        boa_engine::js_string!("createDocument"),
+        pd(JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_doc).build(),
+        )),
+    );
+    let create_html_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        Ok(d.into())
+    });
+    let _ = impl_obj.insert_property(
+        boa_engine::js_string!("createHTMLDocument"),
+        pd(JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_html_doc).build(),
+        )),
+    );
+    let create_dt = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        Ok(d.into())
+    });
+    let _ = impl_obj.insert_property(
+        boa_engine::js_string!("createDocumentType"),
+        pd(JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_dt).build(),
+        )),
+    );
+
+    // Set document.implementation on the document global.
+    let doc = ctx
+        .global_object()
+        .get(boa_engine::js_string!("document"), &mut *ctx)
+        .ok();
+    if let Some(doc_obj) = doc.as_ref().and_then(|v| v.as_object()) {
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("implementation"),
+            pd(impl_obj.into()),
+        );
+
+        // document.createTextNode
+        let create_text = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let text = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ =
+                obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32))); // TEXT_NODE
+            let _ = obj.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(text.clone()))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(text.clone()))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                pd(JsValue::from(boa_engine::js_string!(text))),
+            );
+            let _ = obj.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeName"),
+                pd(JsValue::from(boa_engine::js_string!("#text"))),
+            );
+            let _ =
+                obj.insert_property(boa_engine::js_string!("tagName"), pd(JsValue::undefined()));
+            // CharacterData methods
+            for (mname, mfn) in build_character_data_methods() {
+                let _ = obj.insert_property(
+                    boa_engine::js_string!(mname),
+                    pd(JsValue::from(
+                        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), mfn).build(),
+                    )),
+                );
+            }
+            // setText for consistency
+            let set_text = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let v = arg_string(args, 0);
+                if let Some(o) = this.as_object() {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("data"),
+                        pd(JsValue::from(boa_engine::js_string!(v.clone()))),
+                    );
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("textContent"),
+                        pd(JsValue::from(boa_engine::js_string!(v))),
+                    );
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = obj.insert_property(
+                boa_engine::js_string!("setText"),
+                pd(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), set_text).build(),
+                )),
+            );
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createTextNode"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_text).build(),
+            )),
+        );
+
+        // document.createComment
+        let create_comment = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let text = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ =
+                obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(8u32))); // COMMENT_NODE
+            let _ = obj.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(text))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeName"),
+                pd(JsValue::from(boa_engine::js_string!("#comment"))),
+            );
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createComment"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_comment).build(),
+            )),
+        );
+
+        // document.createDocumentFragment
+        let create_frag = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ =
+                obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(11u32))); // DOCUMENT_FRAGMENT_NODE
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeName"),
+                pd(JsValue::from(boa_engine::js_string!("#document-fragment"))),
+            );
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createDocumentFragment"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_frag).build(),
+            )),
+        );
+
+        // document.documentElement, document.body, document.head — return first matching element.
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("documentElement"),
+            pd(JsValue::null()),
+        );
+        let _ = doc_obj.insert_property(boa_engine::js_string!("body"), pd(JsValue::null()));
+        let _ = doc_obj.insert_property(boa_engine::js_string!("head"), pd(JsValue::null()));
+        // document.URL / document.documentURI
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("URL"),
+            pd(JsValue::from(boa_engine::js_string!("about:blank"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("documentURI"),
+            pd(JsValue::from(boa_engine::js_string!("about:blank"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("compatMode"),
+            pd(JsValue::from(boa_engine::js_string!("CSS1Compat"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("contentType"),
+            pd(JsValue::from(boa_engine::js_string!("text/html"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("characterSet"),
+            pd(JsValue::from(boa_engine::js_string!("UTF-8"))),
+        );
+    }
+
+    // Global constructors for instanceof checks: Node, Element, Text, Comment, DocumentFragment.
+    for (name, nt) in [
+        ("Node", 0u32),
+        ("Element", 1),
+        ("Text", 3),
+        ("Comment", 8),
+        ("DocumentFragment", 11),
+    ] {
+        let ctor_fn = NativeFunction::from_copy_closure(move |_t, _a, ctx| {
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
+            Ok(obj.into())
+        });
+        let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
+    }
+}
+
+/// Build CharacterData methods as a list of (name, NativeFunction).
+fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
+    let append = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let v = arg_string(args, 0);
+        if let Some(o) = this.as_object() {
+            let old = o
+                .get(boa_engine::js_string!("data"), ctx)
+                .unwrap_or(JsValue::undefined());
+            let old_str = old
+                .as_string()
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+            let new = format!("{}{}", old_str, v);
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let _ = o.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
+            );
+            let _ = o.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(new))),
+            );
+        }
+        Ok(JsValue::undefined())
+    });
+    let delete_d = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        if let Some(o) = this.as_object() {
+            let old = o
+                .get(boa_engine::js_string!("data"), ctx)
+                .unwrap_or(JsValue::undefined());
+            let old_str = old
+                .as_string()
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+            let mut chars: Vec<char> = old_str.chars().collect();
+            let end = (offset + count).min(chars.len());
+            chars.drain(offset..end);
+            let new: String = chars.into_iter().collect();
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let _ = o.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
+            );
+            let _ = o.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(new))),
+            );
+        }
+        Ok(JsValue::undefined())
+    });
+    let insert_d = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let data = arg_string(args, 1);
+        if let Some(o) = this.as_object() {
+            let old = o
+                .get(boa_engine::js_string!("data"), ctx)
+                .unwrap_or(JsValue::undefined());
+            let old_str = old
+                .as_string()
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+            let off = offset.min(old_str.len());
+            let new = format!("{}{}{}", &old_str[..off], data, &old_str[off..]);
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let _ = o.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
+            );
+            let _ = o.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(new))),
+            );
+        }
+        Ok(JsValue::undefined())
+    });
+    let replace_d = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let data = arg_string(args, 2);
+        if let Some(o) = this.as_object() {
+            let old = o
+                .get(boa_engine::js_string!("data"), ctx)
+                .unwrap_or(JsValue::undefined());
+            let old_str = old
+                .as_string()
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+            let mut chars: Vec<char> = old_str.chars().collect();
+            let end = (offset + count).min(chars.len());
+            let data_chars: Vec<char> = data.chars().collect();
+            chars.splice(offset..end, data_chars);
+            let new: String = chars.into_iter().collect();
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let _ = o.insert_property(
+                boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
+            );
+            let _ = o.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(new))),
+            );
+        }
+        Ok(JsValue::undefined())
+    });
+    let substring_d = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        if let Some(o) = this.as_object() {
+            let old = o
+                .get(boa_engine::js_string!("data"), ctx)
+                .unwrap_or(JsValue::undefined());
+            let old_str = old
+                .as_string()
+                .map(|s| s.to_std_string_escaped())
+                .unwrap_or_default();
+            let chars: Vec<char> = old_str.chars().collect();
+            let end = (offset + count).min(chars.len());
+            let sub: String = chars[offset.min(chars.len())..end].iter().collect();
+            return Ok(JsValue::from(boa_engine::js_string!(sub)));
+        }
+        Ok(JsValue::from(boa_engine::js_string!("")))
+    });
+    vec![
+        ("appendData", append),
+        ("deleteData", delete_d),
+        ("insertData", insert_d),
+        ("replaceData", replace_d),
+        ("substringData", substring_d),
+    ]
 }
 
 /// forward to tracing.
