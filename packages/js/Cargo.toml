@@ -8,9 +8,4 @@ description = "Boa JS engine integration for aris HMI"
 
 [dependencies]
 tracing.workspace = true
-# Keep Boa at 0.20: Boa 0.21 pins icu_normalizer ~2.0.0, which conflicts with
-# blitz-dom/parley's icu_normalizer ^2.1.1 in the same workspace. Boa 0.20
-# uses icu 1.x (different major), so it coexists cleanly. The toolchain bump
-# to 1.91 (stable) lets 0.20 compile too — its regress backend uses let-chains
-# that need rustc >= 1.88.
 boa_engine = "=0.20.0"
