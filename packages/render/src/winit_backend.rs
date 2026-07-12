@@ -467,15 +467,7 @@ impl App {
 
         // Find-in-page: highlight matches + draw the find bar.
         if let Some(f) = &find {
-            draw_find_overlays(
-                &mut buffer,
-                buf_w,
-                buf_h,
-                chrome_phys,
-                scale,
-                css_w,
-                f,
-            );
+            draw_find_overlays(&mut buffer, buf_w, buf_h, chrome_phys, scale, css_w, f);
         }
 
         // Context menu overlay (top-most).
@@ -1186,9 +1178,7 @@ impl ApplicationHandler for App {
                                 }
                                 return;
                             }
-                            Key::Character(c)
-                                if !ctrl && !alt && !c.is_empty() =>
-                            {
+                            Key::Character(c) if !ctrl && !alt && !c.is_empty() => {
                                 let q = self
                                     .find
                                     .as_ref()
@@ -2109,7 +2099,7 @@ fn draw_find_overlays(
     let border = 0x3A3A4E;
     for ry in 0..bh {
         for rx in 0..bw {
-            let idx = by * buf_w + bx + rx + ry * 0;
+            let _idx = by * buf_w + bx + rx + ry * 0;
             let idx = (by + ry) * buf_w + (bx + rx);
             if idx < buffer.len() {
                 let on_border = rx == 0 || rx == bw - 1 || ry == 0 || ry == bh - 1;
@@ -2121,10 +2111,15 @@ fn draw_find_overlays(
     let label = if find.query.is_empty() {
         "Find:".to_string()
     } else {
-        format!("Find: {} ({}/{})", find.query, find.active + 1, find.matches.len())
+        format!(
+            "Find: {} ({}/{})",
+            find.query,
+            find.active + 1,
+            find.matches.len()
+        )
     };
     let label_w = bw.saturating_sub(16);
-    let label_h = (bar_h_css as f32 * 0.6) as usize;
+    let label_h = (bar_h_css * 0.6) as usize;
     if let Some(strip) = render_text_strip_colored(&label, label_w, label_h, scale, "#9aa5ce") {
         let tx = bx + 8;
         let ty = by + (bh.saturating_sub(strip.height)) / 2;
