@@ -122,6 +122,7 @@ fn run_window_impl(
         last_mouse: (0.0, 0.0),
         modifiers: ModifiersState::default(),
         context_menu: None,
+        should_quit: false,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -151,6 +152,8 @@ struct App {
     modifiers: ModifiersState,
     /// Right-click context menu overlay, when open.
     context_menu: Option<ContextMenu>,
+    /// Set by the close button; checked in about_to_wait to exit the loop.
+    should_quit: bool,
 }
 
 impl App {
@@ -472,9 +475,12 @@ impl App {
                     .region_at(self.last_mouse.0, self.last_mouse.1, self.css_size().0);
             match region {
                 Some(ChromeRegion::Address) => WinitCursorIcon::Text,
-                Some(ChromeRegion::Back | ChromeRegion::Forward | ChromeRegion::Reload) => {
-                    WinitCursorIcon::Pointer
-                }
+                Some(
+                    ChromeRegion::Back
+                    | ChromeRegion::Forward
+                    | ChromeRegion::Reload
+                    | ChromeRegion::Close,
+                ) => WinitCursorIcon::Pointer,
                 None => WinitCursorIcon::Default,
             }
         } else {
@@ -656,6 +662,9 @@ impl App {
                 }
             }
             ChromeAction::RedrawOnly => {}
+            ChromeAction::CloseWindow => {
+                self.should_quit = true;
+            }
         }
     }
 
@@ -1031,7 +1040,12 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Close button requested exit.
+        if self.should_quit {
+            event_loop.exit();
+            return;
+        }
         // Drain async loads / redraw requests from providers.
         if self.state.redraw_requested.swap(false, Ordering::Relaxed) {
             self.process_loads();
@@ -1067,6 +1081,7 @@ struct ChromeLayout {
     reload: (f32, f32, f32, f32),
     favicon: (f32, f32, f32, f32),
     address: (f32, f32, f32, f32),
+    close: (f32, f32, f32, f32),
 }
 
 impl ChromeLayout {
@@ -1084,7 +1099,9 @@ impl ChromeLayout {
         x += btn + 8.0;
         let favicon = (x, (h - fav) / 2.0, fav, fav);
         x += fav + 6.0;
-        let addr_w = (width - x - pad).max(60.0);
+        // Reserve a close button on the far right.
+        let close = (width - pad - btn, (h - btn) / 2.0, btn, btn);
+        let addr_w = (close.0 - x - 6.0).max(60.0);
         let address = (x, (h - 26.0) / 2.0, addr_w, 26.0);
         Self {
             back,
@@ -1092,6 +1109,7 @@ impl ChromeLayout {
             reload,
             favicon,
             address,
+            close,
         }
     }
 }
@@ -1101,6 +1119,7 @@ enum ChromeAction {
     GoForward,
     Reload,
     Navigate(String),
+    CloseWindow,
     RedrawOnly,
 }
 
@@ -1110,6 +1129,7 @@ pub enum ChromeRegion {
     Forward,
     Reload,
     Address,
+    Close,
 }
 
 /// A right-click context menu overlay. `None` means no menu is open.
@@ -1211,6 +1231,8 @@ impl ChromeState {
             Some(ChromeRegion::Forward)
         } else if in_rect(l.reload) {
             Some(ChromeRegion::Reload)
+        } else if in_rect(l.close) {
+            Some(ChromeRegion::Close)
         } else if in_rect(l.address) {
             Some(ChromeRegion::Address)
         } else {
@@ -1223,6 +1245,7 @@ impl ChromeState {
             ChromeRegion::Back => Some(ChromeAction::GoBack),
             ChromeRegion::Forward => Some(ChromeAction::GoForward),
             ChromeRegion::Reload => Some(ChromeAction::Reload),
+            ChromeRegion::Close => Some(ChromeAction::CloseWindow),
             ChromeRegion::Address => {
                 self.address_focused = true;
                 self.caret_blink = true;
@@ -1562,6 +1585,38 @@ pub fn draw_chrome(
         let fh = to_phys(rect.3) as i32;
         let radius = (fw as f32 * 0.22) as i32;
         fill_rounded_rect(buffer, buf_w, fx, fy, fw, fh, radius, color);
+    }
+
+    // Close button: Lucide X (M18 6 6 18 / M6 6l12 12), reddish on hover.
+    {
+        let rect = layout.close;
+        let color = if hover == Some(ChromeRegion::Close) {
+            0xF7768E // red on hover
+        } else {
+            btn_color
+        };
+        let (ox, oy, unit, _w, _h) = icon_origin(rect, scale);
+        let stroke = 1.8 * unit;
+        draw_line(
+            buffer,
+            buf_w,
+            ox + 18.0 * unit,
+            oy + 6.0 * unit,
+            ox + 6.0 * unit,
+            oy + 18.0 * unit,
+            stroke,
+            color,
+        );
+        draw_line(
+            buffer,
+            buf_w,
+            ox + 6.0 * unit,
+            oy + 6.0 * unit,
+            ox + 18.0 * unit,
+            oy + 18.0 * unit,
+            stroke,
+            color,
+        );
     }
 
     // Address bar background + border.
