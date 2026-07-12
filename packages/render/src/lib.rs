@@ -137,6 +137,16 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     use parley::FontContext;
     use parley::fontique::{Collection, CollectionOptions, SourceCache};
     use std::sync::Arc;
+
+    // On kei, Arc<dyn AsRef<[u8]>> vtable dispatch produces NULL. Use a
+    // concrete wrapper struct to avoid trait object vtable entirely.
+    struct FontBytes(&'static [u8]);
+    impl AsRef<[u8]> for FontBytes {
+        fn as_ref(&self) -> &[u8] {
+            self.0
+        }
+    }
+
     let mut font_ctx = FontContext {
         source_cache: SourceCache::new_shared(),
         collection: Collection::new(CollectionOptions {
@@ -146,7 +156,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     };
     font_ctx
         .collection
-        .register_fonts(Blob::new(Arc::new(EMBEDDED_FONT) as _), None);
+        .register_fonts(Blob::new(Arc::new(FontBytes(EMBEDDED_FONT)) as _), None);
 
     let viewport = Viewport {
         window_size: (width, height),
