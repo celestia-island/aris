@@ -384,6 +384,11 @@ impl App {
         let menu = self.context_menu.clone();
         let scrollbar = self.scrollbar_metrics();
         let find = self.find.clone();
+        let status_text = if self.state.navigating.load(Ordering::Relaxed) {
+            Some("Loading…".to_string())
+        } else {
+            self.hovered_link_url()
+        };
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -472,6 +477,11 @@ impl App {
         // Find-in-page: highlight matches + draw the find bar.
         if let Some(f) = &find {
             draw_find_overlays(&mut buffer, buf_w, buf_h, chrome_phys, scale, css_w, f);
+        }
+
+        // Bottom status bar: shows the hovered link URL or a loading message.
+        if let Some(text) = &status_text {
+            draw_status_bar(&mut buffer, buf_w, buf_h, scale, css_w, text);
         }
 
         // Context menu overlay (top-most).
@@ -2076,6 +2086,39 @@ fn draw_scrollbar(
                 buffer[idx] = thumb_color;
             }
         }
+    }
+}
+
+/// Draw a slim bottom status bar showing the link URL or a loading message.
+fn draw_status_bar(
+    buffer: &mut [u32],
+    buf_w: usize,
+    buf_h: usize,
+    scale: f32,
+    _css_w: f32,
+    text: &str,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let bar_h = (18.0 * scale) as usize;
+    let by = buf_h.saturating_sub(bar_h);
+    let bg = 0x1F2030;
+    for y in 0..bar_h {
+        for x in 0..buf_w {
+            let idx = (by + y) * buf_w + x;
+            if idx < buffer.len() {
+                buffer[idx] = bg;
+            }
+        }
+    }
+    // Render the status text.
+    let label_w = buf_w.saturating_sub(16);
+    let label_h = (bar_h as f32 * 0.7) as usize;
+    if let Some(strip) = render_text_strip_colored(text, label_w, label_h, scale, "#9aa5ce") {
+        let tx = 8;
+        let ty = by + (bar_h.saturating_sub(strip.height)) / 2;
+        blit_strip(buffer, buf_w, buf_h, &strip, tx, ty);
     }
 }
 
