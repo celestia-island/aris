@@ -251,6 +251,9 @@ impl App {
         }
         self.base_xrgb = xrgb;
         self.needs_rerender = false;
+        let _ = std::env::var("ARIS_DUMP_FRAME").map(|path| {
+            let _ = std::fs::write(&path, &frame.rgba);
+        });
     }
 
     /// Hovered node rect in page CSS px.
