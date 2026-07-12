@@ -58,6 +58,9 @@ struct Bridge {
     /// Scratch the addEventListener closure writes (node, global-name) pairs
     /// into; drained into JsRuntime.listeners after each script/listener run.
     new_listeners: Vec<(u32, String)>,
+    /// Scratch for setTimeout/setInterval: (global_name, delay_ms, interval_ms).
+    /// Drained into JsRuntime.timers after each script/listener run.
+    new_timers: Vec<(String, u64, Option<u64>)>,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
@@ -84,7 +87,7 @@ impl JsRuntime {
         let _ = install_document(&mut ctx, Gc::clone(&bridge));
         install_console(&mut ctx);
         install_window(&mut ctx, String::new());
-        install_timers(&mut ctx);
+        install_timers(&mut ctx, &bridge);
         Self {
             ctx,
             listeners: HashMap::new(),
@@ -121,6 +124,7 @@ impl JsRuntime {
             b.next_pending = 0;
         }
         self.listeners.clear();
+        self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
         install_window(&mut self.ctx, url.to_string());
@@ -129,6 +133,7 @@ impl JsRuntime {
         }
         self.apply_ops(doc);
         self.harvest_listeners();
+        self.harvest_timers();
     }
 
     /// Fire any click listeners attached to `node_id`. Each listener function
@@ -163,6 +168,7 @@ impl JsRuntime {
         }
         self.apply_ops(doc);
         self.harvest_listeners();
+        self.harvest_timers();
     }
 
     /// Move pending ops from the bridge into the document.
@@ -183,6 +189,69 @@ impl JsRuntime {
         for (node_id, name) in new {
             self.listeners.entry(node_id).or_default().push(name);
         }
+    }
+
+    /// Move pending timers from the bridge into self.timers, setting their fire
+    /// time relative to now.
+    fn harvest_timers(&mut self) {
+        let new = std::mem::take(&mut self.bridge.borrow_mut().new_timers);
+        let now = std::time::Instant::now();
+        for (name, delay_ms, interval_ms) in new {
+            let delay = std::time::Duration::from_millis(delay_ms);
+            let interval = interval_ms.map(std::time::Duration::from_millis);
+            self.timers.push(Timer {
+                fire_at: now + delay,
+                source: name,
+                interval,
+            });
+        }
+    }
+
+    /// Fire any expired timers. Returns true if any timer fired (DOM may have
+    /// changed). setInterval timers are rescheduled.
+    pub fn poll_timers(&mut self, doc: &mut BaseDocument) -> bool {
+        if self.timers.is_empty() {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        let mut fired = false;
+        let mut reschedule = Vec::new();
+        // Collect expired timers (drain in reverse to keep indices valid).
+        let mut i = 0;
+        while i < self.timers.len() {
+            if self.timers[i].fire_at <= now {
+                let timer = self.timers.remove(i);
+                // Look up and call the stashed global function.
+                let key = boa_engine::js_string!(timer.source.clone());
+                let func_val = self.ctx.global_object().get(key, &mut self.ctx);
+                if let Ok(v) = func_val
+                    && let Some(func) = v.as_object()
+                    && func.is_callable()
+                {
+                    let _ = func.call(&JsValue::undefined(), &[], &mut self.ctx);
+                    fired = true;
+                }
+                // Reschedule if this was a setInterval.
+                if let Some(interval) = timer.interval {
+                    reschedule.push(Timer {
+                        fire_at: now + interval,
+                        source: timer.source,
+                        interval: Some(interval),
+                    });
+                }
+            } else {
+                i += 1;
+            }
+        }
+        self.timers.extend(reschedule);
+        // Apply any ops the timer callbacks recorded.
+        if fired {
+            self.apply_ops(doc);
+            self.harvest_listeners();
+        self.harvest_timers();
+            self.harvest_timers();
+        }
+        fired
     }
 
     pub fn ctx_mut(&mut self) -> &mut Context {
@@ -372,30 +441,67 @@ fn read_pending(v: &JsValue) -> Option<u32> {
 #[allow(clippy::too_many_arguments)]
 /// Install a `window` global with `location` (href getter) and `alert`.
 /// Install `setTimeout` and `setInterval`. The callback is stashed as a named
-/// global; the fire time + source are recorded for the runtime's poll_timers.
-fn install_timers(ctx: &mut Context) {
-    use boa_engine::property::Attribute;
-
-    // setTimeout(fn, ms) — register a one-shot timer.
+/// global and the timer metadata is recorded in the bridge's `new_timers` for
+/// the runtime to harvest and poll.
+fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
     let set_timeout = NativeFunction::from_copy_closure_with_captures(
-        |_this, args, _caps, ctx| {
-            // We can't capture the JsRuntime here (no &mut), so stash the
-            // callback as a global and let poll_timers pick it up. But we have
-            // no way to communicate back to JsRuntime from here without a
-            // shared capture. Use the approach: assign the callback to a global
-            // name, and push a marker the runtime reads. Since we can't, just
-            // eval the callback immediately (simplified: no actual delay).
-            // For a real timer we'd need to share state — skip for now, just
-            // invoke the callback synchronously.
-            if let Some(cb) = args.first().and_then(|v| v.as_object())
-                && cb.is_callable() {
-                    let _ = cb.call(&JsValue::undefined(), &[], ctx);
-                }
+        |_this, args, b, ctx| {
+            let Some(cb) = args.first().and_then(|v| v.as_object()) else {
+                return Ok(JsValue::from(0));
+            };
+            let delay = args
+                .get(1)
+                .and_then(|v| v.as_number())
+                .map(|n| n.max(0.0) as u64)
+                .unwrap_or(0);
+            // Stash the callback as a named global so it survives past this call.
+            let name = {
+                let mut bb = b.borrow_mut();
+                bb.next_pending += 1;
+                format!("__aris_timer_{}", bb.next_pending)
+            };
+            let _ = ctx.global_object().insert_property(
+                boa_engine::js_string!(name.clone()),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(cb.into())
+                    .writable(true)
+                    .configurable(true)
+                    .build(),
+            );
+            b.borrow_mut().new_timers.push((name, delay, None));
             Ok(JsValue::from(0))
         },
-        (),
+        Gc::clone(bridge),
     );
-    let set_interval = set_timeout.clone();
+
+    let set_interval = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let Some(cb) = args.first().and_then(|v| v.as_object()) else {
+                return Ok(JsValue::from(0));
+            };
+            let delay = args
+                .get(1)
+                .and_then(|v| v.as_number())
+                .map(|n| n.max(1.0) as u64)
+                .unwrap_or(1);
+            let name = {
+                let mut bb = b.borrow_mut();
+                bb.next_pending += 1;
+                format!("__aris_timer_{}", bb.next_pending)
+            };
+            let _ = ctx.global_object().insert_property(
+                boa_engine::js_string!(name.clone()),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(cb.into())
+                    .writable(true)
+                    .configurable(true)
+                    .build(),
+            );
+            b.borrow_mut().new_timers.push((name, delay, Some(delay)));
+            Ok(JsValue::from(0))
+        },
+        Gc::clone(bridge),
+    );
 
     let global = ctx.global_object();
     let _ = global.insert_property(
@@ -416,7 +522,6 @@ fn install_timers(ctx: &mut Context) {
             .configurable(true)
             .build(),
     );
-    let _ = Attribute::all();
 }
 
 fn install_window(ctx: &mut Context, url: String) {
