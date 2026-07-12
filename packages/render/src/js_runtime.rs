@@ -164,9 +164,25 @@ impl JsRuntime {
     /// applied after all listeners run.
     pub fn fire_click(&mut self, doc: &mut BaseDocument, node_id: u32) {
         self.apply_ops(doc);
+
+        // 1. Inline onclick attribute: evaluate it in the runtime.
+        let onclick_src = doc.get_node(node_id as usize).and_then(|n| {
+            n.attr(blitz_dom::local_name!("onclick"))
+                .map(|s| s.to_string())
+        });
+        if let Some(src) = onclick_src {
+            self.bind_and_run(doc, &src);
+        }
+
+        // 2. Registered addEventListener listeners.
         let names = match self.listeners.get(&node_id) {
             Some(n) => n.clone(),
-            None => return,
+            None => {
+                self.apply_ops(doc);
+                self.harvest_listeners();
+                self.harvest_timers();
+                return;
+            }
         };
         for name in names {
             // Look up the stashed global function and call it with a fresh

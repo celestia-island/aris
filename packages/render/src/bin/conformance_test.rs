@@ -312,9 +312,10 @@ fn js_dom_tests() -> Vec<TestResult> {
             "onclick handler sets textContent via setText",
             "https://dom.spec.whatwg.org/#dom-node-textcontent",
             {
-                let mut doc = make_doc(
-                    r#"<button onclick="document.getElementById('out').setText('Hello')">btn</button><div id="out">empty</div>"#,
-                );
+                let html = r#"<button onclick="document.getElementById('out').setText('Hello')">btn</button><div id="out">empty</div>"#;
+                let mut doc = make_doc(html);
+                let mut rt = aris_render::js_runtime::JsRuntime::new();
+                rt.bind_and_run(&mut doc, "");
                 let btn = doc
                     .tree()
                     .iter()
@@ -324,7 +325,7 @@ fn js_dom_tests() -> Vec<TestResult> {
                             .unwrap_or(false)
                     })
                     .map(|(id, _)| id)
-                    .unwrap_or(0);
+                    .unwrap_or(0) as u32;
                 let out = doc
                     .tree()
                     .iter()
@@ -335,7 +336,7 @@ fn js_dom_tests() -> Vec<TestResult> {
                     .get_node(out)
                     .map(|n| n.text_content())
                     .unwrap_or_default();
-                aris_render::js_interactive::run_onclick(&mut doc, btn);
+                rt.fire_click(&mut doc, btn);
                 let after = doc
                     .get_node(out)
                     .map(|n| n.text_content())
