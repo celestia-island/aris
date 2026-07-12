@@ -29,6 +29,9 @@ pub mod js_runtime;
 #[cfg(feature = "js")]
 pub mod canvas;
 
+#[cfg(feature = "webgl")]
+pub mod webgl;
+
 #[cfg(feature = "render")]
 use anyrender::ImageRenderer;
 
@@ -133,7 +136,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     // Create a FontContext with the embedded font registered.
     // Use Blob::from_vec to avoid Arc<dyn AsRef<[u8]>> vtable dispatch
     // (which produces NULL on kei's VM).
-    
+
     use parley::FontContext;
     use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
