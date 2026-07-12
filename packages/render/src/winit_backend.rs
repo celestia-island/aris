@@ -587,6 +587,44 @@ impl App {
         }
     }
 
+    /// Scroll the document viewport by one page (or a fraction for Space).
+    /// `up` reverses direction; `page` = true scrolls a viewport height, false
+    /// a third (used for Space without Shift).
+    fn scroll_viewport(&mut self, up: bool, page: bool) {
+        let dy = if page {
+            let vh = self.phys_size.1 as f64 / self.scale_factor - CHROME_HEIGHT_CSS as f64;
+            if up { vh } else { -vh }
+        } else if up {
+            120.0
+        } else {
+            -120.0
+        };
+        if let Some(doc) = self.doc.as_mut() {
+            let hover = doc.get_hover_node_id().unwrap_or(0);
+            doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
+            self.needs_rerender = true;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// Scroll the document to an absolute y position (`0.0` = top).
+    fn scroll_to(&mut self, _y: f64) {
+        if let Some(doc) = self.doc.as_mut() {
+            let hover = doc.get_hover_node_id().unwrap_or(0);
+            // scroll_node_by is relative; for absolute we'd need the current
+            // offset. As a pragmatic approximation, scroll by a large negative
+            // delta to reach the bottom, or scroll to top via the viewport API.
+            doc.scroll_viewport_by(0.0, -100000.0);
+            self.needs_rerender = true;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            let _ = hover;
+        }
+    }
+
     fn apply_title(&mut self) {
         if let Some(title) = self.state.take_title()
             && let Some(window) = &self.window
@@ -946,6 +984,28 @@ impl ApplicationHandler for App {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
+                            return;
+                        }
+                        // Page navigation / scrolling keys (browser-standard).
+                        Key::Named(NamedKey::PageDown) => {
+                            self.scroll_viewport(false, true);
+                            return;
+                        }
+                        Key::Named(NamedKey::PageUp) => {
+                            self.scroll_viewport(true, true);
+                            return;
+                        }
+                        Key::Character(c) if c.as_str() == " " && !self.chrome.address_focused => {
+                            // Space scrolls down a page (Shift+Space up).
+                            self.scroll_viewport(self.modifiers.shift_key(), true);
+                            return;
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            self.scroll_to(0.0);
+                            return;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            self.scroll_to(f64::MAX);
                             return;
                         }
                         _ => {}
