@@ -38,7 +38,7 @@ fn main() {
     let config = aris_render::RenderConfig {
         width,
         height: page_h,
-        scale: scale,
+        scale,
     };
     let frame = aris_render::render_html(html, &config).expect("render");
 
@@ -77,6 +77,44 @@ fn main() {
         false, // can_forward
         None,  // no hover
     );
+
+    // Optionally render a context menu overlay (4th arg = "menu").
+    let render_menu = std::env::args().any(|a| a == "menu");
+    if render_menu {
+        let menu = aris_render::winit_backend::ContextMenu {
+            x: 60.0,
+            y: 60.0,
+            items: vec![
+                (
+                    "Back".into(),
+                    aris_render::winit_backend::ContextMenuAction::GoBack,
+                    true,
+                ),
+                (
+                    "Forward".into(),
+                    aris_render::winit_backend::ContextMenuAction::GoForward,
+                    false,
+                ),
+                (
+                    "Reload".into(),
+                    aris_render::winit_backend::ContextMenuAction::Reload,
+                    true,
+                ),
+                (
+                    "Copy page URL".into(),
+                    aris_render::winit_backend::ContextMenuAction::CopyUrl,
+                    true,
+                ),
+                (
+                    "Edit address".into(),
+                    aris_render::winit_backend::ContextMenuAction::FocusAddress,
+                    true,
+                ),
+            ],
+            hover: Some(0),
+        };
+        aris_render::winit_backend::draw_context_menu(&mut buf, xw, height as usize, scale, &menu);
+    }
 
     // Encode to PNG (24bpp RGB for max compatibility).
     let _ = NonZeroU32::new(1);

@@ -581,31 +581,31 @@ impl App {
 
     /// Open a right-click context menu at (x, y), populated based on context.
     fn open_context_menu(&mut self, x: f32, y: f32) {
-        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
-        items.push((
-            if self.state.can_go_back() {
-                "Back".to_string()
-            } else {
-                "Back (dim)".to_string()
-            },
-            ContextMenuAction::GoBack,
-        ));
-        items.push((
-            if self.state.can_go_forward() {
-                "Forward".to_string()
-            } else {
-                "Forward (dim)".to_string()
-            },
-            ContextMenuAction::GoForward,
-        ));
-        items.push(("Reload".to_string(), ContextMenuAction::Reload));
+        let mut items: Vec<(String, ContextMenuAction, bool)> = Vec::new();
+        let can_back = self.state.can_go_back();
+        let can_fwd = self.state.can_go_forward();
+        items.push(("Back".to_string(), ContextMenuAction::GoBack, can_back));
+        items.push(("Forward".to_string(), ContextMenuAction::GoForward, can_fwd));
+        items.push(("Reload".to_string(), ContextMenuAction::Reload, true));
         if self.hovered_link_url().is_some() {
-            items.push(("Copy link address".to_string(), ContextMenuAction::CopyLink));
+            items.push((
+                "Copy link address".to_string(),
+                ContextMenuAction::CopyLink,
+                true,
+            ));
         }
         if self.current_url.is_some() {
-            items.push(("Copy page URL".to_string(), ContextMenuAction::CopyUrl));
+            items.push((
+                "Copy page URL".to_string(),
+                ContextMenuAction::CopyUrl,
+                true,
+            ));
         }
-        items.push(("Edit address".to_string(), ContextMenuAction::FocusAddress));
+        items.push((
+            "Edit address".to_string(),
+            ContextMenuAction::FocusAddress,
+            true,
+        ));
         self.context_menu = Some(ContextMenu {
             x,
             y,
@@ -991,19 +991,19 @@ pub enum ChromeRegion {
 
 /// A right-click context menu overlay. `None` means no menu is open.
 #[derive(Clone)]
-struct ContextMenu {
+pub struct ContextMenu {
     /// Top-left of the menu, in CSS px relative to the window.
-    x: f32,
-    y: f32,
-    /// Items: (label, action).
-    items: Vec<(String, ContextMenuAction)>,
+    pub x: f32,
+    pub y: f32,
+    /// Items: (label, action, enabled).
+    pub items: Vec<(String, ContextMenuAction, bool)>,
     /// Index of the currently hovered item, if any.
-    hover: Option<usize>,
+    pub hover: Option<usize>,
 }
 
 /// What a context-menu item does when clicked.
 #[derive(Clone, Copy, PartialEq)]
-enum ContextMenuAction {
+pub enum ContextMenuAction {
     GoBack,
     GoForward,
     Reload,
@@ -1034,9 +1034,9 @@ impl ContextMenu {
         if x < self.x || x > self.x + self.width() {
             return None;
         }
-        for (i, (_, action)) in self.items.iter().enumerate() {
+        for (i, (_, action, enabled)) in self.items.iter().enumerate() {
             let iy = self.y + 4.0 + i as f32 * h;
-            if y >= iy && y < iy + h {
+            if y >= iy && y < iy + h && *enabled {
                 return Some(*action);
             }
         }
@@ -1614,8 +1614,8 @@ fn draw_circle(
     }
 }
 
-/// Draw the right-click context menu overlay.
-fn draw_context_menu(
+/// Draw the right-click context menu overlay, with text labels.
+pub fn draw_context_menu(
     buffer: &mut [u32],
     buf_w: usize,
     buf_h: usize,
@@ -1663,6 +1663,68 @@ fn draw_context_menu(
             }
         }
     }
+
+    // Text labels for each item, rendered via the same Vello pipeline as the
+    // address bar so they're crisp at any DPI.
+    let text_pad = (10.0 * scale) as usize;
+    let label_w = mw as usize - text_pad * 2;
+    let item_h_us = item_h as usize;
+    let css_h = (ContextMenu::item_height() * 0.6) as usize;
+    for (i, (label, _action, enabled)) in menu.items.iter().enumerate() {
+        let color = if *enabled { "#d5d5e8" } else { "#5a5a6e" };
+        let strip = render_text_strip_colored(label, label_w, css_h, scale, color);
+        if let Some(strip) = strip {
+            // Vertically center within the item row.
+            let ty = (my as usize)
+                + (4.0 * scale) as usize
+                + i * item_h_us
+                + (item_h_us.saturating_sub(strip.height)) / 2;
+            let tx = mx as usize + text_pad;
+            blit_strip(buffer, buf_w, buf_h, &strip, tx, ty);
+        }
+    }
+}
+
+/// Blit a TextStrip's alpha-weighted pixels into the XRGB buffer.
+fn blit_strip(
+    buffer: &mut [u32],
+    buf_w: usize,
+    buf_h: usize,
+    strip: &TextStrip,
+    tx: usize,
+    ty: usize,
+) {
+    for (row, chunk) in strip.rgba.chunks_exact(strip.width * 4).enumerate() {
+        let y = ty + row;
+        if y >= buf_h {
+            break;
+        }
+        for (col, px) in chunk.chunks_exact(4).enumerate() {
+            let a = px[3] as u32;
+            if a == 0 {
+                continue;
+            }
+            let x = tx + col;
+            if x >= buf_w {
+                break;
+            }
+            let idx = y * buf_w + x;
+            if idx >= buffer.len() {
+                break;
+            }
+            let tr = px[0] as u32;
+            let tg = px[1] as u32;
+            let tb = px[2] as u32;
+            let dst = buffer[idx];
+            let dr = (dst >> 16) & 0xFF;
+            let dg = (dst >> 8) & 0xFF;
+            let db = dst & 0xFF;
+            let nr = (tr * a + dr * (255 - a)) / 255;
+            let ng = (tg * a + dg * (255 - a)) / 255;
+            let nb = (tb * a + db * (255 - a)) / 255;
+            buffer[idx] = (nr << 16) | (ng << 8) | nb;
+        }
+    }
 }
 
 /// A rendered text strip (RGBA) plus its dimensions.
@@ -1679,6 +1741,17 @@ struct TextStrip {
 /// `scale` is the window scale factor; the strip is rendered at physical
 /// resolution so text stays sharp on HiDPI displays.
 fn render_text_strip(text: &str, width: usize, height: usize, scale: f32) -> Option<TextStrip> {
+    render_text_strip_colored(text, width, height, scale, "#9aa5ce")
+}
+
+/// As [`render_text_strip`] but with a custom CSS color (e.g. "#d5d5e8").
+fn render_text_strip_colored(
+    text: &str,
+    width: usize,
+    height: usize,
+    scale: f32,
+    color: &str,
+) -> Option<TextStrip> {
     use blitz_dom::DocumentConfig;
     use blitz_html::HtmlDocument;
     use blitz_traits::shell::Viewport;
@@ -1696,12 +1769,13 @@ fn render_text_strip(text: &str, width: usize, height: usize, scale: f32) -> Opt
         "<!DOCTYPE html><html><head><style>\
          html,body{{margin:0;padding:0;background:transparent;overflow:hidden;\
          width:100%;height:100%;}}\
-         .t{{font-family:system-ui,sans-serif;font-size:13px;color:#9aa5ce;\
+         .t{{font-family:system-ui,sans-serif;font-size:13px;color:{color};\
          white-space:nowrap;overflow:hidden;height:{h}px;line-height:{h}px;\
          display:block;padding:0;}}\
          </style></head><body><div class=\"t\">{}</div></body></html>",
         crate::browser::escape_html(text),
-        h = css_h
+        h = css_h,
+        color = color
     );
     let viewport = Viewport {
         window_size: (width as u32, height as u32),
