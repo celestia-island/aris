@@ -123,6 +123,7 @@ fn run_window_impl(
         modifiers: ModifiersState::default(),
         context_menu: None,
         should_quit: false,
+        scrollbar_drag: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -154,6 +155,8 @@ struct App {
     context_menu: Option<ContextMenu>,
     /// Set by the close button; checked in about_to_wait to exit the loop.
     should_quit: bool,
+    /// When dragging the scrollbar, the Y where the drag started (CSS px).
+    scrollbar_drag: Option<f32>,
 }
 
 impl App {
@@ -631,6 +634,29 @@ impl App {
         }
     }
 
+    /// Scroll the document so the scrollbar thumb matches a drag position.
+    /// `drag_y` is the cursor Y in CSS px.
+    fn scroll_to_drag(&mut self, drag_y: f32) {
+        let Some(sb) = self.scrollbar_metrics() else {
+            return;
+        };
+        let css_h = self.phys_size.1 as f32 / self.scale_factor as f32;
+        let track_top = CHROME_HEIGHT_CSS;
+        let track_h = (css_h - track_top).max(1.0);
+        let frac = ((drag_y - track_top) / track_h).clamp(0.0, 1.0);
+        let target = frac * (sb.content_h - sb.viewport_h).max(0.0);
+        let delta = sb.scroll_y - target;
+        if delta.abs() > 0.5
+            && let Some(doc) = self.doc.as_mut() {
+                let hover = doc.get_hover_node_id().unwrap_or(0);
+                doc.scroll_node_by(hover, delta as f64, 0.0, &mut |_| {});
+                self.needs_rerender = true;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+    }
+
     fn apply_title(&mut self) {
         if let Some(title) = self.state.take_title()
             && let Some(window) = &self.window
@@ -825,6 +851,14 @@ impl ApplicationHandler for App {
                 let css_y = (position.y / self.scale_factor) as f32;
                 self.last_mouse = (css_x, css_y);
                 let css_w = self.css_size().0;
+                // If dragging the scrollbar, scroll to follow the cursor.
+                if self.scrollbar_drag.is_some() {
+                    self.scroll_to_drag(css_y);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 // If the context menu is open, track hover over its items.
                 if let Some(menu) = self.context_menu.as_mut() {
                     let h = ContextMenu::item_height();
@@ -866,6 +900,8 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 if mstate != ElementState::Pressed {
+                    // Mouse release ends a scrollbar drag.
+                    self.scrollbar_drag = None;
                     return;
                 }
                 let (cx, cy) = self.last_mouse;
@@ -903,6 +939,15 @@ impl ApplicationHandler for App {
                     return;
                 }
                 self.chrome.address_focused = false;
+                // Scrollbar hit-test: the rightmost 10 CSS px of the page area.
+                if cx >= css_w - 10.0 && cx < css_w {
+                    self.scrollbar_drag = Some(cy);
+                    self.scroll_to_drag(cy);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 let page_y = cy - CHROME_HEIGHT_CSS;
                 self.dispatch_pointer(cx, page_y, true);
                 self.dispatch_pointer(cx, page_y, false);
