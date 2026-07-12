@@ -130,22 +130,12 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     use blitz_html::HtmlDocument;
     use blitz_traits::shell::Viewport;
 
-    // Create a FontContext with the embedded font registered, and pass it
-    // to Blitz DOM so it doesn't create its own (which triggers fontique's
-    // global init that NULL-derefs on kei's musl/VM environment).
+    // Create a FontContext with the embedded font registered.
+    // Use Blob::from_vec to avoid Arc<dyn AsRef<[u8]>> vtable dispatch
+    // (which produces NULL on kei's VM).
     use linebender_resource_handle::Blob;
     use parley::FontContext;
     use parley::fontique::{Collection, CollectionOptions, SourceCache};
-    use std::sync::Arc;
-
-    // On kei, Arc<dyn AsRef<[u8]>> vtable dispatch produces NULL. Use a
-    // concrete wrapper struct to avoid trait object vtable entirely.
-    struct FontBytes(&'static [u8]);
-    impl AsRef<[u8]> for FontBytes {
-        fn as_ref(&self) -> &[u8] {
-            self.0
-        }
-    }
 
     let mut font_ctx = FontContext {
         source_cache: SourceCache::new_shared(),
@@ -156,7 +146,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     };
     font_ctx
         .collection
-        .register_fonts(Blob::new(Arc::new(FontBytes(EMBEDDED_FONT)) as _), None);
+        .register_fonts(Blob::from_vec(EMBEDDED_FONT.to_vec()), None);
 
     let viewport = Viewport {
         window_size: (width, height),
