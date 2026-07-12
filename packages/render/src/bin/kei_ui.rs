@@ -5,22 +5,7 @@ fn main() {
     let msg = b"kei_ui: starting\n";
     unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len() as _); }
 
-    let html = r#"<!DOCTYPE html><html><head><style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #282C34; color: #ABB2BF; height: 100vh; }
-.header { background: #61AFEF; height: 60px; padding: 0 24px; }
-.header h1 { color: white; font-size: 24px; }
-.content { padding: 24px; }
-.card { background: #21252B; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-.card h2 { color: #61AFEF; font-size: 20px; }
-.stat { background: #E06C75; color: white; padding: 8px 16px; }
-</style></head><body>
-<div class="header"><h1>kei OS</h1></div>
-<div class="content">
-<div class="card"><h2>System Status</h2><p>aris-render pipeline OK</p></div>
-<div class="card"><h2>Resources</h2><span class="stat">CPU 12%</span></div>
-</div>
-</body></html>"#;
+    let html = r#"<!DOCTYPE html><html><body style="background:#282C34"><div style="background:#61AFEF;width:100%;height:60px"></div></body></html>"#;
 
     let config = aris_render::RenderConfig {
         width: 640,
