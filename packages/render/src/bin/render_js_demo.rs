@@ -23,7 +23,7 @@ document.write("<p style='color:#f9e2af;font-size:20px;margin:20px'>This text wa
         scale: 1.0,
     };
 
-    if let Err(e) = aris_render::winit_backend::run_window_with_js(html, &config) {
+    if let Err(e) = aris_render::winit_backend::run_window(html, &config) {
         eprintln!("Window error: {:?}", e);
         std::process::exit(1);
     }

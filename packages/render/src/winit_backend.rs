@@ -1304,10 +1304,10 @@ fn run_scripts_ssr(html: &str) -> String {
     for e in &result.errors {
         tracing::warn!("[js] {}", e);
     }
-    if let Some(body) = result.document_props.get("body") {
-        if !body.is_empty() {
-            return html.replace("</body>", &format!("{}\n</body>", body));
-        }
+    if let Some(body) = result.document_props.get("body")
+        && !body.is_empty()
+    {
+        return html.replace("</body>", &format!("{}\n</body>", body));
     }
     html.to_string()
 }

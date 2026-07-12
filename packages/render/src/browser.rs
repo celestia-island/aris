@@ -102,12 +102,23 @@ impl BrowserState {
     }
 
     /// Record that a document was loaded at `url` (called by the render loop
-    /// after it swaps in the new `HtmlDocument`). This truncates any
-    /// forward-history and appends the new entry.
+    /// after it swaps in the new `HtmlDocument`).
+    ///
+    /// For a *forward* navigation (new entry) this truncates any forward-history
+    /// and appends. For a *history* navigation (back/forward/reload), where
+    /// `go_back`/`go_forward` already moved the index and the URL matches the
+    /// entry at that index, we only update `current_url` without truncating —
+    /// otherwise we'd wipe the forward history we just stepped back from.
     pub fn commit_load(&self, url: Url) {
         let mut history = self.history.lock().unwrap();
         let mut idx = self.history_idx.lock().unwrap();
-        // Truncate any forward entries (we navigated from the middle of history).
+        // History navigation: the index was moved by go_back/go_forward and the
+        // URL matches the entry there. Don't truncate — just record current_url.
+        if history.get(*idx).is_some_and(|entry| *entry == url) {
+            *self.current_url.lock().unwrap() = Some(url);
+            return;
+        }
+        // Forward navigation: drop any forward entries and append.
         history.truncate(*idx + 1);
         history.push(url.clone());
         *idx = history.len() - 1;
