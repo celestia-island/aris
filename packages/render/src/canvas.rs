@@ -13,7 +13,7 @@
 #![cfg(feature = "js")]
 
 /// A Canvas 2D backing store: RGBA pixels + current fill color.
-#[derive(Clone)]
+#[derive(Clone, boa_gc::Trace, boa_gc::Finalize)]
 pub struct Canvas2D {
     pub width: u32,
     pub height: u32,
