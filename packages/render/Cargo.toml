@@ -66,7 +66,7 @@ fbdev = []
 render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley", "dep:keyboard-types", "dep:png"]
 # Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
-desktop = ["blitz-dom/system_fonts"]
+desktop = ["blitz-dom/system_fonts", "blitz-dom/svg"]
 # Execute <script> blocks via Boa before rendering.
 js = ["dep:aris-js", "dep:boa_engine", "dep:boa_gc"]
 # Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with

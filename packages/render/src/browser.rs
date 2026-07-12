@@ -442,8 +442,49 @@ fn load_url_bytes(client: &reqwest::blocking::Client, url: &Url) -> Result<Bytes
             let data = std::fs::read(&path).map_err(|e| e.to_string())?;
             Ok(Bytes::from(data))
         }
+        "data" => {
+            // data:[<mediatype>][;base64],<data>
+            let body = url.as_str().trim_start_matches("data:");
+            let (meta, data) = body.split_once(',').unwrap_or(("", body));
+            if meta.contains("base64") {
+                let bytes = data_uri_base64_decode(data);
+                bytes.map_err(|e| format!("base64 decode: {}", e))
+            } else {
+                // URL-decoded raw data.
+                Ok(Bytes::from(
+                    url::form_urlencoded::parse(data.as_bytes())
+                        .flat_map(|(k, _)| k.as_bytes().to_vec())
+                        .collect::<Vec<u8>>(),
+                ))
+            }
+        }
         _ => Err(format!("unsupported scheme: {}", url.scheme())),
     }
+}
+
+/// Decode a base64 string (data: URI payload) into bytes.
+fn data_uri_base64_decode(input: &str) -> Result<Bytes, String> {
+    // Simple base64 decoder (avoids pulling a base64 crate).
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut buf = Vec::with_capacity(input.len() * 3 / 4);
+    let mut bits: u32 = 0;
+    let mut count = 0;
+    for ch in input.bytes() {
+        if ch == b'=' || ch == b'\n' || ch == b'\r' {
+            continue;
+        }
+        let val = TABLE
+            .iter()
+            .position(|&c| c == ch)
+            .ok_or("invalid base64 char")? as u32;
+        bits = (bits << 6) | val;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            buf.push(((bits >> count) as u8));
+        }
+    }
+    Ok(Bytes::from(buf))
 }
 
 /// Fetch a URL as UTF-8 text (for top-level document loads). If the response is
