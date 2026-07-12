@@ -49,6 +49,8 @@ http = { version = "1", optional = true }
 # keyboard-types is a transitive dep of blitz-traits; we need it directly to
 # construct BlitzKeyEvent values when forwarding winit key events to blitz-dom.
 keyboard-types = { version = "0.7", optional = true }
+# Session persistence (history save/load).
+serde_json = { version = "1", optional = true }
 
 # Dev-only: PNG encoding for the offscreen_chrome test binary.
 png = { version = "0.17", optional = true }
@@ -67,4 +69,4 @@ desktop = ["blitz-dom/system_fonts"]
 js = ["dep:aris-js", "dep:boa_engine", "dep:boa_gc"]
 # Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with
 # a full browser chrome: address bar, back/forward, HTTP networking.
-winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http"]
+winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http", "dep:serde_json"]

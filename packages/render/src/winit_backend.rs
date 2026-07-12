@@ -139,6 +139,14 @@ fn run_window_impl(
         should_quit: false,
         scrollbar_drag: None,
     };
+    // If no explicit URL was given, try restoring the last session.
+    if initial_url.is_none() {
+        let saved = state.load_session();
+        if let Some(last_url) = saved.last() {
+            // Restore by navigating to the last URL — history is already set.
+            state.navigate_input(last_url.as_str());
+        }
+    }
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -1127,7 +1135,12 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                for tab in &self.tabs {
+                    tab.state.save_session();
+                }
+                event_loop.exit();
+            }
             WindowEvent::ModifiersChanged(m) => {
                 self.modifiers = m.state();
             }
@@ -1539,8 +1552,11 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Close button requested exit.
+        // Close button requested exit — save session first.
         if self.should_quit {
+            for tab in &self.tabs {
+                tab.state.save_session();
+            }
             event_loop.exit();
             return;
         }

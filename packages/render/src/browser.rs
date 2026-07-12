@@ -87,6 +87,68 @@ impl BrowserState {
         }
     }
 
+    /// Path to the session file: `~/.aris/session.json`.
+    fn session_path() -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        let dir = std::path::Path::new(&home).join(".aris");
+        let _ = std::fs::create_dir_all(&dir);
+        Some(dir.join("session.json"))
+    }
+
+    /// Save the current session (history URLs) to `~/.aris/session.json`.
+    pub fn save_session(&self) {
+        let Some(path) = Self::session_path() else {
+            return;
+        };
+        let history = self.history.lock().unwrap();
+        let urls: Vec<String> = history.iter().map(|u| u.to_string()).collect();
+        let idx = *self.history_idx.lock().unwrap();
+        let session = serde_json::json!({
+            "history": urls,
+            "history_idx": idx,
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&session) {
+            let _ = std::fs::write(&path, json);
+            debug!("saved session: {} urls to {}", urls.len(), path.display());
+        }
+    }
+
+    /// Load the saved session and restore history. Returns the URLs to load
+    /// (the active entry is loaded by the caller).
+    pub fn load_session(&self) -> Vec<Url> {
+        let Some(path) = Self::session_path() else {
+            return Vec::new();
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Vec::new();
+        };
+        let mut restored = Vec::new();
+        if let Some(urls) = json.get("history").and_then(|v| v.as_array()) {
+            for u in urls {
+                if let Some(s) = u.as_str()
+                    && let Ok(url) = Url::parse(s)
+                {
+                    restored.push(url);
+                }
+            }
+        }
+        let idx = json
+            .get("history_idx")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        if !restored.is_empty() {
+            *self.history.lock().unwrap() = restored.clone();
+            *self.history_idx.lock().unwrap() = idx.min(restored.len() - 1);
+            let current = restored.get(idx).cloned();
+            *self.current_url.lock().unwrap() = current;
+        }
+        debug!("loaded session: {} urls", restored.len());
+        restored
+    }
+
     /// The URL of the currently displayed document, if any.
     pub fn current_url(&self) -> Option<Url> {
         self.current_url.lock().unwrap().clone()
