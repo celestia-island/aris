@@ -124,6 +124,8 @@ fn run_window_impl(
         context_menu: None,
         should_quit: false,
         scrollbar_drag: None,
+        #[cfg(feature = "js")]
+        js: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -157,6 +159,10 @@ struct App {
     should_quit: bool,
     /// When dragging the scrollbar, the Y where the drag started (CSS px).
     scrollbar_drag: Option<f32>,
+    /// Persistent JS runtime for <script> execution + addEventListener, when
+    /// the `js` feature is on.
+    #[cfg(feature = "js")]
+    js: Option<crate::js_runtime::JsRuntime>,
 }
 
 impl App {
@@ -221,6 +227,21 @@ impl App {
         // symptoms on HiDPI displays where layout scales unexpectedly).
         doc.add_user_agent_stylesheet("html,body{max-width:100vw;overflow-x:hidden;}");
         doc.resolve(0.0);
+
+        // With the `js` feature, run inline <script> blocks through the
+        // persistent JsRuntime so addEventListener registrations survive to be
+        // fired on click. (run_scripts_ssr already handled document.write
+        // injection above.)
+        #[cfg(feature = "js")]
+        {
+            let scripts = aris_js::extract_scripts(&self.current_html);
+            let combined = scripts.join("\n;\n");
+            let rt = self
+                .js
+                .get_or_insert_with(crate::js_runtime::JsRuntime::new);
+            rt.bind_and_run(&mut doc, &combined);
+        }
+
         self.doc = Some(doc);
         self.needs_rerender = true;
     }
@@ -554,23 +575,35 @@ impl App {
         };
         if let Some(doc) = self.doc.as_mut() {
             doc.handle_ui_event(ui);
-            // On pointer-up (the click), run any onclick JS handler and, if it
-            // mutated the DOM, re-resolve so the change is visible next frame.
-            if !pressed {
-                let target = doc.get_hover_node_id().unwrap_or(0);
-                #[cfg(feature = "js")]
+        }
+        // On pointer-up (the click), fire JS handlers. Done outside the doc
+        // borrow above so the JS runtime can mutate the document.
+        if !pressed {
+            let target = self
+                .doc
+                .as_ref()
+                .and_then(|d| d.get_hover_node_id())
+                .unwrap_or(0);
+            #[cfg(feature = "js")]
+            {
+                // onclick attribute + addEventListener listeners both go through
+                // the persistent runtime.
+                if let Some(rt) = self.js.as_mut()
+                    && let Some(doc) = self.doc.as_mut()
                 {
-                    let r = crate::js_interactive::run_onclick(doc, target);
-                    for e in &r.errors {
-                        tracing::warn!("[js] {}", e);
-                    }
-                    if r.dom_mutated {
-                        doc.resolve(0.0);
-                        self.needs_rerender = true;
-                    }
+                    // onclick attribute (inline handler): eval its source in the
+                    // runtime so it shares the document bridge.
+                    let onclick_src = doc
+                        .get_node(target)
+                        .and_then(|n| n.attr(blitz_dom::local_name!("onclick")))
+                        .map(|s| s.to_string());
+                    rt.bind_and_run(doc, onclick_src.as_deref().unwrap_or(""));
+                    // Registered click listeners.
+                    rt.fire_click(doc, target as u32);
+                    self.needs_rerender = true;
                 }
-                let _ = target;
             }
+            let _ = target;
         }
     }
 

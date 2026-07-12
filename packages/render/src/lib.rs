@@ -23,6 +23,9 @@ pub mod browser;
 #[cfg(feature = "js")]
 pub mod js_interactive;
 
+#[cfg(feature = "js")]
+pub mod js_runtime;
+
 use anyrender::ImageRenderer;
 
 /// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.

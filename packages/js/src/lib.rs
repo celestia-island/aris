@@ -129,6 +129,13 @@ fn parse_json_string_array(json: &str) -> Vec<String> {
     result
 }
 
+/// Extract the source text of all inline `<script>` blocks from `html`.
+/// Excludes external scripts (with `src=`). Public so other crates (e.g. the
+/// persistent JS runtime) can run scripts themselves.
+pub fn extract_scripts(html: &str) -> Vec<String> {
+    extract_script_blocks(html)
+}
+
 fn extract_script_blocks(html: &str) -> Vec<String> {
     let mut scripts = Vec::new();
     let mut remaining = html;
