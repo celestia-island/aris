@@ -30,6 +30,7 @@ parley = { version = "0.10", default-features = false, features = ["std"] }
 aris-js = { path = "../js", optional = true }
 # Direct Boa access for the minimal onclick DOM bridge (js feature).
 boa_engine = { version = "=0.20.0", optional = true }
+boa_gc = { version = "=0.20.0", optional = true }
 
 # Desktop windowing (optional)
 winit = { version = "0.30", optional = true }
@@ -57,7 +58,7 @@ fbdev = []
 # Disable for musl cross-compile: cargo build --no-default-features
 desktop = ["blitz-dom/system_fonts"]
 # Execute <script> blocks via Boa before rendering.
-js = ["dep:aris-js", "dep:boa_engine"]
+js = ["dep:aris-js", "dep:boa_engine", "dep:boa_gc"]
 # Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with
 # a full browser chrome: address bar, back/forward, HTTP networking.
 winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http"]

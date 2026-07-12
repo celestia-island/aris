@@ -1,34 +1,71 @@
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Minimal interactive JS for click handlers.
+//! Interactive DOM↔Boa JS bridge for click handlers.
 //!
-//! Full DOM↔Boa bindings are a large project; this module provides a focused,
-//! correct subset so the most common interactive pattern works: an element
-//! with `onclick="..."` whose script assigns to `document.getElementById(id).textContent`
-//! (or `.innerText`) or reads `document.getElementById(id).textContent`.
+//! When a click resolves to an element carrying an `onclick` attribute, the
+//! handler runs in a Boa context with a `document` object and element handles
+//! backed by the live blitz DOM. Supported operations:
 //!
-//! Strategy: run the handler source in Boa for its side effects / truthiness,
-//! AND scan the source for `document.getElementById('id').textContent = 'value'`
-//! assignments, applying them to the live blitz DOM via the mutator. Boa gives
-//! us real JS evaluation of any pure logic (arithmetic, conditionals, string
-//! concatenation) inside the right-hand side when it's a single expression we
-//! can substitute.
+//!   - `document.getElementById(id)` → element handle (or null)
+//!   - `document.createElement(tag)` → new element handle (not yet attached)
+//!   - `document.querySelector(sel)` → element handle by tag / `#id` / `.cls`
+//!   - `el.textContent = "..."` (set) and `el.setAttribute(name, value)`
+//!   - `el.appendChild(child)` — attaches a created element under a live parent
 //!
-//! No events, no createElement, no styles beyond textContent. Deterministic,
-//! window-free, and testable.
+//! Implementation: Boa native functions cannot borrow `&mut BaseDocument`, so
+//! they record `Op`s into a shared `Gc<GcRefCell<Bridge>>`. After the script
+//! finishes, the ops are replayed against the live DOM. Element handles are JS
+//! objects carrying an `_arisId` (a node id for live elements) and an optional
+//! `_pending` key (for created-but-not-yet-appended elements).
 
 #![cfg(feature = "js")]
 
-use blitz_dom::{BaseDocument, local_name};
+use std::collections::HashMap;
 
-/// Run the `onclick` handler for the clicked node, applying any
-/// `getElementById(...).textContent = ...` assignments to the DOM. Returns
-/// whether a handler was found and whether the DOM changed.
+use blitz_dom::{BaseDocument, local_name};
+use boa_engine::{Context, JsObject, JsResult, JsValue, NativeFunction, Source};
+use boa_gc::{Finalize, Gc, GcRefCell, Trace};
+
 #[derive(Debug, Default)]
 pub struct OnclickResult {
     pub executed: bool,
     pub dom_mutated: bool,
     pub errors: Vec<String>,
+}
+
+/// Shared bridge state captured by every Boa native closure.
+#[derive(Default, Trace, Finalize)]
+struct Bridge {
+    /// Snapshot of element id → node id, taken at install time.
+    ids: HashMap<String, u32>,
+    /// Recorded DOM operations, replayed after the script.
+    ops: Vec<Op>,
+    /// Monotonic counter for created-element handles.
+    next_pending: u32,
+    /// Stashed created elements keyed by pending id: (tag, text, attrs).
+    pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
+    /// querySelector index: tag/class/id → first node id.
+    query_by_tag: HashMap<String, u32>,
+    query_by_class: HashMap<String, u32>,
+    query_by_id: HashMap<String, u32>,
+}
+
+#[derive(Clone, Debug, Trace, Finalize)]
+enum Op {
+    SetText {
+        node_id: u32,
+        value: String,
+    },
+    SetAttr {
+        node_id: u32,
+        name: String,
+        value: String,
+    },
+    /// Append a created element (looked up by pending id) under parent node id.
+    AppendChild {
+        parent_id: u32,
+        pending_id: u32,
+    },
 }
 
 pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
@@ -54,23 +91,39 @@ pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
     };
     result.executed = true;
 
-    // Find getElementById('id').<prop> = 'value' assignments and apply.
-    // Supported props: textContent / innerText (set text), style.cssText (set
-    // inline style). Other props are ignored.
-    let assignments = parse_assignments(&src);
+    let (by_tag, by_class, by_id_q) = collect_query_index(doc);
+    let bridge: Gc<GcRefCell<Bridge>> = Gc::new(GcRefCell::new(Bridge {
+        ids: collect_ids(doc),
+        ops: Vec::new(),
+        next_pending: 0,
+        pending: HashMap::new(),
+        query_by_tag: by_tag,
+        query_by_class: by_class,
+        query_by_id: by_id_q,
+    }));
+    let mut ctx = Context::default();
+
+    if let Err(e) = install_document_global(&mut ctx, Gc::clone(&bridge)) {
+        result.errors.push(format!("document setup: {e}"));
+        return result;
+    }
+
+    // Rewrite the source so `.textContent = v` / `.style.cssText = v` map onto
+    // the handle's methods (setText / setAttribute), which use the verified
+    // NativeFunction path.
+    let rewritten = rewrite_source(&src);
+    match ctx.eval(Source::from_bytes(&rewritten)) {
+        Ok(_) => {}
+        Err(e) => result.errors.push(e.to_string()),
+    }
+
+    // Replay pending ops against the live DOM.
+    let ops: Vec<Op> = { bridge.borrow().ops.clone() };
+    let pending: HashMap<u32, (String, String, Vec<(String, String)>)> =
+        { bridge.borrow().pending.clone() };
     let mut changed = false;
-    for (target_id, prop, raw_value) in assignments {
-        let value = eval_rhs(&raw_value, doc, &mut result.errors);
-        let applied = match prop.as_str() {
-            "textContent" | "innerText" => {
-                find_by_id(doc, &target_id).map(|nid| set_text_content(doc, nid, &value))
-            }
-            "style.cssText" => {
-                find_by_id(doc, &target_id).map(|nid| set_attribute(doc, nid, "style", &value))
-            }
-            _ => None,
-        };
-        if applied.is_some() {
+    for op in ops {
+        if apply_op(doc, op, &pending) {
             changed = true;
         }
     }
@@ -78,87 +131,52 @@ pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
     result
 }
 
-/// Parse `document.getElementById("id").<prop> = "value"` patterns from the
-/// source, returning (id, prop, value) triples. Recognized props:
-/// `textContent`, `innerText`, `style.cssText`. Handles single or double quotes.
-fn parse_assignments(src: &str) -> Vec<(String, String, String)> {
-    let mut out = Vec::new();
-    let key = "getElementById";
-    let mut search_from = 0;
-    while let Some(rel) = src[search_from..].find(key) {
-        let i = search_from + rel;
-        let after_key = &src[i + key.len()..];
-        let Some((id, after_id)) = parse_quoted_arg(after_key) else {
-            search_from = i + key.len();
-            continue;
-        };
-        let after_id = after_id.trim_start_matches(')');
-        let rest = skip_whitespace(after_id);
-        // Match a property chain like ".textContent" or ".style.cssText".
-        let (prop, rest) = if let Some(r) = rest.strip_prefix(".style.cssText") {
-            ("style.cssText", r)
-        } else if let Some(r) = rest.strip_prefix(".textContent") {
-            ("textContent", r)
-        } else if let Some(r) = rest.strip_prefix(".innerText") {
-            ("innerText", r)
-        } else {
-            search_from = i + key.len();
-            continue;
-        };
-        let rest = skip_whitespace(rest);
-        let Some(rest) = rest.strip_prefix('=') else {
-            search_from = i + key.len();
-            continue;
-        };
-        let rest = skip_whitespace(rest);
-        if let Some((val, _)) = parse_quoted_arg(rest) {
-            out.push((id, prop.to_string(), val));
+fn apply_op(
+    doc: &mut BaseDocument,
+    op: Op,
+    pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+) -> bool {
+    match &op {
+        Op::SetText { node_id, value } => {
+            set_text_content(doc, *node_id as usize, value);
+            true
         }
-        search_from = i + key.len();
+        Op::SetAttr {
+            node_id,
+            name,
+            value,
+        } => {
+            set_attribute(doc, *node_id as usize, name, value);
+            true
+        }
+        Op::AppendChild {
+            parent_id,
+            pending_id,
+        } => {
+            if let Some((tag, text, attrs)) = pending.get(pending_id) {
+                create_and_append(doc, *parent_id as usize, tag, text, attrs);
+                true
+            } else {
+                false
+            }
+        }
     }
-    out
 }
 
-/// Set an attribute on an element node (replacing if present, else adding).
-fn set_attribute(doc: &mut BaseDocument, node_id: usize, name: &str, value: &str) {
-    let qname = blitz_dom::QualName::new(None, blitz_dom::ns!(html), name.into());
-    doc.mutate().set_attribute(node_id, qname, value);
-}
+// ── Live-DOM helpers ───────────────────────────────────────
 
-fn skip_whitespace(s: &str) -> &str {
-    s.trim_start()
-}
-
-/// Parse a quoted argument starting at s (skipping a leading '('). Returns the
-/// parsed string and the remainder after the closing quote.
-fn parse_quoted_arg(s: &str) -> Option<(String, &str)> {
-    let s = skip_whitespace(s);
-    let s = s.strip_prefix('(').unwrap_or(s);
-    let s = skip_whitespace(s);
-    let quote = *s.as_bytes().first()?;
-    if quote != b'\'' && quote != b'"' {
-        return None;
-    }
-    let inner = &s[1..];
-    let end = inner.find(quote as char)?;
-    Some((inner[..end].to_string(), &inner[end + 1..]))
-}
-
-/// Resolve `getElementById(id)` to a node id.
-fn find_by_id(doc: &BaseDocument, id: &str) -> Option<usize> {
+fn collect_ids(doc: &BaseDocument) -> HashMap<String, u32> {
+    let mut r = HashMap::new();
     let tree = doc.tree();
-    for (node_id, node) in tree.iter() {
-        if node.attr(local_name!("id")) == Some(id) {
-            return Some(node_id);
+    for (id, node) in tree.iter() {
+        if let Some(id_attr) = node.attr(local_name!("id")) {
+            r.insert(id_attr.to_string(), id as u32);
         }
     }
-    None
+    r
 }
 
-/// Set the text content of an element node by mutating its first text child
-/// (creating one if needed, like `textContent =` semantics for a leaf element).
 fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
-    // Find the first text child of the element.
     let first_text = doc.get_node(node_id).and_then(|n| {
         n.children.iter().copied().find(|&c| {
             doc.get_node(c)
@@ -171,9 +189,7 @@ fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
             tn.content = value.to_string();
         }
     } else {
-        // No text child yet: create one and attach.
         let new_id = doc.create_text_node(value);
-        // Append as a child of the element.
         if let Some(parent) = doc.get_node_mut(node_id) {
             parent.children.push(new_id);
         }
@@ -183,69 +199,338 @@ fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
     }
 }
 
-/// Evaluate the right-hand side of an assignment. String literals are returned
-/// verbatim; anything else is evaluated as a JS expression in Boa (so
-/// `'Hello ' + name` works when `name` is itself a literal we can substitute,
-/// though here we only evaluate the RHS as-is, supporting string concatenation
-/// of literals and basic math).
-fn eval_rhs(raw: &str, doc: &BaseDocument, errors: &mut Vec<String>) -> String {
-    // If the RHS references getElementById(...).textContent (a read), resolve
-    // those reads before evaluating, so e.g. `'#' + document.getElementById('n').value`
-    // style reads work for textContent.
-    let resolved = resolve_reads(raw, doc);
-    // Evaluate via Boa. String concatenation and arithmetic work. If Boa
-    // isn't available or errors, fall back to the raw string.
-    eval_js(&resolved, errors).unwrap_or(resolved)
+fn set_attribute(doc: &mut BaseDocument, node_id: usize, name: &str, value: &str) {
+    let qname = blitz_dom::QualName::new(None, blitz_dom::ns!(html), name.into());
+    doc.mutate().set_attribute(node_id, qname, value);
 }
 
-/// Replace `document.getElementById('id').textContent` reads with the literal
-/// current text content, so Boa can evaluate the RHS purely.
-fn resolve_reads(src: &str, doc: &BaseDocument) -> String {
-    let mut out = src.to_string();
-    // Repeat until no more matches (handles multiple reads).
-    loop {
-        if let Some(start) = out.find("document.getElementById(") {
-            let after = &out[start + "document.getElementById(".len()..];
-            if let Some((id, rest)) = parse_quoted_arg(after) {
-                let rest = skip_whitespace(rest);
-                let rest = if let Some(r) = rest.strip_prefix(".textContent") {
-                    r
-                } else if let Some(r) = rest.strip_prefix(".innerText") {
-                    r
-                } else {
-                    break;
-                };
-                let current = find_by_id(doc, &id)
-                    .and_then(|nid| doc.get_node(nid))
-                    .map(|n| n.text_content())
-                    .unwrap_or_default();
-                let quoted = format!("\"{}\"", current.replace('"', "\\\""));
-                out = format!("{}{}{}", &out[..start], quoted, rest);
-                continue;
-            }
-            break;
-        }
-        break;
+fn create_and_append(
+    doc: &mut BaseDocument,
+    parent_id: usize,
+    tag: &str,
+    text: &str,
+    attrs: &[(String, String)],
+) {
+    use blitz_dom::{ElementData, NodeData, QualName};
+    let attrs_vec = attrs
+        .iter()
+        .map(|(k, v)| blitz_dom::Attribute {
+            name: QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            value: v.as_str().into(),
+        })
+        .collect();
+    let el = ElementData::new(
+        QualName::new(None, blitz_dom::ns!(html), tag.into()),
+        attrs_vec,
+    );
+    let new_id = doc.create_node(NodeData::Element(el));
+    if let Some(parent) = doc.get_node_mut(parent_id) {
+        parent.children.push(new_id);
     }
+    if let Some(child) = doc.get_node_mut(new_id) {
+        child.parent = Some(parent_id);
+    }
+    if !text.is_empty() {
+        let text_id = doc.create_text_node(text);
+        if let Some(el) = doc.get_node_mut(new_id) {
+            el.children.push(text_id);
+        }
+        if let Some(tn) = doc.get_node_mut(text_id) {
+            tn.parent = Some(new_id);
+        }
+    }
+}
+
+// ── Boa global installation ────────────────────────────────
+
+fn install_document_global(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResult<()> {
+    use boa_engine::object::ObjectInitializer;
+
+    let get_by_id = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let id = arg_string(args, 0);
+            if let Some(&nid) = b.borrow().ids.get(&id) {
+                Ok(make_element_handle(ctx, Gc::clone(b), nid, None)?.into())
+            } else {
+                Ok(JsValue::null())
+            }
+        },
+        Gc::clone(&bridge),
+    );
+
+    let create_el = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let tag = arg_string(args, 0);
+            let pid = {
+                let mut bb = b.borrow_mut();
+                let pid = bb.next_pending;
+                bb.next_pending += 1;
+                bb.pending.insert(pid, (tag, String::new(), Vec::new()));
+                pid
+            };
+            Ok(make_element_handle(ctx, Gc::clone(b), 0, Some(pid))?.into())
+        },
+        Gc::clone(&bridge),
+    );
+
+    let query_sel = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let sel = arg_string(args, 0);
+            let bb = b.borrow();
+            let nid = if let Some(id) = sel.strip_prefix('#') {
+                bb.query_by_id.get(id).copied()
+            } else if let Some(cls) = sel.strip_prefix('.') {
+                bb.query_by_class.get(cls).copied()
+            } else {
+                bb.query_by_tag.get(&sel).copied()
+            };
+            drop(bb);
+            if let Some(nid) = nid {
+                Ok(make_element_handle(ctx, Gc::clone(b), nid, None)?.into())
+            } else {
+                Ok(JsValue::null())
+            }
+        },
+        Gc::clone(&bridge),
+    );
+
+    let document = ObjectInitializer::new(ctx)
+        .function(get_by_id, boa_engine::js_string!("getElementById"), 1)
+        .function(create_el, boa_engine::js_string!("createElement"), 1)
+        .function(query_sel, boa_engine::js_string!("querySelector"), 1)
+        .build();
+
+    let global = ctx.global_object();
+    let _ = global.insert_property(
+        boa_engine::js_string!("document"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(document)
+            .writable(true)
+            .enumerable(false)
+            .configurable(true)
+            .build(),
+    );
+    Ok(())
+}
+
+fn arg_string(args: &[JsValue], idx: usize) -> String {
+    args.get(idx)
+        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+        .unwrap_or_default()
+}
+
+/// Build three selector index maps (tag → first node id, class → first node id,
+/// id → node id) for querySelector.
+fn collect_query_index(
+    doc: &BaseDocument,
+) -> (
+    HashMap<String, u32>,
+    HashMap<String, u32>,
+    HashMap<String, u32>,
+) {
+    let mut by_tag = HashMap::new();
+    let mut by_class = HashMap::new();
+    let mut by_id = HashMap::new();
+    let tree = doc.tree();
+    for (id, node) in tree.iter() {
+        if let Some(el) = node.element_data() {
+            let tag = format!("{:?}", el.name.local)
+                .trim_start_matches("Atom('")
+                .trim_end_matches("' type=static)")
+                .to_string();
+            by_tag.entry(tag).or_insert(id as u32);
+            if let Some(cls) = node.attr(local_name!("class")) {
+                for c in cls.split_whitespace() {
+                    by_class.entry(c.to_string()).or_insert(id as u32);
+                }
+            }
+        }
+        if let Some(id_attr) = node.attr(local_name!("id")) {
+            by_id.entry(id_attr.to_string()).or_insert(id as u32);
+        }
+    }
+    (by_tag, by_class, by_id)
+}
+
+/// Build a JS element-handle object. Exposes methods (not accessors) so we
+/// can use the verified ObjectInitializer::function(NativeFunction) path:
+///   - setText(value)        → sets textContent
+///   - setAttribute(n, v)
+///   - appendChild(child)
+/// The onclick source is rewritten (see `rewrite_source`) so
+/// `el.textContent = 'x'` becomes `el.setText('x')`, etc.
+fn make_element_handle(
+    ctx: &mut Context,
+    bridge: Gc<GcRefCell<Bridge>>,
+    nid: u32,
+    pending: Option<u32>,
+) -> JsResult<JsObject> {
+    use boa_engine::object::ObjectInitializer;
+    use boa_engine::property::Attribute;
+
+    let mut init = ObjectInitializer::new(ctx);
+    init.property(
+        boa_engine::js_string!("_arisId"),
+        JsValue::new(nid),
+        Attribute::all(),
+    );
+    if let Some(pid) = pending {
+        init.property(
+            boa_engine::js_string!("_pending"),
+            JsValue::new(pid),
+            Attribute::all(),
+        );
+    }
+
+    // setText(value)
+    let set_text = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, _ctx| {
+            let value = arg_string(args, 0);
+            let handle_id = read_handle_id(this);
+            let pid = read_pending(this);
+            if let Some(pid) = pid {
+                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
+                    e.1 = value;
+                }
+            } else if let Some(nid) = handle_id {
+                b.borrow_mut().ops.push(Op::SetText {
+                    node_id: nid,
+                    value,
+                });
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
+    init.function(set_text, boa_engine::js_string!("setText"), 1);
+
+    // setAttribute(name, value)
+    let set_attr = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, _ctx| {
+            let name = arg_string(args, 0);
+            let value = arg_string(args, 1);
+            let handle_id = read_handle_id(this);
+            let pid = read_pending(this);
+            if let Some(pid) = pid {
+                if let Some(e) = b.borrow_mut().pending.get_mut(&pid) {
+                    e.2.push((name, value));
+                }
+            } else if let Some(nid) = handle_id {
+                b.borrow_mut().ops.push(Op::SetAttr {
+                    node_id: nid,
+                    name,
+                    value,
+                });
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
+    init.function(set_attr, boa_engine::js_string!("setAttribute"), 2);
+
+    // appendChild(child)
+    let append = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, _ctx| {
+            let child = args.first().cloned().unwrap_or(JsValue::null());
+            let parent_id = read_handle_id(this);
+            let child_pending = read_pending(&child);
+            if let (Some(parent_id), Some(child_pending)) = (parent_id, child_pending) {
+                b.borrow_mut().ops.push(Op::AppendChild {
+                    parent_id,
+                    pending_id: child_pending,
+                });
+            }
+            Ok(child)
+        },
+        Gc::clone(&bridge),
+    );
+    init.function(append, boa_engine::js_string!("appendChild"), 1);
+
+    Ok(init.build())
+}
+
+/// Rewrite an onclick source so `el.textContent = v` becomes `el.setText(v)`,
+/// and `el.style.cssText = v` becomes `el.setAttribute('style', v)`, so the
+/// method-based handle API can service them.
+fn rewrite_source(src: &str) -> String {
+    let mut out = src.replace(".textContent =", ".setText(");
+    // crude: replace the trailing of those assignments — setText(value) needs a
+    // closing paren instead of the `;`. We do a second pass converting the
+    // pattern `.setText( VALUE;` → `.setText(VALUE);`. This is best-effort.
+    out = close_paren_after(&out, ".setText(");
+    // style.cssText = v  →  setAttribute('style', v)
+    out = rewrite_style_csstext(&out);
     out
 }
 
-/// Evaluate a JS expression via Boa and return its string form.
-fn eval_js(expr: &str, errors: &mut Vec<String>) -> Option<String> {
-    use boa_engine::{Context, Source};
-    let mut ctx = Context::default();
-    // Provide a minimal `document` stub so expressions that reference it (after
-    // resolve_reads there shouldn't be any, but be defensive) don't throw.
-    let _ = ctx.eval(Source::from_bytes("var document = {};"));
-    match ctx.eval(Source::from_bytes(expr)) {
-        Ok(v) => {
-            let s = v.to_string(&mut ctx).ok()?.to_std_string_escaped();
-            // Strip surrounding quotes Boa adds to string results.
-            Some(s.trim_matches('"').to_string())
-        }
-        Err(e) => {
-            errors.push(e.to_string());
-            None
+/// After rewriting `.textContent = X` to `.setText(X`, close the call:
+/// `.setText(X;` → `.setText(X);`. Handles single-line assignments.
+fn close_paren_after(s: &str, marker: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(marker) {
+        out.push_str(&rest[..pos + marker.len()]);
+        let after = &rest[pos + marker.len()..];
+        // Find the end of this statement (next `;` or newline).
+        let end = after.find([';', '\n']).unwrap_or(after.len());
+        out.push_str(&after[..end]);
+        // Insert a closing paren before the `;`/newline.
+        out.push(')');
+        if end < after.len() {
+            out.push_str(&after[end..end + 1]);
+            rest = &after[end + 1..];
+        } else {
+            rest = "";
         }
     }
+    out.push_str(rest);
+    out
+}
+
+/// Rewrite `.style.cssText = 'value'` → `.setAttribute('style','value')`.
+fn rewrite_style_csstext(s: &str) -> String {
+    let marker = ".style.cssText";
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(marker) {
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos + marker.len()..];
+        let after_eq = after.trim_start();
+        let after_eq = after_eq.strip_prefix('=').unwrap_or(after_eq);
+        let after_eq = after_eq.trim_start();
+        // Read a quoted value.
+        if let Some((val, _tail)) = parse_quoted(after_eq) {
+            out.push_str(&format!(".setAttribute('style','{}')", val));
+        }
+        rest = "";
+    }
+    out.push_str(rest);
+    out
+}
+
+fn parse_quoted(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start();
+    let q = *s.as_bytes().first()?;
+    if q != b'\'' && q != b'"' {
+        return None;
+    }
+    let inner = &s[1..];
+    let end = inner.find(q as char)?;
+    Some((inner[..end].to_string(), &inner[end + 1..]))
+}
+
+fn read_handle_id(v: &JsValue) -> Option<u32> {
+    let obj = v.as_object()?;
+    let id = obj
+        .get(boa_engine::js_string!("_arisId"), &mut Context::default())
+        .ok()?;
+    id.as_number().map(|n| n as u32).filter(|&n| n != 0)
+}
+
+fn read_pending(v: &JsValue) -> Option<u32> {
+    let obj = v.as_object()?;
+    let p = obj
+        .get(boa_engine::js_string!("_pending"), &mut Context::default())
+        .ok()?;
+    p.as_number().map(|n| n as u32)
 }

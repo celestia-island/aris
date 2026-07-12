@@ -647,14 +647,15 @@ impl App {
         let target = frac * (sb.content_h - sb.viewport_h).max(0.0);
         let delta = sb.scroll_y - target;
         if delta.abs() > 0.5
-            && let Some(doc) = self.doc.as_mut() {
-                let hover = doc.get_hover_node_id().unwrap_or(0);
-                doc.scroll_node_by(hover, delta as f64, 0.0, &mut |_| {});
-                self.needs_rerender = true;
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+            && let Some(doc) = self.doc.as_mut()
+        {
+            let hover = doc.get_hover_node_id().unwrap_or(0);
+            doc.scroll_node_by(hover, delta as f64, 0.0, &mut |_| {});
+            self.needs_rerender = true;
+            if let Some(w) = &self.window {
+                w.request_redraw();
             }
+        }
     }
 
     fn apply_title(&mut self) {

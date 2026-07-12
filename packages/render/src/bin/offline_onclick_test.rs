@@ -22,7 +22,9 @@ fn main() {
 <style>body{font-family:system-ui;}</style></head><body>
 <button id="btn" onclick="document.getElementById('out').textContent = 'Hello aris'">Click</button>
 <button id="sty" onclick="document.getElementById('out').style.cssText = 'color:#ff0000'">Style</button>
+<button id="add" onclick="var li = document.createElement('div'); li.textContent = 'Added by JS'; document.getElementById('list').appendChild(li)">Add</button>
 <div id="out">empty</div>
+<div id="list"></div>
 </body></html>"#;
 
     let viewport = Viewport {
@@ -106,5 +108,43 @@ fn main() {
     println!(
         "OK: style.cssText onclick set #out style to {:?}",
         style_attr
+    );
+
+    // Run the createElement+appendChild onclick on #add and verify #list got a child.
+    let add_id = find_by_id(&doc, "add");
+    let list_id = find_by_id(&doc, "list");
+    assert!(add_id != usize::MAX, "no #add");
+    assert!(list_id != usize::MAX, "no #list");
+    let list_children_before = doc.get_node(list_id).map(|n| n.children.len()).unwrap_or(0);
+    let r3 = aris_render::js_interactive::run_onclick(&mut doc, add_id);
+    println!(
+        "add onclick: executed={} mutated={}",
+        r3.executed, r3.dom_mutated
+    );
+    for e in &r3.errors {
+        println!("  [js] {}", e);
+    }
+    let list_children_after = doc.get_node(list_id).map(|n| n.children.len()).unwrap_or(0);
+    println!(
+        "#list children: {} -> {}",
+        list_children_before, list_children_after
+    );
+    if list_children_after <= list_children_before {
+        println!("FAIL: createElement+appendChild did not add a child to #list");
+        std::process::exit(2);
+    }
+    // Verify the appended div carries the text "Added by JS".
+    let appended_text = doc
+        .get_node(list_id)
+        .and_then(|n| n.children.last().and_then(|&cid| doc.get_node(cid)))
+        .map(|n| n.text_content())
+        .unwrap_or_default();
+    if !appended_text.contains("Added by JS") {
+        println!("FAIL: appended node text was {:?}", appended_text);
+        std::process::exit(2);
+    }
+    println!(
+        "OK: createElement+appendChild added {:?} to #list",
+        appended_text
     );
 }

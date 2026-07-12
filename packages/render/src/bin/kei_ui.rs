@@ -59,12 +59,12 @@ body {
 </body></html>"#;
 
     let config = aris_render::RenderConfig {
-        width: 1280,
-        height: 800,
+        width: 640,
+        height: 480,
         scale: 1.0,
     };
 
-    tracing::info!("rendering 1280x800 UI...");
+    tracing::info!("rendering 640x480 UI...");
     let frame = match aris_render::render_html_with_font(html, &config) {
         Ok(f) => f,
         Err(e) => {
