@@ -38,7 +38,7 @@ raw-window-handle = { version = "0.6", optional = true }
 # browser, not for the headless/fbdev kiosk renderer). Kept optional so musl
 # cross-compile and kei fbdev builds stay slim.
 url = { version = "2", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "cookies"], optional = true }
 bytes = { version = "1", optional = true }
 http = { version = "1", optional = true }
 # keyboard-types is a transitive dep of blitz-traits; we need it directly to

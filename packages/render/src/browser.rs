@@ -267,19 +267,52 @@ impl Default for BrowserState {
 ///
 /// Each `fetch` spawns a thread that performs a blocking GET and delivers the
 /// body to the handler. This keeps the render loop non-blocking without pulling
-/// an async runtime into the renderer.
+/// an async runtime into the renderer. Responses are cached in-memory keyed by
+/// URL so that repeated subresource requests (reload, duplicate images) resolve
+/// instantly, and cookies are persisted across requests via the shared client's
+/// cookie store.
 pub struct HttpNetProvider {
-    /// Shared client so connection pooling kicks in across requests.
+    /// Shared client so connection pooling + cookie storage kick in.
     client: reqwest::blocking::Client,
+    /// In-memory response cache: URL -> body bytes. Held in an Arc so the
+    /// spawned fetch threads can populate it.
+    cache: Arc<Mutex<Vec<(String, Bytes)>>>,
 }
 
 impl HttpNetProvider {
     pub fn new() -> Self {
         let client = reqwest::blocking::Client::builder()
             .user_agent("aris/0.1 (like Gecko)")
+            .cookie_store(true)
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        Self { client }
+        Self {
+            client,
+            cache: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Cap the in-memory cache so it can't grow without bound.
+    const CACHE_MAX: usize = 128;
+
+    fn cache_get(cache: &Mutex<Vec<(String, Bytes)>>, url: &str) -> Option<Bytes> {
+        cache
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(u, _)| u == url)
+            .map(|(_, b)| b.clone())
+    }
+
+    fn cache_put(cache: &Mutex<Vec<(String, Bytes)>>, url: String, bytes: Bytes) {
+        let mut c = cache.lock().unwrap();
+        if c.iter().any(|(u, _)| u == &url) {
+            return;
+        }
+        if c.len() >= Self::CACHE_MAX {
+            c.remove(0);
+        }
+        c.push((url, bytes));
     }
 }
 
@@ -292,12 +325,20 @@ impl Default for HttpNetProvider {
 impl NetProvider for HttpNetProvider {
     fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
         let url = request.url.clone();
+        // Cache hit: deliver immediately without a network round-trip.
+        if let Some(cached) = Self::cache_get(&self.cache, url.as_str()) {
+            debug!("net cache hit: {}", url);
+            handler.bytes(url.to_string(), cached);
+            return;
+        }
         let client = self.client.clone();
+        let cache = Arc::clone(&self.cache);
         // `handler` is `Send + Sync`, so we can move it into a thread.
         thread::spawn(move || {
             let bytes_result = load_url_bytes(&client, &url);
             match bytes_result {
                 Ok(bytes) => {
+                    Self::cache_put(&cache, url.to_string(), bytes.clone());
                     handler.bytes(url.to_string(), bytes);
                 }
                 Err(e) => {
@@ -336,6 +377,7 @@ fn load_url_bytes(client: &reqwest::blocking::Client, url: &Url) -> Result<Bytes
 fn fetch_text(url: &Url) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("aris/0.1 (like Gecko)")
+        .cookie_store(true)
         .build()
         .unwrap_or_else(|_| reqwest::blocking::Client::new());
     match url.scheme() {
