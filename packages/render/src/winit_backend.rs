@@ -1232,16 +1232,22 @@ fn render_text_strip(text: &str, width: usize, height: usize, scale: f32) -> Opt
     if width == 0 || height == 0 {
         return None;
     }
-    // Render the text in a transparent document. We use a div sized to the
-    // strip so the layout matches the chrome address bar.
+    // Render the text in a transparent document. The container is a fixed-height
+    // block with overflow:hidden and white-space:nowrap, so the text never wraps
+    // to a second line even if it is wider than the strip. All CSS values are in
+    // CSS px; the viewport is sized in physical px with hidpi_scale so layout
+    // matches the chrome bar. (height is physical px here — convert to CSS.)
+    let css_h = (height as f32 / scale).max(8.0);
     let html = format!(
         "<!DOCTYPE html><html><head><style>\
-         html,body{{margin:0;padding:0;background:transparent;overflow:hidden;}}\
+         html,body{{margin:0;padding:0;background:transparent;overflow:hidden;\
+         width:100%;height:100%;}}\
          .t{{font-family:system-ui,sans-serif;font-size:13px;color:#9aa5ce;\
-         white-space:nowrap;padding:0;line-height:{h}px;}}\
+         white-space:nowrap;overflow:hidden;height:{h}px;line-height:{h}px;\
+         display:block;padding:0;}}\
          </style></head><body><div class=\"t\">{}</div></body></html>",
         crate::browser::escape_html(text),
-        h = height
+        h = css_h
     );
     let viewport = Viewport {
         window_size: (width as u32, height as u32),
