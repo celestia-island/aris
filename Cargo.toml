@@ -85,3 +85,7 @@ strip = "debuginfo"
 
 [profile.bench]
 debug = 0
+
+# Patch skrifa: NULL font data check in Metrics::new for kei compatibility.
+[patch.crates-io]
+skrifa = { path = "../patches/skrifa" }

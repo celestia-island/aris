@@ -11,18 +11,26 @@ fn main() {
     // initializes regex/malloc and hangs on kei's musl runtime. Use direct
     // write(2, ...) instead.
     let msg = b"kei_fbtest: starting browser UI\n";
-    unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len() as _); }
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const _, msg.len() as _);
+    }
 
     #[cfg(unix)]
     {
         let fb_path = "/dev/fb0";
         if !std::path::Path::new(fb_path).exists() {
             let m = b"fb0 not found\n";
-            unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
+            unsafe {
+                libc::write(2, m.as_ptr() as *const _, m.len() as _);
+            }
             return;
         }
 
-        let mut file = match std::fs::OpenOptions::new().read(true).write(true).open(fb_path) {
+        let mut file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(fb_path)
+        {
             Ok(f) => f,
             Err(_) => return,
         };
@@ -33,14 +41,16 @@ fn main() {
         let fb_size = width * height * bpp;
 
         let m = b"kei_fbtest: building UI\n";
-        unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
+        unsafe {
+            libc::write(2, m.as_ptr() as *const _, m.len() as _);
+        }
 
         let mut buf = vec![0u8; fb_size];
 
         // BGRX colors for kei virtio-gpu
         let header = [0xEFu8, 0xAF, 0x61, 0xFF]; // blue
-        let bg = [0x34u8, 0x2C, 0x28, 0xFF];     // dark
-        let card = [0x2Bu8, 0x25, 0x21, 0xFF];   // card bg
+        let bg = [0x34u8, 0x2C, 0x28, 0xFF]; // dark
+        let card = [0x2Bu8, 0x25, 0x21, 0xFF]; // card bg
         let addrbg = [0x23u8, 0x1F, 0x1B, 0xFF]; // address bar
         let white = [0xFFu8, 0xFF, 0xFF, 0xFF];
         let green = [0x79u8, 0xC3, 0x98, 0xFF];
@@ -49,12 +59,17 @@ fn main() {
 
         for y in 0..height {
             for x in 0..width {
-                let c = if y < 50 { header }
-                    else if y >= 58 && y < 86 { addrbg }
-                    else if (y >= 100 && y < 180) || (y >= 195 && y < 275) || (y >= 290 && y < 370) { card }
-                    else { bg };
+                let c = if y < 50 {
+                    header
+                } else if y >= 58 && y < 86 {
+                    addrbg
+                } else if (y >= 100 && y < 180) || (y >= 195 && y < 275) || (y >= 290 && y < 370) {
+                    card
+                } else {
+                    bg
+                };
                 let idx = (y * width + x) * 4;
-                buf[idx..idx+4].copy_from_slice(&c);
+                buf[idx..idx + 4].copy_from_slice(&c);
             }
         }
 
@@ -63,15 +78,15 @@ fn main() {
             for y in 18..38 {
                 if (x % 10 < 5) && (y % 8 < 4) {
                     let idx = (y * width + x) * 4;
-                    buf[idx..idx+4].copy_from_slice(&white);
+                    buf[idx..idx + 4].copy_from_slice(&white);
                 }
             }
         }
         // Indicator lines
-        let draw_line = |buf: &mut [u8], y: usize, x0: usize, x1: usize, c: [u8;4]| {
+        let draw_line = |buf: &mut [u8], y: usize, x0: usize, x1: usize, c: [u8; 4]| {
             for x in x0..x1.min(width) {
                 let idx = (y * width + x) * 4;
-                buf[idx..idx+4].copy_from_slice(&c);
+                buf[idx..idx + 4].copy_from_slice(&c);
             }
         };
         draw_line(&mut buf, 130, 30, 200, green);
@@ -92,7 +107,9 @@ fn main() {
         draw_line(&mut buf, 427, 20, 200, accent);
 
         let m = b"kei_fbtest: writing rows to fb0\n";
-        unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
+        unsafe {
+            libc::write(2, m.as_ptr() as *const _, m.len() as _);
+        }
 
         // Write row-by-row (each row = width*4 bytes) to avoid large single
         // write() calls that hang in the kernel fb write_at path.
@@ -105,7 +122,9 @@ fn main() {
         }
 
         let m = b"kei_fbtest: done\n";
-        unsafe { libc::write(2, m.as_ptr() as *const _, m.len() as _); }
+        unsafe {
+            libc::write(2, m.as_ptr() as *const _, m.len() as _);
+        }
     }
 
     loop {

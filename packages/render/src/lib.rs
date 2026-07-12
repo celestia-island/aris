@@ -130,9 +130,9 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     // Create a FontContext with the embedded font registered, and pass it
     // to Blitz DOM so it doesn't create its own (which triggers fontique's
     // global init that NULL-derefs on kei's musl/VM environment).
-    use parley::fontique::{Collection, CollectionOptions, SourceCache};
-    use parley::FontContext;
     use linebender_resource_handle::Blob;
+    use parley::FontContext;
+    use parley::fontique::{Collection, CollectionOptions, SourceCache};
     use std::sync::Arc;
     let mut font_ctx = FontContext {
         source_cache: SourceCache::new_shared(),
@@ -159,7 +159,8 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
 
     let doc: Option<HtmlDocument> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Some(HtmlDocument::from_html(html, doc_config))
-    })).unwrap_or(None);
+    }))
+    .unwrap_or(None);
 
     // Resolve styles (Stylo CSS cascade) and compute layout (Taffy).
     // On kei, this triggers fontique/skrifa font metrics init which NULL-derefs.
@@ -176,12 +177,12 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     // Actually, we skipped resolve above. Let's try paint_scene directly.
     // paint_scene may still call font code, but for simple divs without text
     // it should just paint colored rectangles.
-    let mut frame = Frame::new(width, height);
-    let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
+    let _frame = Frame::new(width, height);
+    let _renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(width, height);
     // On kei, doc.resolve() triggers fontique/skrifa font metrics init
     // which enters an infinite loop. Skip resolve and use fallback if
     // DOM creation also failed.
-    let resolve_ok = doc.is_some();
+    let _resolve_ok = doc.is_some();
 
     // Paint to anyrender scene, then rasterize via Vello CPU
     let mut frame = Frame::new(width, height);
@@ -189,7 +190,8 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     if let Some(mut doc) = doc {
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             doc.resolve(0.0);
-        })).is_ok()
+        }))
+        .is_ok()
         {
             renderer.render(
                 |scene| {
@@ -218,11 +220,11 @@ fn fill_fallback(rgba: &mut [u8], width: u32, height: u32) {
             let idx = (y * width as usize + x) * 4;
             let (r, g, b) = if y < 60 {
                 (0x61, 0xAF, 0xEF) // blue header
-            } else if y >= 80 && y < 160 {
+            } else if (80..160).contains(&y) {
                 (0x21, 0x25, 0x2B) // card 1
-            } else if y >= 180 && y < 260 {
+            } else if (180..260).contains(&y) {
                 (0x21, 0x25, 0x2B) // card 2
-            } else if y >= 280 && y < 360 {
+            } else if (280..360).contains(&y) {
                 (0x21, 0x25, 0x2B) // card 3
             } else {
                 (0x28, 0x2C, 0x34) // dark bg

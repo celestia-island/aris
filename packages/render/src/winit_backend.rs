@@ -327,8 +327,12 @@ impl App {
         };
 
         let net = Arc::new(HttpNetProvider::new());
-        let nav = Arc::new(BrowserNavigationProvider::new(Arc::clone(&self.active_tab().state)));
-        let shell = Arc::new(BrowserShellProvider::new(Arc::clone(&self.active_tab().state)));
+        let nav = Arc::new(BrowserNavigationProvider::new(Arc::clone(
+            &self.active_tab().state,
+        )));
+        let shell = Arc::new(BrowserShellProvider::new(Arc::clone(
+            &self.active_tab().state,
+        )));
 
         let mut doc_config = blitz_dom::DocumentConfig {
             viewport: Some(viewport),
@@ -493,7 +497,8 @@ impl App {
             // address bar / status area.
             link
         } else {
-            self.active_tab().current_url
+            self.active_tab()
+                .current_url
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_default()
@@ -518,6 +523,22 @@ impl App {
         };
         // Snapshot the active tab's xrgb before borrowing surface mutably.
         let xrgb_snapshot: Vec<u32> = self.active_tab().base_xrgb.clone();
+        // Snapshot tab titles + active index for the tab strip.
+        let tab_titles: Vec<String> = self
+            .tabs
+            .iter()
+            .map(|t| {
+                if t.title.is_empty() {
+                    t.current_url
+                        .as_ref()
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| "New Tab".to_string())
+                } else {
+                    t.title.clone()
+                }
+            })
+            .collect();
+        let active_tab_idx = self.active;
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -558,6 +579,16 @@ impl App {
             can_back,
             can_fwd,
             hover_region,
+        );
+
+        // Tab strip (drawn above the chrome bar).
+        draw_tab_strip(
+            &mut buffer,
+            buf_w,
+            scale,
+            css_w,
+            &tab_titles,
+            active_tab_idx,
         );
 
         // Hover highlight (page space, offset by chrome).
@@ -782,7 +813,8 @@ impl App {
     }
 
     fn is_over_text(&self) -> bool {
-        self.active_tab().doc
+        self.active_tab()
+            .doc
             .as_ref()
             .and_then(|d| d.get_cursor())
             .map(|c| matches!(format!("{:?}", c).to_lowercase().as_str(), "text"))
@@ -824,7 +856,9 @@ impl App {
         // On pointer-up (the click), fire JS handlers. Done outside the doc
         // borrow above so the JS runtime can mutate the document.
         if !pressed {
-            let target = self.active_tab().doc
+            let target = self
+                .active_tab()
+                .doc
                 .as_ref()
                 .and_then(|d| d.get_hover_node_id())
                 .unwrap_or(0);
@@ -1023,7 +1057,10 @@ impl App {
                 let url = if action == ContextMenuAction::CopyLink {
                     self.hovered_link_url()
                 } else {
-                    self.active_tab().current_url.as_ref().map(|u| u.to_string())
+                    self.active_tab()
+                        .current_url
+                        .as_ref()
+                        .map(|u| u.to_string())
                 };
                 if let Some(url) = url {
                     // Best-effort clipboard via the shell provider. Fall back to
@@ -1162,7 +1199,9 @@ impl ApplicationHandler for App {
                 }
                 self.chrome.hover = None;
                 let page_y = css_y - CHROME_HEIGHT_CSS;
-                let hover_changed = self.active_tab_mut().doc
+                let hover_changed = self
+                    .active_tab_mut()
+                    .doc
                     .as_mut()
                     .map(|d| d.set_hover_to(css_x, page_y))
                     .unwrap_or(false);
@@ -1200,6 +1239,33 @@ impl ApplicationHandler for App {
                 if let Some(menu) = self.context_menu.take() {
                     if let Some(action) = menu.item_at(cx, cy) {
                         self.handle_context_menu_action(action);
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                if cy < TAB_STRIP_HEIGHT_CSS {
+                    // Tab strip: click a tab to switch, click + for new tab.
+                    let min_tab = 120.0_f32.min(css_w / (self.tabs.len() as f32 + 1.0).max(1.0));
+                    let tab_w = min_tab.max(80.0).min(200.0);
+                    let tab_count = self.tabs.len();
+                    if cx < tab_w * tab_count as f32 {
+                        let idx = (cx / tab_w) as usize;
+                        if idx < tab_count && idx != self.active {
+                            self.active = idx;
+                            let url = self
+                                .active_tab()
+                                .current_url
+                                .as_ref()
+                                .map(|u| u.to_string())
+                                .unwrap_or_default();
+                            self.chrome.set_url(&url);
+                            self.chrome.address_focused = false;
+                        }
+                    } else if cx < tab_w * tab_count as f32 + 40.0 {
+                        // "+" new tab button area
+                        self.new_tab(None);
                     }
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -1354,7 +1420,9 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             Key::Named(NamedKey::Backspace) => {
-                                let q = self.active_tab().find
+                                let q = self
+                                    .active_tab()
+                                    .find
                                     .as_ref()
                                     .map(|f| {
                                         let mut s = f.query.clone();
@@ -1369,7 +1437,9 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             Key::Character(c) if !ctrl && !alt && !c.is_empty() => {
-                                let q = self.active_tab().find
+                                let q = self
+                                    .active_tab()
+                                    .find
                                     .as_ref()
                                     .map(|f| format!("{}{}", f.query, c.as_str()))
                                     .unwrap_or_default();
@@ -1475,7 +1545,12 @@ impl ApplicationHandler for App {
             return;
         }
         // Drain async loads / redraw requests from providers.
-        if self.active_tab().state.redraw_requested.swap(false, Ordering::Relaxed) {
+        if self
+            .active_tab()
+            .state
+            .redraw_requested
+            .swap(false, Ordering::Relaxed)
+        {
             self.process_loads();
             self.pump_messages();
             self.apply_title();
@@ -1815,6 +1890,158 @@ fn winit_modifiers_to_blitz(m: ModifiersState) -> keyboard_types::Modifiers {
 // ── Chrome drawing ──────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+/// Draw the tab strip at the top of the window: one rectangle per tab with
+/// its title, the active tab highlighted.
+fn draw_tab_strip(
+    buffer: &mut [u32],
+    buf_w: usize,
+    scale: f32,
+    css_w: f32,
+    titles: &[String],
+    active: usize,
+) {
+    let strip_h = (TAB_STRIP_HEIGHT_CSS * scale) as usize;
+    let bg = 0x16161E;
+    let tab_bg = 0x2D2D3A;
+    let tab_active_bg = 0x3D3D50;
+    let tab_text = 0xC0CAF5;
+    let tab_text_dim = 0x6B6B80;
+    let new_btn_bg = 0x2D2D3A;
+
+    // Fill strip background.
+    for y in 0..strip_h {
+        let row = y * buf_w;
+        for x in 0..buf_w {
+            if row + x < buffer.len() {
+                buffer[row + x] = bg;
+            }
+        }
+    }
+
+    // Each tab is min 120px, max 200px wide (CSS). Plus a "+" new-tab button.
+    let min_tab = 120.0_f32.min(css_w / (titles.len() as f32 + 1.0).max(1.0));
+    let max_tab = 200.0;
+    let tab_w = min_tab.max(80.0).min(max_tab);
+    let close_btn = 14.0; // close X area
+    let text_pad = 10.0;
+
+    let mut x = 4.0;
+    for (i, title) in titles.iter().enumerate() {
+        let tw = tab_w;
+        let tx = (x * scale) as usize;
+        let ty = 2;
+        let th = strip_h - 2;
+        let tw_phys = (tw * scale) as usize;
+        let color = if i == active { tab_active_bg } else { tab_bg };
+        for ry in 0..th {
+            for rx in 0..tw_phys {
+                let idx = (ty + ry) * buf_w + (tx + rx);
+                if idx < buffer.len() {
+                    buffer[idx] = color;
+                }
+            }
+        }
+        // Tab title text (truncated to fit). Close X is drawn as a simple mark.
+        let display_title = if title.len() > 16 {
+            format!("{}…", &title[..14])
+        } else {
+            title.clone()
+        };
+        let avail_text = (tw - close_btn - text_pad).max(40.0) as usize;
+        if let Some(strip) = render_text_strip_colored(
+            &display_title,
+            (avail_text as f32 * scale) as usize,
+            th,
+            scale,
+            if i == active { "#c0caf5" } else { "#9aa5ce" },
+        ) {
+            blit_strip(
+                buffer,
+                buf_w,
+                strip_h,
+                &strip,
+                tx + (text_pad * scale) as usize,
+                ty + 2,
+            );
+        }
+        // Close × (small, top-right of tab).
+        {
+            let cx = tx + tw_phys - (close_btn * scale) as usize;
+            let cy = th / 2;
+            let half = 3;
+            for d in -half..=half {
+                plot(
+                    buffer,
+                    buf_w,
+                    cx + d as usize,
+                    cy + d as usize,
+                    tab_text_dim,
+                );
+                plot(
+                    buffer,
+                    buf_w,
+                    cx + d as usize,
+                    cy - d as usize + 2 * cy,
+                    tab_text_dim,
+                );
+            }
+        }
+        x += tw;
+    }
+
+    // "+" new-tab button.
+    let plus_x = (x * scale) as usize + (8.0 * scale) as usize;
+    let plus_cy = strip_h / 2;
+    let plus_size = 6.0_f32 * scale;
+    // Background circle.
+    for ry in 0..(plus_size * 2.0) as usize {
+        for rx in 0..(plus_size * 2.0) as usize {
+            let dx = rx as f32 - plus_size;
+            let dy = ry as f32 - plus_size;
+            if dx.hypot(dy) <= plus_size {
+                plot(
+                    buffer,
+                    buf_w,
+                    plus_x + rx,
+                    plus_cy - plus_size as usize + ry,
+                    new_btn_bg,
+                );
+            }
+        }
+    }
+    // + cross.
+    for d in 0..(plus_size as usize) {
+        plot(
+            buffer,
+            buf_w,
+            plus_x + plus_size as usize,
+            plus_cy - d,
+            tab_text,
+        );
+        plot(
+            buffer,
+            buf_w,
+            plus_x + plus_size as usize,
+            plus_cy + d,
+            tab_text,
+        );
+        plot(
+            buffer,
+            buf_w,
+            plus_x + plus_size as usize - d,
+            plus_cy,
+            tab_text,
+        );
+        plot(
+            buffer,
+            buf_w,
+            plus_x + plus_size as usize + d,
+            plus_cy,
+            tab_text,
+        );
+    }
+}
+
 pub fn draw_chrome(
     buffer: &mut [u32],
     buf_w: usize,
