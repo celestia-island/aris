@@ -723,6 +723,94 @@ fn read_pending(v: &JsValue) -> Option<u32> {
     p.as_number().map(|n| n as u32)
 }
 
+/// Clone a JS node object: copy all enumerable own properties (except internal
+/// _arisId/_pending/_childIndex), then optionally recurse into childNodes.
+fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsResult<JsValue> {
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val)
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build()
+    };
+
+    let Some(src) = src else {
+        return Ok(JsValue::null());
+    };
+
+    let clone = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+
+    // Copy all own properties from src to clone.
+    let keys = src.own_property_keys(ctx).map_err(|e| {
+        boa_engine::JsNativeError::typ().with_message(format!("own_property_keys: {:?}", e))
+    })?;
+    for key in keys {
+        let key_str = format!("{:?}", key);
+        // Skip internal properties.
+        if key_str.contains("_arisId")
+            || key_str.contains("_pending")
+            || key_str.contains("_childIndex")
+            || key_str.contains("length")
+        {
+            continue;
+        }
+        // Get the value.
+        let val = match src.get(key.clone(), ctx) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        // If deep and this is childNodes, recurse.
+        if deep && (key_str.contains("childNodes") || key_str.contains("children")) {
+            if let Some(arr) = val.as_object() {
+                let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let arr_keys = arr.own_property_keys(ctx).unwrap_or_default();
+                for (i, ak) in arr_keys.iter().enumerate() {
+                    if let Ok(child_val) = arr.get(ak.clone(), ctx) {
+                        if let Some(child_obj) = child_val.as_object() {
+                            let child_clone = clone_node_js(Some(child_obj), true, ctx)?;
+                            let _ = new_arr.insert_property(i as u32, pd(child_clone));
+                        }
+                    }
+                }
+                let _ = clone.insert_property(key, pd(new_arr.into()));
+                continue;
+            }
+        }
+        // Functions are shared (not cloned).
+        if val.as_object().is_some_and(|o| o.is_callable()) {
+            let _ = clone.insert_property(key, pd(val));
+            continue;
+        }
+        // Deep clone objects (like firstChild/lastChild).
+        if deep && val.as_object().is_some() && !val.is_null() {
+            let child_clone = clone_node_js(val.as_object(), true, ctx)?;
+            let _ = clone.insert_property(key, pd(child_clone));
+        } else {
+            let _ = clone.insert_property(key, pd(val));
+        }
+    }
+
+    // Copy methods (functions) that weren't copied above — re-add standard
+    // DOM methods by checking if src has them.
+    // Since methods are function objects (not enumerable in our setup), they
+    // may not appear in own_property_keys. We add the most common ones.
+    // Actually, in our setup methods ARE own properties, so they should be
+    // captured above. But let's make sure cloneNode itself is available.
+    let clone_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let d = args.first().and_then(|v| v.as_boolean()).unwrap_or(false);
+        clone_node_js(this.as_object(), d, ctx)
+    });
+    let _ = clone.insert_property(
+        boa_engine::js_string!("cloneNode"),
+        pd(JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), clone_fn).build(),
+        )),
+    );
+
+    Ok(clone.into())
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Install a `window` global with `location` (href getter) and `alert`.
 /// Install `setTimeout` and `setInterval`. The callback is stashed as a named
@@ -1333,20 +1421,136 @@ fn install_dom_globals(ctx: &mut Context) {
         );
     }
 
-    // Global constructors for instanceof checks: Node, Element, Text, Comment, DocumentFragment.
-    for (name, nt) in [
+    // Global constructors for instanceof checks: Node, Element, Text, Comment,
+    // DocumentFragment, plus all HTMLElement subclasses that WPT tests check.
+    let all_types = [
         ("Node", 0u32),
         ("Element", 1),
+        ("HTMLElement", 1),
         ("Text", 3),
         ("Comment", 8),
         ("DocumentFragment", 11),
-    ] {
+        ("Document", 9),
+        ("CharacterData", 0),
+        // HTML element subclasses (all use nodeType=1, same constructor body).
+        ("HTMLAnchorElement", 1),
+        ("HTMLAreaElement", 1),
+        ("HTMLAudioElement", 1),
+        ("HTMLBRElement", 1),
+        ("HTMLBaseElement", 1),
+        ("HTMLBodyElement", 1),
+        ("HTMLButtonElement", 1),
+        ("HTMLCanvasElement", 1),
+        ("HTMLDListElement", 1),
+        ("HTMLDataElement", 1),
+        ("HTMLDataListElement", 1),
+        ("HTMLDetailsElement", 1),
+        ("HTMLDialogElement", 1),
+        ("HTMLDirectoryElement", 1),
+        ("HTMLDivElement", 1),
+        ("HTMLEmbedElement", 1),
+        ("HTMLFieldSetElement", 1),
+        ("HTMLFontElement", 1),
+        ("HTMLFormElement", 1),
+        ("HTMLFrameElement", 1),
+        ("HTMLFrameSetElement", 1),
+        ("HTMLHRElement", 1),
+        ("HTMLHeadElement", 1),
+        ("HTMLHeadingElement", 1),
+        ("HTMLHtmlElement", 1),
+        ("HTMLIFrameElement", 1),
+        ("HTMLImageElement", 1),
+        ("HTMLInputElement", 1),
+        ("HTMLLIElement", 1),
+        ("HTMLLabelElement", 1),
+        ("HTMLLegendElement", 1),
+        ("HTMLLinkElement", 1),
+        ("HTMLMapElement", 1),
+        ("HTMLMediaElement", 1),
+        ("HTMLMenuElement", 1),
+        ("HTMLMetaElement", 1),
+        ("HTMLMeterElement", 1),
+        ("HTMLModElement", 1),
+        ("HTMLOListElement", 1),
+        ("HTMLObjectElement", 1),
+        ("HTMLOptGroupElement", 1),
+        ("HTMLOptionElement", 1),
+        ("HTMLOutputElement", 1),
+        ("HTMLParagraphElement", 1),
+        ("HTMLParamElement", 1),
+        ("HTMLPictureElement", 1),
+        ("HTMLPreElement", 1),
+        ("HTMLProgressElement", 1),
+        ("HTMLQuoteElement", 1),
+        ("HTMLScriptElement", 1),
+        ("HTMLSelectElement", 1),
+        ("HTMLSlotElement", 1),
+        ("HTMLSourceElement", 1),
+        ("HTMLSpanElement", 1),
+        ("HTMLStyleElement", 1),
+        ("HTMLTableCaptionElement", 1),
+        ("HTMLTableCellElement", 1),
+        ("HTMLTableColElement", 1),
+        ("HTMLTableElement", 1),
+        ("HTMLTableRowElement", 1),
+        ("HTMLTableSectionElement", 1),
+        ("HTMLTemplateElement", 1),
+        ("HTMLTextAreaElement", 1),
+        ("HTMLTimeElement", 1),
+        ("HTMLTitleElement", 1),
+        ("HTMLTrackElement", 1),
+        ("HTMLUListElement", 1),
+        ("HTMLUnknownElement", 1),
+        ("HTMLVideoElement", 1),
+        // SVG element
+        ("SVGElement", 1),
+        ("MathMLElement", 1),
+    ];
+    for (name, nt) in all_types {
         let ctor_fn = NativeFunction::from_copy_closure(move |_t, _a, ctx| {
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
             Ok(obj.into())
         });
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
+    }
+
+    // Set up prototype chains: HTMLElement extends Element extends Node.
+    // This makes `element instanceof HTMLElement` work if the element's
+    // prototype chain includes HTMLElement.prototype.
+    let global = ctx.global_object();
+    if let (Ok(node_val), Ok(elem_val), Ok(html_val)) = (
+        global.get(boa_engine::js_string!("Node"), ctx),
+        global.get(boa_engine::js_string!("Element"), ctx),
+        global.get(boa_engine::js_string!("HTMLElement"), ctx),
+    ) {
+        if let (Some(elem_ctor), Some(html_ctor)) = (elem_val.as_object(), html_val.as_object()) {
+            let _ = html_ctor.set_prototype(Some(elem_ctor.clone()));
+            let proto = node_val.as_object().cloned().unwrap_or_else(|| {
+                boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
+            });
+            let _ = elem_ctor.set_prototype(Some(proto));
+        }
+    }
+
+    // Make all HTMLxxxElement constructors have HTMLElement as prototype.
+    for (name, _) in all_types
+        .iter()
+        .filter(|(n, _)| n.starts_with("HTML") && *n != "HTMLElement")
+    {
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(*name), ctx) {
+            if let Some(ctor) = ctor_val.as_object() {
+                if let Ok(html_val) = ctx
+                    .global_object()
+                    .get(boa_engine::js_string!("HTMLElement"), ctx)
+                {
+                    let proto = html_val.as_object().cloned().unwrap_or_else(|| {
+                        boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
+                    });
+                    let _ = ctor.set_prototype(Some(proto));
+                }
+            }
+        }
     }
 }
 
@@ -2382,24 +2586,12 @@ fn make_element_handle(
     });
     init.function(insert_before, boa_engine::js_string!("insertBefore"), 2);
 
-    // cloneNode(deep) — returns a shallow copy.
-    let clone = NativeFunction::from_copy_closure(|this, _args, ctx| {
-        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        // Copy _arisId so the clone can still read the same blitz node.
-        let id = this
-            .as_object()
-            .and_then(|o| o.get(boa_engine::js_string!("_arisId"), ctx).ok())
-            .unwrap_or(JsValue::null());
-        let _ = obj.insert_property(
-            boa_engine::js_string!("_arisId"),
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(id)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true)
-                .build(),
-        );
-        Ok(obj.into())
+    // cloneNode(deep) — returns a copy with all properties cloned from `this`.
+    // Deep clone also clones childNodes recursively.
+    let clone = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let deep = args.first().and_then(|v| v.as_boolean()).unwrap_or(false);
+        let this_obj = this.as_object();
+        clone_node_js(this_obj, deep, ctx)
     });
     init.function(clone, boa_engine::js_string!("cloneNode"), 0);
 
