@@ -212,4 +212,10 @@ conformance:
     RUST_LOG="" cargo run -p aris-render --features "desktop winit js" --bin conformance_test > /tmp/aris_conformance.json
     python scripts/conformance/report.py /tmp/aris_conformance.json > docs/guides/conformance-report.md
     @echo "Report written to docs/guides/conformance-report.md"
-    cat docs/guides/conformance-report.md | head -5
+
+# Run real W3C web-platform-tests (DOM subset) and regenerate the report.
+wpt-dom DIR="tests/wpt/wpt-master/dom":
+    RUST_LOG="" cargo run -p aris-render --features "desktop winit js" --bin wpt_runner -- {{DIR}} > /tmp/aris_wpt.json
+    python scripts/conformance/wpt_report.py /tmp/aris_wpt.json > docs/guides/wpt-report.md
+    @echo "WPT report written to docs/guides/wpt-report.md"
+    head -5 docs/guides/wpt-report.md
