@@ -1664,9 +1664,10 @@ impl ApplicationHandler for App {
                 if idx < self.tabs.len() {
                     self.tabs[idx].favicon = Some(fav);
                     if idx == self.active
-                        && let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
+                        && let Some(w) = &self.window
+                    {
+                        w.request_redraw();
+                    }
                 }
             }
         }

@@ -446,7 +446,9 @@ fn load_url_bytes(client: &reqwest::blocking::Client, url: &Url) -> Result<Bytes
     }
 }
 
-/// Fetch a URL as UTF-8 text (for top-level document loads).
+/// Fetch a URL as UTF-8 text (for top-level document loads). If the response is
+/// a downloadable file (Content-Disposition: attachment, or a binary
+/// Content-Type), save it to ~/Downloads/ and return a "download started" page.
 fn fetch_text(url: &Url) -> Result<String, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("aris/0.1 (like Gecko)")
@@ -458,6 +460,25 @@ fn fetch_text(url: &Url) -> Result<String, String> {
             let resp = client.get(url.as_str()).send().map_err(|e| e.to_string())?;
             if !resp.status().is_success() {
                 return Err(format!("HTTP {}", resp.status()));
+            }
+            // Check if this is a downloadable resource.
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
+            let content_disposition = resp
+                .headers()
+                .get("content-disposition")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
+            if should_download(&content_type, &content_disposition) {
+                let filename = parse_filename(&content_disposition, url);
+                let bytes = resp.bytes().map_err(|e| e.to_string())?;
+                let saved_path = save_download(&filename, &bytes);
+                return Ok(download_page(&filename, saved_path.as_deref(), bytes.len()));
             }
             let text = resp.text().map_err(|e| e.to_string())?;
             Ok(text)
@@ -642,6 +663,137 @@ pub fn normalize_input_to_url(input: &str) -> Url {
 /// Resolve `.`/`..` in a path for a stable `file://` URL.
 fn canonicalize_path(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+// ── Download helpers ───────────────────────────────────────
+
+/// Decide if a response should be downloaded rather than rendered, based on
+/// Content-Type and Content-Disposition headers.
+fn should_download(content_type: &str, content_disposition: &str) -> bool {
+    // Content-Disposition: attachment → always download.
+    if content_disposition.contains("attachment") {
+        return true;
+    }
+    // Non-text/non-image content types that browsers download.
+    let renderable_prefixes = [
+        "text/html",
+        "text/plain",
+        "text/css",
+        "text/javascript",
+        "application/javascript",
+        "application/xhtml",
+        "application/json",
+        "application/xml",
+        "image/",
+        "application/octet-stream",
+    ];
+    // If Content-Type starts with a known renderable type, don't download
+    // (unless Content-Disposition said attachment, handled above).
+    for prefix in &renderable_prefixes {
+        if content_type.starts_with(prefix) {
+            return false;
+        }
+    }
+    // Unknown/binary content type → download.
+    !content_type.is_empty()
+}
+
+/// Parse a filename from Content-Disposition, falling back to the URL path.
+fn parse_filename(content_disposition: &str, url: &Url) -> String {
+    // Try filename="..." or filename=... from Content-Disposition.
+    if let Some(pos) = content_disposition.find("filename") {
+        let after = &content_disposition[pos..];
+        if let Some(eq) = after.find('=') {
+            let val = after[eq + 1..].trim();
+            let val = val.trim_matches('"').trim();
+            if !val.is_empty() {
+                return sanitize_filename(val);
+            }
+        }
+    }
+    // Fall back to the last path segment of the URL.
+    let path_segment = url
+        .path_segments()
+        .and_then(|mut p| p.next_back())
+        .unwrap_or("download");
+    sanitize_filename(path_segment)
+}
+
+/// Sanitize a filename: remove path separators and dangerous characters.
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect::<String>()
+        .trim()
+        .to_string()
+        .or_if_empty("download")
+}
+
+/// Save downloaded bytes to ~/Downloads/<filename>. Returns the full path.
+fn save_download(filename: &str, bytes: &[u8]) -> Option<String> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let downloads = std::path::Path::new(&home).join("Downloads");
+    let _ = std::fs::create_dir_all(&downloads);
+    // Avoid overwriting: append a counter if the file exists.
+    let mut path = downloads.join(filename);
+    let mut counter = 1;
+    while path.exists() {
+        let stem = path.file_stem()?.to_string_lossy().to_string();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_string());
+        let new_name = match &ext {
+            Some(e) => format!("{} ({}).{}", stem, counter, e),
+            None => format!("{} ({})", stem, counter),
+        };
+        path = downloads.join(new_name);
+        counter += 1;
+    }
+    match std::fs::write(&path, bytes) {
+        Ok(_) => {
+            debug!(
+                "downloaded {} ({} bytes) to {}",
+                filename,
+                bytes.len(),
+                path.display()
+            );
+            Some(path.display().to_string())
+        }
+        Err(e) => {
+            warn!("download save error: {}", e);
+            None
+        }
+    }
+}
+
+/// A page shown after a download completes, confirming the filename + size.
+fn download_page(filename: &str, saved_path: Option<&str>, size: usize) -> String {
+    let path_display = saved_path.unwrap_or("(save failed)");
+    let size_kb = size / 1024;
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Download complete</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#1a1b26;color:#a9b1d6;padding:48px;text-align:center;}}\
+         h1{{color:#9ece6a;}}.file{{color:#7dcfff;font-size:18px;margin:16px 0;}}\
+         .path{{color:#565f89;font-size:13px;}}code{{background:#24283b;padding:2px 6px;border-radius:4px;}}</style></head>\
+         <body><h1>Download complete</h1>\
+         <div class=\"file\">📦 {} ({} KB)</div>\
+         <div class=\"path\">Saved to: <code>{}</code></div></body></html>",
+        escape_html(filename),
+        size_kb,
+        escape_html(path_display)
+    )
+}
+
+// Small helper to keep the closure-based filename fallback readable.
+trait OrEmpty {
+    fn or_if_empty(self, default: &str) -> String;
+}
+impl OrEmpty for String {
+    fn or_if_empty(self, default: &str) -> String {
+        if self.is_empty() {
+            default.to_string()
+        } else {
+            self
+        }
+    }
 }
 
 // ── Built-in pages ──────────────────────────────────────────
