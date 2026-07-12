@@ -1,7 +1,30 @@
 // kei_ui — aris-render HTML browser UI for kei OS.
-// Uses Blitz DOM + Vello CPU to render HTML, then writes to /dev/fb0.
+// Uses Blitz DOM + Vello cpu to render HTML, then writes to /dev/fb0.
 // Avoids tracing-subscriber init (musl hang) — uses libc::write instead.
+
+// Test if .init_array constructors are executed on kei.
+static mut CTOR_RAN: u32 = 0;
+
+// Register a function pointer in .init_array section
+#[unsafe(link_section = ".init_array")]
+#[used]
+static CTOR: unsafe extern "C" fn() = unsafe { ctor_init };
+
+unsafe extern "C" fn ctor_init() {
+    unsafe {
+        CTOR_RAN = 0xDEAD_BEEF;
+    }
+}
+
 fn main() {
+    // Check if constructor ran
+    let ctor_ran = unsafe { CTOR_RAN };
+    let msg: &[u8] = if ctor_ran == 0xDEAD_BEEF {
+        b"kei_ui: ctor OK\n"
+    } else {
+        b"kei_ui: ctor MISSING\n"
+    };
+    unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len() as _); }
     let msg = b"kei_ui: starting\n";
     unsafe { libc::write(2, msg.as_ptr() as *const _, msg.len() as _); }
 
