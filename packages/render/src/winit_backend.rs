@@ -206,6 +206,11 @@ impl App {
             window_size: (page_w, page_h),
             hidpi_scale: self.scale_factor as f32,
             zoom: self.zoom,
+            color_scheme: if is_os_dark_mode() {
+                blitz_traits::shell::ColorScheme::Dark
+            } else {
+                blitz_traits::shell::ColorScheme::Light
+            },
             ..Default::default()
         };
 
@@ -1998,6 +2003,36 @@ fn plot(buffer: &mut [u32], buf_w: usize, x: usize, y: usize, color: u32) {
 
 /// Derive a stable, pleasant color (XRGB) for a URL by hashing its host. Empty
 /// or local input yields a neutral gray, so the slot reads as "no favicon".
+/// Detect whether the OS is in dark mode, so pages using
+/// `prefers-color-scheme: dark` render correctly.
+#[cfg(target_os = "windows")]
+fn is_os_dark_mode() -> bool {
+    use std::process::Command;
+    // Check the registry: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme
+    // 0 = dark, 1 = light.
+    let out = Command::new("reg")
+        .args([
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            "/v",
+            "AppsUseLightTheme",
+        ])
+        .output();
+    match out {
+        Ok(o) => {
+            let s = String::from_utf8_lossy(&o.stdout);
+            // If AppsUseLightTheme is 0x0, dark mode is on.
+            !s.contains("0x1")
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_os_dark_mode() -> bool {
+    false
+}
+
 fn favicon_color(url: &str) -> u32 {
     if url.trim().is_empty() {
         return 0x4A4A5E;
