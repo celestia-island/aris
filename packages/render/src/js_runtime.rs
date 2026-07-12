@@ -606,6 +606,82 @@ fn strip_tags(html: &str) -> String {
     out
 }
 
+/// Map an HTML tag name to its corresponding HTMLxxxElement constructor name.
+fn tag_to_html_element_class(tag: &str) -> String {
+    // Known element interfaces per HTML spec.
+    match tag.to_lowercase().as_str() {
+        "a" => "HTMLAnchorElement",
+        "area" => "HTMLAreaElement",
+        "audio" => "HTMLAudioElement",
+        "br" => "HTMLBRElement",
+        "base" => "HTMLBaseElement",
+        "body" => "HTMLBodyElement",
+        "button" => "HTMLButtonElement",
+        "canvas" => "HTMLCanvasElement",
+        "dl" => "HTMLDListElement",
+        "data" => "HTMLDataElement",
+        "datalist" => "HTMLDataListElement",
+        "details" => "HTMLDetailsElement",
+        "dialog" => "HTMLDialogElement",
+        "dir" => "HTMLDirectoryElement",
+        "div" => "HTMLDivElement",
+        "embed" => "HTMLEmbedElement",
+        "fieldset" => "HTMLFieldSetElement",
+        "font" => "HTMLFontElement",
+        "form" => "HTMLFormElement",
+        "frame" => "HTMLFrameElement",
+        "frameset" => "HTMLFrameSetElement",
+        "hr" => "HTMLHRElement",
+        "head" => "HTMLHeadElement",
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "HTMLHeadingElement",
+        "html" => "HTMLHtmlElement",
+        "iframe" => "HTMLIFrameElement",
+        "img" => "HTMLImageElement",
+        "input" => "HTMLInputElement",
+        "li" => "HTMLLIElement",
+        "label" => "HTMLLabelElement",
+        "legend" => "HTMLLegendElement",
+        "link" => "HTMLLinkElement",
+        "map" => "HTMLMapElement",
+        "menu" => "HTMLMenuElement",
+        "meta" => "HTMLMetaElement",
+        "meter" => "HTMLMeterElement",
+        "ins" | "del" => "HTMLModElement",
+        "ol" => "HTMLOListElement",
+        "object" => "HTMLObjectElement",
+        "optgroup" => "HTMLOptGroupElement",
+        "option" => "HTMLOptionElement",
+        "output" => "HTMLOutputElement",
+        "p" => "HTMLParagraphElement",
+        "param" => "HTMLParamElement",
+        "picture" => "HTMLPictureElement",
+        "pre" => "HTMLPreElement",
+        "progress" => "HTMLProgressElement",
+        "blockquote" | "q" => "HTMLQuoteElement",
+        "script" => "HTMLScriptElement",
+        "select" => "HTMLSelectElement",
+        "slot" => "HTMLSlotElement",
+        "source" => "HTMLSourceElement",
+        "span" => "HTMLSpanElement",
+        "style" => "HTMLStyleElement",
+        "caption" => "HTMLTableCaptionElement",
+        "th" | "td" => "HTMLTableCellElement",
+        "col" | "colgroup" => "HTMLTableColElement",
+        "table" => "HTMLTableElement",
+        "tr" => "HTMLTableRowElement",
+        "thead" | "tbody" | "tfoot" => "HTMLTableSectionElement",
+        "template" => "HTMLTemplateElement",
+        "textarea" => "HTMLTextAreaElement",
+        "time" => "HTMLTimeElement",
+        "title" => "HTMLTitleElement",
+        "track" => "HTMLTrackElement",
+        "ul" => "HTMLUListElement",
+        "video" => "HTMLVideoElement",
+        _ => "HTMLElement",
+    }
+    .to_string()
+}
+
 fn arg_string(args: &[JsValue], idx: usize) -> String {
     args.get(idx)
         .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
@@ -1827,6 +1903,19 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     "http://www.w3.org/1999/xhtml"
                 ))),
             );
+            // Set the prototype chain so instanceof works.
+            // Map tag → HTMLxxxElement constructor name.
+            let ctor_name = tag_to_html_element_class(&tag);
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(ctor_name), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    // Get constructor.prototype
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = handle.set_prototype(Some(proto.clone()));
+                        }
+                    }
+                }
+            }
             Ok(handle.into())
         },
         Gc::clone(&bridge),
