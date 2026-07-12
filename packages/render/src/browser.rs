@@ -61,6 +61,8 @@ pub struct BrowserState {
     pending_loads: Mutex<Vec<LoadRequest>>,
     /// Set by [`BrowserShellProvider::request_redraw`] to wake the loop.
     pub redraw_requested: AtomicBool,
+    /// True while a navigation is in flight (set on load_url, cleared on commit).
+    pub navigating: AtomicBool,
     /// Latest window-title string pushed by the shell provider.
     pending_title: Mutex<Option<String>>,
     /// Latest IME state pushed by the shell provider.
@@ -75,6 +77,7 @@ impl BrowserState {
             history_idx: Mutex::new(0),
             pending_loads: Mutex::new(Vec::new()),
             redraw_requested: AtomicBool::new(false),
+            navigating: AtomicBool::new(false),
             pending_title: Mutex::new(None),
             pending_ime: Mutex::new(None),
         }
@@ -110,6 +113,8 @@ impl BrowserState {
     /// entry at that index, we only update `current_url` without truncating —
     /// otherwise we'd wipe the forward history we just stepped back from.
     pub fn commit_load(&self, url: Url) {
+        // Navigation completed — clear the loading indicator.
+        self.navigating.store(false, Ordering::Relaxed);
         let mut history = self.history.lock().unwrap();
         let mut idx = self.history_idx.lock().unwrap();
         // History navigation: the index was moved by go_back/go_forward and the
@@ -192,6 +197,8 @@ impl BrowserState {
     /// caller has already moved the history index.
     fn load_url(self: &Arc<Self>, url: &Url) {
         let scheme = url.scheme();
+        // Mark navigation in flight for the loading indicator.
+        self.navigating.store(true, Ordering::Relaxed);
         match scheme {
             "http" | "https" => {
                 let url = url.clone();

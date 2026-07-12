@@ -311,6 +311,7 @@ impl App {
         let css_w = self.css_size().0;
         let can_back = self.state.can_go_back();
         let can_fwd = self.state.can_go_forward();
+        let navigating = self.state.navigating.load(Ordering::Relaxed);
         let url_display = if self.chrome.address_focused {
             self.chrome.address.clone()
         } else if let Some(link) = self.hovered_link_url() {
@@ -322,6 +323,13 @@ impl App {
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_default()
+        };
+        // While a navigation is in flight, prefix the address with a loading
+        // glyph so the user gets feedback that the page is loading.
+        let url_display = if navigating && !self.chrome.address_focused {
+            format!("⟳ {}", url_display)
+        } else {
+            url_display
         };
         let focused = self.chrome.address_focused;
         let caret_on = self.chrome.caret_visible();
@@ -864,9 +872,25 @@ impl ApplicationHandler for App {
                     }
                     // Global shortcuts.
                     let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
+                    let alt = self.modifiers.alt_key();
                     match &event.logical_key {
                         Key::Named(NamedKey::Escape) => {
                             event_loop.exit();
+                            return;
+                        }
+                        // Alt+Left / Alt+Right: history navigation.
+                        Key::Named(NamedKey::ArrowLeft) if alt => {
+                            self.state.go_back();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) if alt => {
+                            self.state.go_forward();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
                             return;
                         }
                         Key::Named(NamedKey::F5) => {
