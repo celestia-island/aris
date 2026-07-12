@@ -126,6 +126,7 @@ fn run_window_impl(
         scrollbar_drag: None,
         #[cfg(feature = "js")]
         js: None,
+        find: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -163,6 +164,21 @@ struct App {
     /// the `js` feature is on.
     #[cfg(feature = "js")]
     js: Option<crate::js_runtime::JsRuntime>,
+    /// Ctrl+F find-in-page state, when the find bar is open.
+    find: Option<FindState>,
+}
+
+/// State for the find-in-page overlay.
+#[derive(Clone)]
+struct FindState {
+    /// Current query text typed in the find bar.
+    query: String,
+    /// Index of the active match (for next/prev cycling).
+    active: usize,
+    /// Cached match rectangles (page CSS px) for the current query.
+    matches: Vec<(f32, f32, f32, f32)>,
+    /// Caret blink for the find input.
+    caret_blink: bool,
 }
 
 impl App {
@@ -363,6 +379,7 @@ impl App {
         let hover_region = self.chrome.hover;
         let menu = self.context_menu.clone();
         let scrollbar = self.scrollbar_metrics();
+        let find = self.find.clone();
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -448,6 +465,19 @@ impl App {
             draw_scrollbar(&mut buffer, buf_w, buf_h, chrome_phys, scale, sb);
         }
 
+        // Find-in-page: highlight matches + draw the find bar.
+        if let Some(f) = &find {
+            draw_find_overlays(
+                &mut buffer,
+                buf_w,
+                buf_h,
+                chrome_phys,
+                scale,
+                css_w,
+                f,
+            );
+        }
+
         // Context menu overlay (top-most).
         if let Some(menu) = &menu {
             draw_context_menu(&mut buffer, buf_w, buf_h, scale, menu);
@@ -482,6 +512,86 @@ impl App {
             scroll_y,
             _chrome_phys: chrome_phys,
         })
+    }
+
+    /// Search the document for `query`, returning match rectangles (page CSS
+    /// px). Each text node whose content contains the query contributes one
+    /// rectangle per occurrence, positioned at the parent element's layout box.
+    /// (Per-character positioning would need text-shaping data; element-level
+    /// highlighting is the pragmatic approximation browsers' Ctrl+F start from.)
+    fn find_matches(&self, query: &str) -> Vec<(f32, f32, f32, f32)> {
+        let mut out = Vec::new();
+        let Some(doc) = self.doc.as_ref() else {
+            return out;
+        };
+        if query.is_empty() {
+            return out;
+        }
+        let needle = query.to_lowercase();
+        for (id, node) in doc.tree().iter() {
+            if node.text_data().is_none() {
+                continue;
+            }
+            let content = node.text_content().to_lowercase();
+            if !content.contains(&needle) {
+                continue;
+            }
+            // Use this text node's own layout box if available, else the parent's.
+            let pos = node.absolute_position(0.0, 0.0);
+            let w = node.final_layout.size.width;
+            let h = node.final_layout.size.height;
+            if w < 1.0 || h < 1.0 {
+                continue;
+            }
+            // One highlight rect per occurrence, horizontally distributed.
+            let count = content.matches(&needle).count();
+            for i in 0..count {
+                let slice = w / count.max(1) as f32;
+                let x = pos.x + slice * i as f32;
+                out.push((x, pos.y, slice, h));
+            }
+            let _ = id;
+        }
+        out
+    }
+
+    /// Open the find bar with an empty query.
+    fn open_find(&mut self) {
+        self.find = Some(FindState {
+            query: String::new(),
+            active: 0,
+            matches: Vec::new(),
+            caret_blink: true,
+        });
+    }
+
+    /// Update the find query and refresh matches.
+    fn update_find_query(&mut self, q: &str) {
+        let matches = self.find_matches(q);
+        let Some(f) = self.find.as_mut() else {
+            return;
+        };
+        f.query = q.to_string();
+        f.active = 0;
+        f.caret_blink = true;
+        f.matches = matches;
+    }
+
+    /// Cycle to the next/previous match.
+    fn find_next(&mut self, forward: bool) {
+        let Some(f) = self.find.as_mut() else {
+            return;
+        };
+        if f.matches.is_empty() {
+            return;
+        }
+        if forward {
+            f.active = (f.active + 1) % f.matches.len();
+        } else if f.active == 0 {
+            f.active = f.matches.len() - 1;
+        } else {
+            f.active -= 1;
+        }
     }
 
     fn update_cursor_icon(&mut self) {
@@ -1033,6 +1143,66 @@ impl ApplicationHandler for App {
                     // Global shortcuts.
                     let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
                     let alt = self.modifiers.alt_key();
+                    // Ctrl+F opens the find bar.
+                    if ctrl
+                        && matches!(&event.logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("f"))
+                    {
+                        self.open_find();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    // When the find bar is open, it captures keyboard input.
+                    if self.find.is_some() {
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.find = None;
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                self.find_next(!self.modifiers.shift_key());
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                let q = self
+                                    .find
+                                    .as_ref()
+                                    .map(|f| {
+                                        let mut s = f.query.clone();
+                                        s.pop();
+                                        s
+                                    })
+                                    .unwrap_or_default();
+                                self.update_find_query(&q);
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                            Key::Character(c)
+                                if !ctrl && !alt && !c.is_empty() =>
+                            {
+                                let q = self
+                                    .find
+                                    .as_ref()
+                                    .map(|f| format!("{}{}", f.query, c.as_str()))
+                                    .unwrap_or_default();
+                                self.update_find_query(&q);
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                            _ => return,
+                        }
+                    }
                     match &event.logical_key {
                         Key::Named(NamedKey::Escape) => {
                             event_loop.exit();
@@ -1878,6 +2048,87 @@ fn draw_scrollbar(
                 buffer[idx] = thumb_color;
             }
         }
+    }
+}
+
+/// Draw find-in-page match highlights + the find bar (top-right).
+fn draw_find_overlays(
+    buffer: &mut [u32],
+    buf_w: usize,
+    buf_h: usize,
+    chrome_phys: usize,
+    scale: f32,
+    css_w: f32,
+    find: &FindState,
+) {
+    // Match highlights (page CSS px → physical, offset by chrome).
+    let normal = 0xF9E2AF; // soft yellow
+    let active = 0xFF9E64; // orange for the current match
+    for (i, (x, y, w, h)) in find.matches.iter().enumerate() {
+        let color = if i == find.active { active } else { normal };
+        let px = (*x * scale) as i32;
+        let py = (*y * scale) as i32 + chrome_phys as i32;
+        let pw = (*w * scale) as i32;
+        let ph = (*h * scale) as i32;
+        for ry in 0..ph {
+            for rx in 0..pw {
+                let bx = px + rx;
+                let by = py + ry;
+                if bx >= 0 && (bx as usize) < buf_w && by >= 0 && (by as usize) < buf_h {
+                    let idx = by as usize * buf_w + bx as usize;
+                    if idx < buffer.len() {
+                        // Alpha-blend ~40% over the existing pixel.
+                        let dst = buffer[idx];
+                        let dr = (dst >> 16) & 0xFF;
+                        let dg = (dst >> 8) & 0xFF;
+                        let db = dst & 0xFF;
+                        let sr = ((color >> 16) & 0xFF) as u32;
+                        let sg = ((color >> 8) & 0xFF) as u32;
+                        let sb = (color & 0xFF) as u32;
+                        let nr = (sr * 120 + dr * 135) / 255;
+                        let ng = (sg * 120 + dg * 135) / 255;
+                        let nb = (sb * 120 + db * 135) / 255;
+                        buffer[idx] = (nr << 16) | (ng << 8) | nb;
+                    }
+                }
+            }
+        }
+    }
+
+    // Find bar: a small panel top-right below the chrome, showing the query
+    // (text rendered via the strip pipeline) and the match count.
+    let bar_w_css = 220.0_f32.min(css_w - 16.0);
+    let bar_h_css = 32.0;
+    let bar_x_css = css_w - bar_w_css - 8.0;
+    let bar_y_css = CHROME_HEIGHT_CSS + 4.0;
+    let bx = (bar_x_css * scale) as usize;
+    let by = (bar_y_css * scale) as usize;
+    let bw = (bar_w_css * scale) as usize;
+    let bh = (bar_h_css * scale) as usize;
+    let bg = 0x24243A;
+    let border = 0x3A3A4E;
+    for ry in 0..bh {
+        for rx in 0..bw {
+            let idx = by * buf_w + bx + rx + ry * 0;
+            let idx = (by + ry) * buf_w + (bx + rx);
+            if idx < buffer.len() {
+                let on_border = rx == 0 || rx == bw - 1 || ry == 0 || ry == bh - 1;
+                buffer[idx] = if on_border { border } else { bg };
+            }
+        }
+    }
+    // Render the query text + match count.
+    let label = if find.query.is_empty() {
+        "Find:".to_string()
+    } else {
+        format!("Find: {} ({}/{})", find.query, find.active + 1, find.matches.len())
+    };
+    let label_w = bw.saturating_sub(16);
+    let label_h = (bar_h_css as f32 * 0.6) as usize;
+    if let Some(strip) = render_text_strip_colored(&label, label_w, label_h, scale, "#9aa5ce") {
+        let tx = bx + 8;
+        let ty = by + (bh.saturating_sub(strip.height)) / 2;
+        blit_strip(buffer, buf_w, buf_h, &strip, tx, ty);
     }
 }
 
