@@ -125,6 +125,7 @@ impl JsRuntime {
         install_console(&mut ctx);
         install_window(&mut ctx, String::new());
         install_timers(&mut ctx, &bridge);
+        install_event_api(&mut ctx);
         install_webrtc_stubs(&mut ctx);
         Self {
             ctx,
@@ -782,6 +783,217 @@ fn install_window(ctx: &mut Context, url: String) {
 }
 
 /// Install a `console` global with `log`/`warn`/`error`/`info` methods that
+/// Install the Event API: Event constructor, CustomEvent, EventTarget,
+/// and the dispatchEvent method on element handles.
+fn install_event_api(ctx: &mut Context) {
+    // Event constructor: new Event(type, {bubbles, cancelable, composed})
+    let event_ctor = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let type_ = arg_string(args, 0);
+        let bubbles = args
+            .get(1)
+            .and_then(|o| o.as_object())
+            .and_then(|o| o.get(boa_engine::js_string!("bubbles"), ctx).ok())
+            .and_then(|v| v.as_boolean())
+            .unwrap_or(false);
+        let cancelable = args
+            .get(1)
+            .and_then(|o| o.as_object())
+            .and_then(|o| o.get(boa_engine::js_string!("cancelable"), ctx).ok())
+            .and_then(|v| v.as_boolean())
+            .unwrap_or(false);
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = obj.insert_property(
+            boa_engine::js_string!("type"),
+            pd(JsValue::from(boa_engine::js_string!(type_))),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("bubbles"),
+            pd(JsValue::from(bubbles)),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("cancelable"),
+            pd(JsValue::from(cancelable)),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("composed"), pd(JsValue::from(false)));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("defaultPrevented"),
+            pd(JsValue::from(false)),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
+        let _ = obj.insert_property(boa_engine::js_string!("currentTarget"), pd(JsValue::null()));
+        let _ = obj.insert_property(boa_engine::js_string!("timeStamp"), pd(JsValue::from(0u32)));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("isTrusted"),
+            pd(JsValue::from(false)),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("eventPhase"),
+            pd(JsValue::from(0u32)),
+        );
+        // Methods
+        let noop_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("preventDefault"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        let noop_fn2 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("stopPropagation"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn2).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        let noop_fn3 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("stopImmediatePropagation"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn3).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        let init_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("initEvent"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), init_fn).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("Event"), 1, event_ctor);
+
+    // CustomEvent constructor: extends Event with detail.
+    let custom_ctor = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        // Build a base Event first, then add detail.
+        let type_ = arg_string(args, 0);
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = obj.insert_property(
+            boa_engine::js_string!("type"),
+            pd(JsValue::from(boa_engine::js_string!(type_))),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("bubbles"), pd(JsValue::from(false)));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("cancelable"),
+            pd(JsValue::from(false)),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("defaultPrevented"),
+            pd(JsValue::from(false)),
+        );
+        let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("detail"),
+            pd(args.get(1).cloned().unwrap_or(JsValue::null())),
+        );
+        let noop_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("preventDefault"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        let noop_fn2 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("stopPropagation"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn2).build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("CustomEvent"), 1, custom_ctor);
+
+    // EventTarget constructor: returns an object with addEventListener,
+    // removeEventListener, and dispatchEvent.
+    let et_ctor = NativeFunction::from_copy_closure(|_this, _args, ctx| {
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // addEventListener
+        let add_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("addEventListener"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), add_fn).build(),
+            )),
+        );
+        // removeEventListener
+        let rm_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("removeEventListener"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), rm_fn).build(),
+            )),
+        );
+        // dispatchEvent
+        let disp_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
+        let _ = obj.insert_property(
+            boa_engine::js_string!("dispatchEvent"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), disp_fn).build(),
+            )),
+        );
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("EventTarget"), 0, et_ctor);
+
+    // Event constants on the Event constructor object itself.
+    // (Already set as properties on each Event instance above.)
+}
+
 /// forward to tracing.
 fn install_console(ctx: &mut Context) {
     use boa_engine::object::ObjectInitializer;
@@ -1582,6 +1794,46 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
+
+    // dispatchEvent(event) — calls listeners registered for event.type.
+    let dispatch = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event = args.first().cloned().unwrap_or(JsValue::null());
+        // Get event type to find matching listeners.
+        let event_type = event
+            .as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        // Set event.target = this.
+        if let Some(ev_obj) = event.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("target"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(this.clone())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+        }
+        // For now, we look for event handler properties (onclick, onload, etc.)
+        // and call them. addEventListener-registered handlers are fired via
+        // fire_click for click events.
+        if !event_type.is_empty() {
+            let handler_prop = format!("on{}", event_type);
+            if let Some(this_obj) = this.as_object() {
+                if let Ok(handler) = this_obj.get(boa_engine::js_string!(handler_prop), ctx) {
+                    if let Some(fn_obj) = handler.as_object() {
+                        if fn_obj.is_callable() {
+                            let _ = fn_obj.call(this, &[event.clone()], ctx);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(true))
+    });
+    init.function(dispatch, boa_engine::js_string!("dispatchEvent"), 1);
 
     // appendChild
     let append = NativeFunction::from_copy_closure_with_captures(
