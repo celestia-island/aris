@@ -1555,7 +1555,7 @@ fn favicon_color(url: &str) -> u32 {
     // Map the hash into HSL space with fixed S/L for a soft, distinct color.
     let hue = (h % 360) as f32;
     let (r, g, b) = hsl_to_rgb(hue, 0.55, 0.55);
-    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+    (r << 16) | (g << 8) | b
 }
 
 fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u32, u32, u32) {

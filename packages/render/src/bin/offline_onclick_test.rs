@@ -21,6 +21,7 @@ fn main() {
     let html = r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><title>onclick test</title>
 <style>body{font-family:system-ui;}</style></head><body>
 <button id="btn" onclick="document.getElementById('out').textContent = 'Hello aris'">Click</button>
+<button id="sty" onclick="document.getElementById('out').style.cssText = 'color:#ff0000'">Style</button>
 <div id="out">empty</div>
 </body></html>"#;
 
@@ -42,23 +43,20 @@ fn main() {
     let mut doc = HtmlDocument::from_html(html, doc_config);
     doc.resolve(0.0);
 
-    // Find the button node.
-    let btn_id = doc
-        .tree()
-        .iter()
-        .find(|(_, n)| {
-            n.element_data()
-                .map(|e| format!("{:?}", e.name.local).contains("'button'"))
-                .unwrap_or(false)
-        })
-        .map(|(id, _)| id)
-        .expect("no <button> found");
-    let out_id = doc
-        .tree()
-        .iter()
-        .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
-        .map(|(id, _)| id)
-        .expect("no #out found");
+    // Find #btn and #sty and #out by id.
+    let find_by_id = |doc: &HtmlDocument, id: &str| {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(nid, _)| nid)
+            .unwrap_or(usize::MAX)
+    };
+    let btn_id = find_by_id(&doc, "btn");
+    let sty_id = find_by_id(&doc, "sty");
+    let out_id = find_by_id(&doc, "out");
+    assert!(btn_id != usize::MAX, "no #btn");
+    assert!(sty_id != usize::MAX, "no #sty");
+    assert!(out_id != usize::MAX, "no #out");
 
     let before = doc
         .get_node(out_id)
@@ -66,22 +64,47 @@ fn main() {
         .unwrap_or_default();
     println!("#out before click: {:?}", before);
 
-    // Run the onclick handler as if the button were clicked.
+    // Run the textContent onclick on #btn.
     let r = aris_render::js_interactive::run_onclick(&mut doc, btn_id);
-    println!("onclick: executed={} mutated={}", r.executed, r.dom_mutated);
+    println!(
+        "btn onclick: executed={} mutated={}",
+        r.executed, r.dom_mutated
+    );
     for e in &r.errors {
         println!("  [js] {}", e);
     }
-
     let after = doc
         .get_node(out_id)
         .map(|n| n.text_content())
         .unwrap_or_default();
-    println!("#out after click:  {:?}", after);
-
+    println!("#out after #btn click:  {:?}", after);
     if after != "Hello aris" {
         println!("FAIL: expected 'Hello aris', got {:?}", after);
         std::process::exit(2);
     }
-    println!("OK: onclick updated #out to {:?}", after);
+    println!("OK: textContent onclick set #out to {:?}", after);
+
+    // Now run the style.cssText onclick on #sty and verify #out got a style.
+    let r2 = aris_render::js_interactive::run_onclick(&mut doc, sty_id);
+    println!(
+        "sty onclick: executed={} mutated={}",
+        r2.executed, r2.dom_mutated
+    );
+    for e in &r2.errors {
+        println!("  [js] {}", e);
+    }
+    let style_attr = doc
+        .get_node(out_id)
+        .and_then(|n| n.attr(blitz_dom::local_name!("style")))
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    println!("#out style after #sty click: {:?}", style_attr);
+    if !style_attr.contains("color") {
+        println!("FAIL: expected a style with 'color', got {:?}", style_attr);
+        std::process::exit(2);
+    }
+    println!(
+        "OK: style.cssText onclick set #out style to {:?}",
+        style_attr
+    );
 }

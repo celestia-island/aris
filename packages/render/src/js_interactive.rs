@@ -54,15 +54,23 @@ pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
     };
     result.executed = true;
 
-    // Find getElementById('id').textContent = 'value' assignments and apply.
-    let assignments = parse_textcontent_assignments(&src);
+    // Find getElementById('id').<prop> = 'value' assignments and apply.
+    // Supported props: textContent / innerText (set text), style.cssText (set
+    // inline style). Other props are ignored.
+    let assignments = parse_assignments(&src);
     let mut changed = false;
-    for (target_id, raw_value) in assignments {
-        // Evaluate the right-hand side as a JS expression via Boa when it isn't
-        // a trivial string literal. For literal strings we use them directly.
+    for (target_id, prop, raw_value) in assignments {
         let value = eval_rhs(&raw_value, doc, &mut result.errors);
-        if let Some(node_id) = find_by_id(doc, &target_id) {
-            set_text_content(doc, node_id, &value);
+        let applied = match prop.as_str() {
+            "textContent" | "innerText" => {
+                find_by_id(doc, &target_id).map(|nid| set_text_content(doc, nid, &value))
+            }
+            "style.cssText" => {
+                find_by_id(doc, &target_id).map(|nid| set_attribute(doc, nid, "style", &value))
+            }
+            _ => None,
+        };
+        if applied.is_some() {
             changed = true;
         }
     }
@@ -70,28 +78,29 @@ pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
     result
 }
 
-/// Parse `document.getElementById("id").textContent = "value"` patterns from
-/// the source, returning (id, raw_value_string) pairs. Handles single or
-/// double quotes. `innerText` is treated as an alias for `textContent`.
-fn parse_textcontent_assignments(src: &str) -> Vec<(String, String)> {
+/// Parse `document.getElementById("id").<prop> = "value"` patterns from the
+/// source, returning (id, prop, value) triples. Recognized props:
+/// `textContent`, `innerText`, `style.cssText`. Handles single or double quotes.
+fn parse_assignments(src: &str) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     let key = "getElementById";
     let mut search_from = 0;
     while let Some(rel) = src[search_from..].find(key) {
         let i = search_from + rel;
-        // The argument starts after "getElementById".
         let after_key = &src[i + key.len()..];
         let Some((id, after_id)) = parse_quoted_arg(after_key) else {
             search_from = i + key.len();
             continue;
         };
-        // Skip the closing ')' of getElementById(...).
         let after_id = after_id.trim_start_matches(')');
         let rest = skip_whitespace(after_id);
-        let rest = if let Some(r) = rest.strip_prefix(".textContent") {
-            r
+        // Match a property chain like ".textContent" or ".style.cssText".
+        let (prop, rest) = if let Some(r) = rest.strip_prefix(".style.cssText") {
+            ("style.cssText", r)
+        } else if let Some(r) = rest.strip_prefix(".textContent") {
+            ("textContent", r)
         } else if let Some(r) = rest.strip_prefix(".innerText") {
-            r
+            ("innerText", r)
         } else {
             search_from = i + key.len();
             continue;
@@ -103,11 +112,17 @@ fn parse_textcontent_assignments(src: &str) -> Vec<(String, String)> {
         };
         let rest = skip_whitespace(rest);
         if let Some((val, _)) = parse_quoted_arg(rest) {
-            out.push((id, val));
+            out.push((id, prop.to_string(), val));
         }
         search_from = i + key.len();
     }
     out
+}
+
+/// Set an attribute on an element node (replacing if present, else adding).
+fn set_attribute(doc: &mut BaseDocument, node_id: usize, name: &str, value: &str) {
+    let qname = blitz_dom::QualName::new(None, blitz_dom::ns!(html), name.into());
+    doc.mutate().set_attribute(node_id, qname, value);
 }
 
 fn skip_whitespace(s: &str) -> &str {
