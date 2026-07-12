@@ -1055,12 +1055,13 @@ fn draw_chrome(
     let layout = ChromeLayout::compute(css_w);
     let to_phys = |v: f32| (v * scale) as usize;
 
-    // Buttons.
-    let draw_arrow = |buffer: &mut [u32],
-                      rect: (f32, f32, f32, f32),
-                      enabled: bool,
-                      hovered: bool,
-                      fwd: bool| {
+    // Navigation buttons: render Lucide-style stroke icons (arrow-left /
+    // arrow-right / rotate-ccw) defined in a 24x24 viewBox, scaled into each
+    // button rect. Lucide path data:
+    //   arrow-left : M19 12H5  M12 19l-7-7 7-7
+    //   arrow-right: M5 12h14  M12 19l7-7-7-7
+    //   rotate-ccw : M3 2v6h6  M3 13a9 9 0 1 0 3-7.7L3 8
+    let draw_back = |buf: &mut [u32], rect: (f32, f32, f32, f32), enabled: bool, hovered: bool| {
         let color = if !enabled {
             btn_disabled
         } else if hovered {
@@ -1068,42 +1069,99 @@ fn draw_chrome(
         } else {
             btn_color
         };
-        let rx = to_phys(rect.0) as i32;
-        let ry = to_phys(rect.1) as i32;
-        let rw = to_phys(rect.2) as i32;
-        let rh = to_phys(rect.3) as i32;
-        let cx = rx + rw / 2;
-        let cy = ry + rh / 2;
-        let sz = rw.min(rh) / 3;
-        for dy in 0..sz {
-            let half = dy / 2;
-            for dx in 0..(sz - half) {
-                let (px, py1, py2) = if fwd {
-                    (cx + sz / 2 - dx - 1, cy - sz / 2 + dy, cy + sz / 2 - dy - 1)
-                } else {
-                    (cx - sz / 2 + dx, cy - sz / 2 + dy, cy + sz / 2 - dy - 1)
-                };
-                plot(buffer, buf_w, px as usize, py1 as usize, color);
-                plot(buffer, buf_w, px as usize, py2 as usize, color);
-            }
-        }
+        let (ox, oy, unit, _w, _h) = icon_origin(rect, scale);
+        let stroke = 1.8 * unit;
+        // horizontal line 19,12 -> 5,12
+        draw_line(
+            buf,
+            buf_w,
+            ox + 19.0 * unit,
+            oy + 12.0 * unit,
+            ox + 5.0 * unit,
+            oy + 12.0 * unit,
+            stroke,
+            color,
+        );
+        // arrowhead 12,19 -> 5,12 -> 12,5
+        draw_line(
+            buf,
+            buf_w,
+            ox + 12.0 * unit,
+            oy + 19.0 * unit,
+            ox + 5.0 * unit,
+            oy + 12.0 * unit,
+            stroke,
+            color,
+        );
+        draw_line(
+            buf,
+            buf_w,
+            ox + 12.0 * unit,
+            oy + 5.0 * unit,
+            ox + 5.0 * unit,
+            oy + 12.0 * unit,
+            stroke,
+            color,
+        );
     };
-    draw_arrow(
+    let draw_forward =
+        |buf: &mut [u32], rect: (f32, f32, f32, f32), enabled: bool, hovered: bool| {
+            let color = if !enabled {
+                btn_disabled
+            } else if hovered {
+                btn_hover
+            } else {
+                btn_color
+            };
+            let (ox, oy, unit, _w, _h) = icon_origin(rect, scale);
+            let stroke = 1.8 * unit;
+            // horizontal line 5,12 -> 19,12
+            draw_line(
+                buf,
+                buf_w,
+                ox + 5.0 * unit,
+                oy + 12.0 * unit,
+                ox + 19.0 * unit,
+                oy + 12.0 * unit,
+                stroke,
+                color,
+            );
+            // arrowhead 12,19 -> 19,12 -> 12,5
+            draw_line(
+                buf,
+                buf_w,
+                ox + 12.0 * unit,
+                oy + 19.0 * unit,
+                ox + 19.0 * unit,
+                oy + 12.0 * unit,
+                stroke,
+                color,
+            );
+            draw_line(
+                buf,
+                buf_w,
+                ox + 12.0 * unit,
+                oy + 5.0 * unit,
+                ox + 19.0 * unit,
+                oy + 12.0 * unit,
+                stroke,
+                color,
+            );
+        };
+    draw_back(
         buffer,
         layout.back,
         can_back,
         hover == Some(ChromeRegion::Back),
-        false,
     );
-    draw_arrow(
+    draw_forward(
         buffer,
         layout.forward,
         can_fwd,
         hover == Some(ChromeRegion::Forward),
-        true,
     );
 
-    // Reload (circle arc).
+    // Reload: rotate-ccw. L-shaped corner + a near-full circle (arc).
     {
         let rect = layout.reload;
         let color = if hover == Some(ChromeRegion::Reload) {
@@ -1111,20 +1169,44 @@ fn draw_chrome(
         } else {
             btn_color
         };
-        let rx = to_phys(rect.0) as i32;
-        let ry = to_phys(rect.1) as i32;
-        let rw = to_phys(rect.2) as i32;
-        let rh = to_phys(rect.3) as i32;
-        let cx = rx + rw / 2;
-        let cy = ry + rh / 2;
-        let r = (rw.min(rh) as f32 / 3.0) as i32;
-        let steps = 24;
-        for i in 0..steps {
-            let a = (i as f32) * std::f32::consts::TAU / steps as f32;
-            let x = cx + (a.cos() * r as f32) as i32;
-            let y = cy + (a.sin() * r as f32) as i32;
-            plot(buffer, buf_w, x as usize, y as usize, color);
-        }
+        let (ox, oy, unit, _w, _h) = icon_origin(rect, scale);
+        let stroke = 1.8 * unit;
+        // corner: M3 2v6h6  -> (3,2)->(3,8)->(9,8)
+        draw_line(
+            buffer,
+            buf_w,
+            ox + 3.0 * unit,
+            oy + 2.0 * unit,
+            ox + 3.0 * unit,
+            oy + 8.0 * unit,
+            stroke,
+            color,
+        );
+        draw_line(
+            buffer,
+            buf_w,
+            ox + 3.0 * unit,
+            oy + 8.0 * unit,
+            ox + 9.0 * unit,
+            oy + 8.0 * unit,
+            stroke,
+            color,
+        );
+        // arc: M3 13a9 9 0 1 0 3-7.7 -> circle centered ~(12,13) r~9
+        draw_circle(
+            buffer,
+            buf_w,
+            ox + 12.0 * unit,
+            oy + 13.0 * unit,
+            9.0 * unit,
+            stroke,
+            color,
+            // Start at the bottom-left where the arc meets (3,13) and sweep
+            // clockwise almost all the way around, leaving a small gap where
+            // the arrowhead corner sits.
+            205.0_f32.to_radians(),
+            175.0_f32.to_radians(),
+        );
     }
 
     // Address bar background + border.
@@ -1210,6 +1292,105 @@ fn plot(buffer: &mut [u32], buf_w: usize, x: usize, y: usize, color: u32) {
         let idx = y * buf_w + x;
         if idx < buffer.len() {
             buffer[idx] = color;
+        }
+    }
+}
+
+/// Compute the top-left origin (in physical px) of a 24×24 icon inside a
+/// button rect, centered. Returns `(ox, oy, unit, icon_phys_w, icon_phys_h)`
+/// where `unit` is the physical-pixels-per-viewBox-unit scale. Icon path
+/// coordinates are in the 0..24 viewBox; multiply by `unit` and add `ox`/`oy`.
+fn icon_origin(rect: (f32, f32, f32, f32), scale: f32) -> (f32, f32, f32, f32, f32) {
+    let bw_phys = rect.2 * scale;
+    let bh_phys = rect.3 * scale;
+    let icon_phys = bw_phys.min(bh_phys) * 0.72;
+    let unit = icon_phys / 24.0;
+    let ox = rect.0 * scale + (bw_phys - icon_phys) / 2.0;
+    let oy = rect.1 * scale + (bh_phys - icon_phys) / 2.0;
+    (ox, oy, unit, icon_phys, icon_phys)
+}
+
+/// Draw a thick line between two points (physical px), rasterized into
+/// `buffer` by stamping small discs along the segment.
+fn draw_line(
+    buffer: &mut [u32],
+    buf_w: usize,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    width: f32,
+    color: u32,
+) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = dx.hypot(dy);
+    if len < 0.5 {
+        return;
+    }
+    let steps = (len * 2.0).ceil() as i32;
+    let half = width / 2.0;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let cx = x0 + dx * t;
+        let cy = y0 + dy * t;
+        let r = half.ceil() as i32;
+        for py in -r..=r {
+            for px in -r..=r {
+                if (px as f32).hypot(py as f32) <= half {
+                    plot(
+                        buffer,
+                        buf_w,
+                        (cx + px as f32) as usize,
+                        (cy + py as f32) as usize,
+                        color,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Draw a stroked circle (or arc) centered at (cx, cy) in physical px.
+fn draw_circle(
+    buffer: &mut [u32],
+    buf_w: usize,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    width: f32,
+    color: u32,
+    start_rad: f32,
+    end_rad: f32,
+) {
+    let circumference = std::f32::consts::TAU * radius;
+    let steps = (circumference * 2.0).ceil() as i32;
+    let half = width / 2.0;
+    let r = half.ceil() as i32;
+    for i in 0..=steps {
+        let frac = i as f32 / steps as f32;
+        let mut a = start_rad + frac * (end_rad - start_rad);
+        // Normalize and handle wrap-around.
+        while a < 0.0 {
+            a += std::f32::consts::TAU;
+        }
+        while a > std::f32::consts::TAU {
+            a -= std::f32::consts::TAU;
+        }
+        let x = cx + a.cos() * radius;
+        let y = cy + a.sin() * radius;
+        for py in -r..=r {
+            for px in -r..=r {
+                if (px as f32).hypot(py as f32) <= half {
+                    plot(
+                        buffer,
+                        buf_w,
+                        (x + px as f32) as usize,
+                        (y + py as f32) as usize,
+                        color,
+                    );
+                }
+            }
         }
     }
 }
