@@ -250,6 +250,27 @@ impl App {
         Some((pos.x, pos.y, w, h))
     }
 
+    /// The URL of the link currently under the cursor, if any. Walks up from
+    /// the hovered node to the nearest `<a href>`, mirroring how browsers
+    /// populate the status bar.
+    fn hovered_link_url(&self) -> Option<String> {
+        let doc = self.doc.as_ref()?;
+        let mut id = doc.get_hover_node_id()?;
+        for _ in 0..16 {
+            let node = doc.get_node(id)?;
+            if let Some(href) = node.attr(blitz_dom::local_name!("href")) {
+                // Resolve relative to the base URL for display.
+                if let Some(base) = &self.current_url
+                    && let Ok(resolved) = base.join(href) {
+                        return Some(resolved.to_string());
+                    }
+                return Some(href.to_string());
+            }
+            id = node.parent?;
+        }
+        None
+    }
+
     /// Blit page frame, draw chrome, draw hover overlay.
     fn present(&mut self) {
         let (pw, ph) = self.phys_size;
@@ -264,6 +285,10 @@ impl App {
         let can_fwd = self.state.can_go_forward();
         let url_display = if self.chrome.address_focused {
             self.chrome.address.clone()
+        } else if let Some(link) = self.hovered_link_url() {
+            // Standard browser behavior: hovering a link shows its URL in the
+            // address bar / status area.
+            link
         } else {
             self.current_url
                 .as_ref()
