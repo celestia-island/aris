@@ -335,6 +335,18 @@ function format_value(v) {
     return String(v);
 }
 
+// Boa 0.20 instanceof workaround: override the global instanceof operator
+// by providing a custom assert_true that manually checks prototype chains
+// when the value is an 'instanceof' expression result.
+// Since we can't override the operator itself, we provide a helper that
+// tests do `assert_true(check_instance(x, Type))` — but WPT tests use
+// `assert_true(x instanceof Type)` directly. Instead, we patch
+// Object.prototype to add a custom instanceof behavior via __proto__ walking.
+// Actually, the simplest fix: make our constructors' .prototype objects
+// actually inherit from each other properly AND make element handles use
+// Object.create(proto) instead of plain objects. The harness shim can't
+// fix this — it's in the DOM API layer.
+
 var window = this;
 var self = this;
 "#;
