@@ -503,6 +503,23 @@ impl App {
         };
         if let Some(doc) = self.doc.as_mut() {
             doc.handle_ui_event(ui);
+            // On pointer-up (the click), run any onclick JS handler and, if it
+            // mutated the DOM, re-resolve so the change is visible next frame.
+            if !pressed {
+                let target = doc.get_hover_node_id().unwrap_or(0);
+                #[cfg(feature = "js")]
+                {
+                    let r = crate::js_interactive::run_onclick(doc, target);
+                    for e in &r.errors {
+                        tracing::warn!("[js] {}", e);
+                    }
+                    if r.dom_mutated {
+                        doc.resolve(0.0);
+                        self.needs_rerender = true;
+                    }
+                }
+                let _ = target;
+            }
         }
     }
 

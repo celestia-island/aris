@@ -20,6 +20,9 @@ pub mod winit_backend;
 #[cfg(feature = "winit")]
 pub mod browser;
 
+#[cfg(feature = "js")]
+pub mod js_interactive;
+
 use anyrender::ImageRenderer;
 
 /// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.
