@@ -45,8 +45,12 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon as WinitCursorIcon, Window, WindowId};
 
-/// Height of the browser chrome (address bar + buttons), in CSS logical px.
-const CHROME_HEIGHT_CSS: f32 = 44.0;
+/// Height of the tab strip above the chrome bar, in CSS logical px.
+const TAB_STRIP_HEIGHT_CSS: f32 = 28.0;
+/// Height of the chrome bar (address bar + buttons), below the tab strip.
+const CHROME_BAR_HEIGHT_CSS: f32 = 44.0;
+/// Total top offset (tab strip + chrome bar) — the Y where page content begins.
+const CHROME_HEIGHT_CSS: f32 = TAB_STRIP_HEIGHT_CSS + CHROME_BAR_HEIGHT_CSS;
 
 /// Run a blocking event loop that renders `html` into a desktop window.
 pub fn run_window(html: &str, config: &RenderConfig) -> anyhow::Result<()> {
@@ -103,34 +107,62 @@ fn run_window_impl(
     if fetch_remote && let Some(url) = &initial_url {
         state.navigate_input(url.as_str());
     }
+    // Create the initial tab.
+    let first_tab = Tab {
+        state: Arc::clone(&state),
+        doc: None,
+        current_html: initial_html.to_string(),
+        current_url: initial_url.clone(),
+        base_xrgb: Vec::new(),
+        needs_rerender: false,
+        #[cfg(feature = "js")]
+        js: None,
+        find: None,
+        zoom: 1.0,
+        title: "New Tab".to_string(),
+    };
     let mut app = App {
         config: config.clone(),
         window: None,
         context: None,
         surface: None,
-        doc: None,
-        current_html: initial_html.to_string(),
-        current_url: initial_url.clone(),
-        base_xrgb: Vec::new(),
+        tabs: vec![first_tab],
+        active: 0,
         phys_size: (0, 0),
         scale_factor: 1.0,
-        needs_rerender: false,
         last_caret: Instant::now(),
         prev_cursor: WinitCursorIcon::Default,
-        state: Arc::clone(&state),
         chrome: ChromeState::new(),
         last_mouse: (0.0, 0.0),
         modifiers: ModifiersState::default(),
         context_menu: None,
         should_quit: false,
         scrollbar_drag: None,
-        #[cfg(feature = "js")]
-        js: None,
-        find: None,
-        zoom: 1.0,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+/// Per-tab state: document, history, URL, JS runtime, etc.
+struct Tab {
+    state: Arc<BrowserState>,
+    doc: Option<HtmlDocument>,
+    /// Source HTML of the current document (kept so a resize rebuild keeps it).
+    current_html: String,
+    /// Canonical URL of the current document (base URL for relative resolution).
+    current_url: Option<Url>,
+    /// Pre-converted XRGB8888 of the rendered page (no chrome overlay).
+    base_xrgb: Vec<u32>,
+    needs_rerender: bool,
+    /// Persistent JS runtime for <script> execution + addEventListener.
+    #[cfg(feature = "js")]
+    js: Option<crate::js_runtime::JsRuntime>,
+    /// Ctrl+F find-in-page state, when the find bar is open.
+    find: Option<FindState>,
+    /// Page zoom level (1.0 = 100%).
+    zoom: f32,
+    /// Tab title (for the tab strip), from the page <title> or URL.
+    title: String,
 }
 
 /// The browser application state, held across the event loop.
@@ -139,19 +171,13 @@ struct App {
     window: Option<Rc<Window>>,
     context: Option<softbuffer::Context<Rc<Window>>>,
     surface: Option<softbuffer::Surface<Rc<Window>, Rc<Window>>>,
-    doc: Option<HtmlDocument>,
-    /// Source HTML of the current document (kept so a resize rebuild keeps it).
-    current_html: String,
-    /// Canonical URL of the current document (base URL for relative resolution).
-    current_url: Option<Url>,
-    /// Pre-converted XRGB8888 of the rendered page (no chrome overlay).
-    base_xrgb: Vec<u32>,
+    /// All open tabs. The active tab is `tabs[active]`.
+    tabs: Vec<Tab>,
+    active: usize,
     phys_size: (u32, u32),
     scale_factor: f64,
-    needs_rerender: bool,
     last_caret: Instant,
     prev_cursor: WinitCursorIcon,
-    state: Arc<BrowserState>,
     chrome: ChromeState,
     last_mouse: (f32, f32),
     modifiers: ModifiersState,
@@ -161,14 +187,100 @@ struct App {
     should_quit: bool,
     /// When dragging the scrollbar, the Y where the drag started (CSS px).
     scrollbar_drag: Option<f32>,
-    /// Persistent JS runtime for <script> execution + addEventListener, when
-    /// the `js` feature is on.
-    #[cfg(feature = "js")]
-    js: Option<crate::js_runtime::JsRuntime>,
-    /// Ctrl+F find-in-page state, when the find bar is open.
-    find: Option<FindState>,
-    /// Page zoom level (1.0 = 100%). Ctrl+=/Ctrl+-/Ctrl+0 adjust it.
-    zoom: f32,
+}
+
+impl App {
+    fn active_tab(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+    fn active_tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    /// Create a new tab with the start page (or navigate to `url` if given).
+    fn new_tab(&mut self, url: Option<&str>) {
+        let state = Arc::new(BrowserState::new());
+        let html = start_page();
+        let tab = Tab {
+            state: Arc::clone(&state),
+            doc: None,
+            current_html: html,
+            current_url: None,
+            base_xrgb: Vec::new(),
+            needs_rerender: false,
+            #[cfg(feature = "js")]
+            js: None,
+            find: None,
+            zoom: 1.0,
+            title: "New Tab".to_string(),
+        };
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+        // Sync the address bar + build the doc.
+        self.chrome.address.clear();
+        self.chrome.address_focused = false;
+        self.build_doc();
+        if let Some(u) = url {
+            self.active_tab_mut().state.navigate_input(u);
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Close the active tab. If it was the last tab, quit. Otherwise switch to
+    /// the adjacent tab.
+    fn close_tab(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.should_quit = true;
+            return;
+        }
+        self.tabs.remove(self.active);
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        }
+        // Sync chrome for the new active tab.
+        let url = self
+            .active_tab()
+            .current_url
+            .as_ref()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        self.chrome.set_url(&url);
+        self.chrome.address_focused = false;
+        self.build_doc();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Switch to the next/previous tab (wraps around).
+    fn switch_tab(&mut self, forward: bool) {
+        let n = self.tabs.len();
+        if n <= 1 {
+            return;
+        }
+        if forward {
+            self.active = (self.active + 1) % n;
+        } else if self.active == 0 {
+            self.active = n - 1;
+        } else {
+            self.active -= 1;
+        }
+        // Sync chrome for the new active tab.
+        let url = self
+            .active_tab()
+            .current_url
+            .as_ref()
+            .map(|u| u.to_string())
+            .unwrap_or_default();
+        self.chrome.set_url(&url);
+        self.chrome.address_focused = false;
+        self.active_tab_mut().find = None; // close any find bar from prev tab
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
 }
 
 /// State for the find-in-page overlay.
@@ -205,7 +317,7 @@ impl App {
         let viewport = Viewport {
             window_size: (page_w, page_h),
             hidpi_scale: self.scale_factor as f32,
-            zoom: self.zoom,
+            zoom: self.active_tab().zoom,
             color_scheme: if is_os_dark_mode() {
                 blitz_traits::shell::ColorScheme::Dark
             } else {
@@ -215,8 +327,8 @@ impl App {
         };
 
         let net = Arc::new(HttpNetProvider::new());
-        let nav = Arc::new(BrowserNavigationProvider::new(Arc::clone(&self.state)));
-        let shell = Arc::new(BrowserShellProvider::new(Arc::clone(&self.state)));
+        let nav = Arc::new(BrowserNavigationProvider::new(Arc::clone(&self.active_tab().state)));
+        let shell = Arc::new(BrowserShellProvider::new(Arc::clone(&self.active_tab().state)));
 
         let mut doc_config = blitz_dom::DocumentConfig {
             viewport: Some(viewport),
@@ -225,7 +337,7 @@ impl App {
             shell_provider: Some(shell),
             ..Default::default()
         };
-        if let Some(url) = &self.current_url {
+        if let Some(url) = &self.active_tab().current_url {
             doc_config.base_url = Some(url.to_string());
         }
 
@@ -236,14 +348,14 @@ impl App {
         let html_to_parse: String = if cfg!(feature = "js") {
             #[cfg(feature = "js")]
             {
-                run_scripts_ssr(&self.current_html)
+                run_scripts_ssr(&self.active_tab().current_html)
             }
             #[cfg(not(feature = "js"))]
             {
-                self.current_html.clone()
+                self.active_tab().current_html.clone()
             }
         } else {
-            self.current_html.clone()
+            self.active_tab().current_html.clone()
         };
 
         let mut doc = HtmlDocument::from_html(&html_to_parse, doc_config);
@@ -259,36 +371,38 @@ impl App {
         // injection above.)
         #[cfg(feature = "js")]
         {
-            let scripts = aris_js::extract_scripts(&self.current_html);
+            let scripts = aris_js::extract_scripts(&self.active_tab().current_html);
             let combined = scripts.join("\n;\n");
-            let rt = self
-                .js
-                .get_or_insert_with(crate::js_runtime::JsRuntime::new);
             let url = self
+                .active_tab()
                 .current_url
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_default();
+            let rt = self
+                .active_tab_mut()
+                .js
+                .get_or_insert_with(crate::js_runtime::JsRuntime::new);
             rt.bind_and_run_with_url(&mut doc, &combined, &url);
         }
 
-        self.doc = Some(doc);
-        self.needs_rerender = true;
+        self.active_tab_mut().doc = Some(doc);
+        self.active_tab_mut().needs_rerender = true;
     }
 
     /// Rasterize the page to `base_xrgb` (XRGB8888 u32). Chrome drawn on top.
     fn render_base_frame(&mut self) {
-        let Some(doc) = self.doc.as_mut() else {
-            return;
-        };
         let (pw, ph) = self.phys_size;
         if pw == 0 || ph == 0 {
             return;
         }
         let chrome_phys = (CHROME_HEIGHT_CSS * self.scale_factor as f32).round() as u32;
         let page_h = ph.saturating_sub(chrome_phys).max(1);
-        doc.resolve(0.0);
         let scale = self.scale_factor;
+        let Some(doc) = self.active_tab_mut().doc.as_mut() else {
+            return;
+        };
+        doc.resolve(0.0);
         let mut frame = crate::Frame::new(pw, page_h);
         use anyrender::ImageRenderer;
         let mut renderer = anyrender_vello_cpu::VelloCpuImageRenderer::new(pw, page_h);
@@ -313,8 +427,11 @@ impl App {
                 xrgb.push(0);
             }
         }
-        self.base_xrgb = xrgb;
-        self.needs_rerender = false;
+        {
+            let tab = self.active_tab_mut();
+            tab.base_xrgb = xrgb;
+            tab.needs_rerender = false;
+        }
         let _ = std::env::var("ARIS_DUMP_FRAME").map(|path| {
             let _ = std::fs::write(&path, &frame.rgba);
         });
@@ -322,7 +439,7 @@ impl App {
 
     /// Hovered node rect in page CSS px.
     fn hover_rect_page_css(&self) -> Option<(f32, f32, f32, f32)> {
-        let doc = self.doc.as_ref()?;
+        let doc = self.active_tab().doc.as_ref()?;
         let hover_id = doc.get_hover_node_id()?;
         let node = doc.get_node(hover_id)?;
         let pos = node.absolute_position(0.0, 0.0);
@@ -338,13 +455,13 @@ impl App {
     /// the hovered node to the nearest `<a href>`, mirroring how browsers
     /// populate the status bar.
     fn hovered_link_url(&self) -> Option<String> {
-        let doc = self.doc.as_ref()?;
+        let doc = self.active_tab().doc.as_ref()?;
         let mut id = doc.get_hover_node_id()?;
         for _ in 0..16 {
             let node = doc.get_node(id)?;
             if let Some(href) = node.attr(blitz_dom::local_name!("href")) {
                 // Resolve relative to the base URL for display.
-                if let Some(base) = &self.current_url
+                if let Some(base) = &self.active_tab().current_url
                     && let Ok(resolved) = base.join(href)
                 {
                     return Some(resolved.to_string());
@@ -366,9 +483,9 @@ impl App {
         let chrome_phys = (CHROME_HEIGHT_CSS * scale).round() as usize;
         let hover_rect = self.hover_rect_page_css();
         let css_w = self.css_size().0;
-        let can_back = self.state.can_go_back();
-        let can_fwd = self.state.can_go_forward();
-        let navigating = self.state.navigating.load(Ordering::Relaxed);
+        let can_back = self.active_tab().state.can_go_back();
+        let can_fwd = self.active_tab().state.can_go_forward();
+        let navigating = self.active_tab().state.navigating.load(Ordering::Relaxed);
         let url_display = if self.chrome.address_focused {
             self.chrome.address.clone()
         } else if let Some(link) = self.hovered_link_url() {
@@ -376,7 +493,7 @@ impl App {
             // address bar / status area.
             link
         } else {
-            self.current_url
+            self.active_tab().current_url
                 .as_ref()
                 .map(|u| u.to_string())
                 .unwrap_or_default()
@@ -393,12 +510,14 @@ impl App {
         let hover_region = self.chrome.hover;
         let menu = self.context_menu.clone();
         let scrollbar = self.scrollbar_metrics();
-        let find = self.find.clone();
-        let status_text = if self.state.navigating.load(Ordering::Relaxed) {
+        let find = self.active_tab().find.clone();
+        let status_text = if self.active_tab().state.navigating.load(Ordering::Relaxed) {
             Some("Loading…".to_string())
         } else {
             self.hovered_link_url()
         };
+        // Snapshot the active tab's xrgb before borrowing surface mutably.
+        let xrgb_snapshot: Vec<u32> = self.active_tab().base_xrgb.clone();
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -410,7 +529,7 @@ impl App {
         let buf_len = buffer.len();
         let buf_w = pw as usize;
         let buf_h = ph as usize;
-        let xrgb = &self.base_xrgb;
+        let xrgb = &xrgb_snapshot;
         let page_h = buf_h.saturating_sub(chrome_phys);
         let xw = xrgb.len().checked_div(page_h).unwrap_or(0);
 
@@ -505,7 +624,7 @@ impl App {
     /// Compute scrollbar geometry (content height, scroll position) for the
     /// document's scrollable root, if the content overflows the viewport.
     fn scrollbar_metrics(&self) -> Option<ScrollbarMetrics> {
-        let doc = self.doc.as_ref()?;
+        let doc = self.active_tab().doc.as_ref()?;
         // Find the body element (the usual scroll container).
         let body_id = doc.tree().iter().find_map(|(id, n)| {
             n.element_data()
@@ -537,7 +656,7 @@ impl App {
     /// highlighting is the pragmatic approximation browsers' Ctrl+F start from.)
     fn find_matches(&self, query: &str) -> Vec<(f32, f32, f32, f32)> {
         let mut out = Vec::new();
-        let Some(doc) = self.doc.as_ref() else {
+        let Some(doc) = self.active_tab().doc.as_ref() else {
             return out;
         };
         if query.is_empty() {
@@ -573,7 +692,7 @@ impl App {
 
     /// Open the find bar with an empty query.
     fn open_find(&mut self) {
-        self.find = Some(FindState {
+        self.active_tab_mut().find = Some(FindState {
             query: String::new(),
             active: 0,
             matches: Vec::new(),
@@ -584,7 +703,7 @@ impl App {
     /// Update the find query and refresh matches.
     fn update_find_query(&mut self, q: &str) {
         let matches = self.find_matches(q);
-        let Some(f) = self.find.as_mut() else {
+        let Some(f) = self.active_tab_mut().find.as_mut() else {
             return;
         };
         f.query = q.to_string();
@@ -595,7 +714,7 @@ impl App {
 
     /// Cycle to the next/previous match.
     fn find_next(&mut self, forward: bool) {
-        let Some(f) = self.find.as_mut() else {
+        let Some(f) = self.active_tab_mut().find.as_mut() else {
             return;
         };
         if f.matches.is_empty() {
@@ -634,7 +753,7 @@ impl App {
                 None => WinitCursorIcon::Default,
             }
         } else {
-            let cursor = self.doc.as_ref().and_then(|d| d.get_cursor());
+            let cursor = self.active_tab().doc.as_ref().and_then(|d| d.get_cursor());
             match cursor {
                 Some(c) => {
                     let name = format!("{:?}", c).to_lowercase();
@@ -663,7 +782,7 @@ impl App {
     }
 
     fn is_over_text(&self) -> bool {
-        self.doc
+        self.active_tab().doc
             .as_ref()
             .and_then(|d| d.get_cursor())
             .map(|c| matches!(format!("{:?}", c).to_lowercase().as_str(), "text"))
@@ -699,14 +818,13 @@ impl App {
         } else {
             UiEvent::PointerUp(pe)
         };
-        if let Some(doc) = self.doc.as_mut() {
+        if let Some(doc) = self.active_tab_mut().doc.as_mut() {
             doc.handle_ui_event(ui);
         }
         // On pointer-up (the click), fire JS handlers. Done outside the doc
         // borrow above so the JS runtime can mutate the document.
         if !pressed {
-            let target = self
-                .doc
+            let target = self.active_tab().doc
                 .as_ref()
                 .and_then(|d| d.get_hover_node_id())
                 .unwrap_or(0);
@@ -714,8 +832,8 @@ impl App {
             {
                 // onclick attribute + addEventListener listeners both go through
                 // the persistent runtime.
-                if let Some(rt) = self.js.as_mut()
-                    && let Some(doc) = self.doc.as_mut()
+                if let Some(tab) = self.tabs.get_mut(self.active)
+                    && let (Some(rt), Some(doc)) = (tab.js.as_mut(), tab.doc.as_mut())
                 {
                     // onclick attribute (inline handler): eval its source in the
                     // runtime so it shares the document bridge.
@@ -726,7 +844,7 @@ impl App {
                     rt.bind_and_run(doc, onclick_src.as_deref().unwrap_or(""));
                     // Registered click listeners.
                     rt.fire_click(doc, target as u32);
-                    self.needs_rerender = true;
+                    self.active_tab_mut().needs_rerender = true;
                 }
             }
             let _ = target;
@@ -735,22 +853,22 @@ impl App {
 
     /// Process queued page loads from providers/fetch threads.
     fn process_loads(&mut self) {
-        let loads = self.state.drain_loads();
+        let loads = self.active_tab().state.drain_loads();
         if loads.is_empty() {
             return;
         }
         if let Some(load) = loads.into_iter().last() {
             tracing::info!("loading document: {}", load.url);
-            self.current_html = load.html;
-            self.current_url = Some(load.url.clone());
+            self.active_tab_mut().current_html = load.html;
+            self.active_tab_mut().current_url = Some(load.url.clone());
             self.chrome.set_url(load.url.as_ref());
             self.build_doc();
-            self.state.commit_load(load.url);
+            self.active_tab().state.commit_load(load.url);
         }
     }
 
     fn pump_messages(&mut self) {
-        if let Some(doc) = self.doc.as_mut() {
+        if let Some(doc) = self.active_tab_mut().doc.as_mut() {
             doc.handle_messages();
         }
     }
@@ -767,10 +885,10 @@ impl App {
         } else {
             -120.0
         };
-        if let Some(doc) = self.doc.as_mut() {
+        if let Some(doc) = self.active_tab_mut().doc.as_mut() {
             let hover = doc.get_hover_node_id().unwrap_or(0);
             doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
-            self.needs_rerender = true;
+            self.active_tab_mut().needs_rerender = true;
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -779,13 +897,13 @@ impl App {
 
     /// Scroll the document to an absolute y position (`0.0` = top).
     fn scroll_to(&mut self, _y: f64) {
-        if let Some(doc) = self.doc.as_mut() {
+        if let Some(doc) = self.active_tab_mut().doc.as_mut() {
             let hover = doc.get_hover_node_id().unwrap_or(0);
             // scroll_node_by is relative; for absolute we'd need the current
             // offset. As a pragmatic approximation, scroll by a large negative
             // delta to reach the bottom, or scroll to top via the viewport API.
             doc.scroll_viewport_by(0.0, -100000.0);
-            self.needs_rerender = true;
+            self.active_tab_mut().needs_rerender = true;
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -806,11 +924,11 @@ impl App {
         let target = frac * (sb.content_h - sb.viewport_h).max(0.0);
         let delta = sb.scroll_y - target;
         if delta.abs() > 0.5
-            && let Some(doc) = self.doc.as_mut()
+            && let Some(doc) = self.active_tab_mut().doc.as_mut()
         {
             let hover = doc.get_hover_node_id().unwrap_or(0);
             doc.scroll_node_by(hover, delta as f64, 0.0, &mut |_| {});
-            self.needs_rerender = true;
+            self.active_tab_mut().needs_rerender = true;
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -818,7 +936,7 @@ impl App {
     }
 
     fn apply_title(&mut self) {
-        if let Some(title) = self.state.take_title()
+        if let Some(title) = self.active_tab().state.take_title()
             && let Some(window) = &self.window
         {
             let display = if title.trim().is_empty() {
@@ -834,17 +952,17 @@ impl App {
     fn handle_chrome_action(&mut self, action: ChromeAction) {
         match action {
             ChromeAction::GoBack => {
-                self.state.go_back();
+                self.active_tab().state.go_back();
             }
             ChromeAction::GoForward => {
-                self.state.go_forward();
+                self.active_tab().state.go_forward();
             }
             ChromeAction::Reload => {
-                self.state.reload();
+                self.active_tab().state.reload();
             }
             ChromeAction::Navigate(input) => {
                 if !input.trim().is_empty() {
-                    self.state.navigate_input(&input);
+                    self.active_tab().state.navigate_input(&input);
                 }
             }
             ChromeAction::RedrawOnly => {}
@@ -857,8 +975,8 @@ impl App {
     /// Open a right-click context menu at (x, y), populated based on context.
     fn open_context_menu(&mut self, x: f32, y: f32) {
         let mut items: Vec<(String, ContextMenuAction, bool)> = Vec::new();
-        let can_back = self.state.can_go_back();
-        let can_fwd = self.state.can_go_forward();
+        let can_back = self.active_tab().state.can_go_back();
+        let can_fwd = self.active_tab().state.can_go_forward();
         items.push(("Back".to_string(), ContextMenuAction::GoBack, can_back));
         items.push(("Forward".to_string(), ContextMenuAction::GoForward, can_fwd));
         items.push(("Reload".to_string(), ContextMenuAction::Reload, true));
@@ -869,7 +987,7 @@ impl App {
                 true,
             ));
         }
-        if self.current_url.is_some() {
+        if self.active_tab().current_url.is_some() {
             items.push((
                 "Copy page URL".to_string(),
                 ContextMenuAction::CopyUrl,
@@ -893,24 +1011,24 @@ impl App {
     fn handle_context_menu_action(&mut self, action: ContextMenuAction) {
         match action {
             ContextMenuAction::GoBack => {
-                self.state.go_back();
+                self.active_tab().state.go_back();
             }
             ContextMenuAction::GoForward => {
-                self.state.go_forward();
+                self.active_tab().state.go_forward();
             }
             ContextMenuAction::Reload => {
-                self.state.reload();
+                self.active_tab().state.reload();
             }
             ContextMenuAction::CopyUrl | ContextMenuAction::CopyLink => {
                 let url = if action == ContextMenuAction::CopyLink {
                     self.hovered_link_url()
                 } else {
-                    self.current_url.as_ref().map(|u| u.to_string())
+                    self.active_tab().current_url.as_ref().map(|u| u.to_string())
                 };
                 if let Some(url) = url {
                     // Best-effort clipboard via the shell provider. Fall back to
                     // logging if the clipboard isn't available.
-                    if let Some(doc) = self.doc.as_ref() {
+                    if let Some(doc) = self.active_tab().doc.as_ref() {
                         if doc.shell_provider.set_clipboard_text(url.clone()).is_err() {
                             tracing::info!("clipboard (unavailable) URL: {}", url);
                         }
@@ -965,8 +1083,8 @@ impl ApplicationHandler for App {
         self.surface = Some(surface);
 
         self.build_doc();
-        if let Some(url) = &self.current_url {
-            self.state.commit_load(url.clone());
+        if let Some(url) = &self.active_tab().current_url {
+            self.active_tab().state.commit_load(url.clone());
         }
     }
 
@@ -1001,7 +1119,7 @@ impl ApplicationHandler for App {
                 self.process_loads();
                 self.pump_messages();
                 self.apply_title();
-                if self.needs_rerender {
+                if self.active_tab().needs_rerender {
                     self.render_base_frame();
                 }
                 self.present();
@@ -1044,8 +1162,7 @@ impl ApplicationHandler for App {
                 }
                 self.chrome.hover = None;
                 let page_y = css_y - CHROME_HEIGHT_CSS;
-                let hover_changed = self
-                    .doc
+                let hover_changed = self.active_tab_mut().doc
                     .as_mut()
                     .map(|d| d.set_hover_to(css_x, page_y))
                     .unwrap_or(false);
@@ -1111,7 +1228,7 @@ impl ApplicationHandler for App {
                 let page_y = cy - CHROME_HEIGHT_CSS;
                 self.dispatch_pointer(cx, page_y, true);
                 self.dispatch_pointer(cx, page_y, false);
-                self.needs_rerender = true;
+                self.active_tab_mut().needs_rerender = true;
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -1123,10 +1240,10 @@ impl ApplicationHandler for App {
                     }
                     winit::event::MouseScrollDelta::PixelDelta(p) => (p.x, p.y),
                 };
-                if let Some(doc) = self.doc.as_mut() {
+                if let Some(doc) = self.active_tab_mut().doc.as_mut() {
                     let hover = doc.get_hover_node_id().unwrap_or(0);
                     doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
-                    self.needs_rerender = true;
+                    self.active_tab_mut().needs_rerender = true;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -1169,6 +1286,24 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
+                    // Ctrl+T new tab, Ctrl+W close tab.
+                    if ctrl
+                        && matches!(&event.logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("t"))
+                    {
+                        self.new_tab(None);
+                        return;
+                    }
+                    if ctrl
+                        && matches!(&event.logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("w"))
+                    {
+                        self.close_tab();
+                        return;
+                    }
+                    // Ctrl+Tab / Ctrl+Shift+Tab switch tabs.
+                    if ctrl && matches!(&event.logical_key, Key::Named(NamedKey::Tab)) {
+                        self.switch_tab(!self.modifiers.shift_key());
+                        return;
+                    }
                     // Ctrl+= / Ctrl+Plus zoom in, Ctrl+- zoom out, Ctrl+0 reset.
                     if ctrl
                         && matches!(
@@ -1176,7 +1311,7 @@ impl ApplicationHandler for App {
                             Key::Character(c) if c.as_str() == "=" || c.as_str() == "+"
                         )
                     {
-                        self.zoom = (self.zoom * 1.2).min(5.0);
+                        self.active_tab_mut().zoom = (self.active_tab().zoom * 1.2).min(5.0);
                         self.build_doc();
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -1185,7 +1320,7 @@ impl ApplicationHandler for App {
                     }
                     if ctrl && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "-")
                     {
-                        self.zoom = (self.zoom / 1.2).max(0.2);
+                        self.active_tab_mut().zoom = (self.active_tab().zoom / 1.2).max(0.2);
                         self.build_doc();
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -1194,7 +1329,7 @@ impl ApplicationHandler for App {
                     }
                     if ctrl && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "0")
                     {
-                        self.zoom = 1.0;
+                        self.active_tab_mut().zoom = 1.0;
                         self.build_doc();
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -1202,10 +1337,10 @@ impl ApplicationHandler for App {
                         return;
                     }
                     // When the find bar is open, it captures keyboard input.
-                    if self.find.is_some() {
+                    if self.active_tab().find.is_some() {
                         match &event.logical_key {
                             Key::Named(NamedKey::Escape) => {
-                                self.find = None;
+                                self.active_tab_mut().find = None;
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
                                 }
@@ -1219,8 +1354,7 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             Key::Named(NamedKey::Backspace) => {
-                                let q = self
-                                    .find
+                                let q = self.active_tab().find
                                     .as_ref()
                                     .map(|f| {
                                         let mut s = f.query.clone();
@@ -1235,8 +1369,7 @@ impl ApplicationHandler for App {
                                 return;
                             }
                             Key::Character(c) if !ctrl && !alt && !c.is_empty() => {
-                                let q = self
-                                    .find
+                                let q = self.active_tab().find
                                     .as_ref()
                                     .map(|f| format!("{}{}", f.query, c.as_str()))
                                     .unwrap_or_default();
@@ -1256,28 +1389,28 @@ impl ApplicationHandler for App {
                         }
                         // Alt+Left / Alt+Right: history navigation.
                         Key::Named(NamedKey::ArrowLeft) if alt => {
-                            self.state.go_back();
+                            self.active_tab().state.go_back();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                             return;
                         }
                         Key::Named(NamedKey::ArrowRight) if alt => {
-                            self.state.go_forward();
+                            self.active_tab().state.go_forward();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                             return;
                         }
                         Key::Named(NamedKey::F5) => {
-                            self.state.reload();
+                            self.active_tab().state.reload();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                             return;
                         }
                         Key::Character(c) if ctrl && c.as_str().eq_ignore_ascii_case("r") => {
-                            self.state.reload();
+                            self.active_tab().state.reload();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
@@ -1317,7 +1450,7 @@ impl ApplicationHandler for App {
                 }
                 // Forward to the document for text input / page keys.
                 if let Some(blitz_evt) = map_winit_key(&event, self.modifiers)
-                    && let Some(doc) = self.doc.as_mut()
+                    && let Some(doc) = self.active_tab_mut().doc.as_mut()
                 {
                     let ui = if pressed {
                         UiEvent::KeyDown(blitz_evt)
@@ -1325,7 +1458,7 @@ impl ApplicationHandler for App {
                         UiEvent::KeyUp(blitz_evt)
                     };
                     doc.handle_ui_event(ui);
-                    self.needs_rerender = true;
+                    self.active_tab_mut().needs_rerender = true;
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -1342,11 +1475,11 @@ impl ApplicationHandler for App {
             return;
         }
         // Drain async loads / redraw requests from providers.
-        if self.state.redraw_requested.swap(false, Ordering::Relaxed) {
+        if self.active_tab().state.redraw_requested.swap(false, Ordering::Relaxed) {
             self.process_loads();
             self.pump_messages();
             self.apply_title();
-            if self.needs_rerender {
+            if self.active_tab().needs_rerender {
                 self.render_base_frame();
             }
             if let Some(window) = &self.window {
@@ -1381,23 +1514,24 @@ struct ChromeLayout {
 
 impl ChromeLayout {
     fn compute(width: f32) -> Self {
-        let h = CHROME_HEIGHT_CSS;
+        // Layout is relative to the chrome bar, which sits below the tab strip.
+        let y0 = TAB_STRIP_HEIGHT_CSS; // top of chrome bar
+        let h = CHROME_BAR_HEIGHT_CSS; // chrome bar height
         let pad = 8.0;
         let btn = 28.0;
-        let fav = 18.0; // favicon slot size
+        let fav = 18.0;
         let mut x = pad;
-        let back = (x, (h - btn) / 2.0, btn, btn);
+        let back = (x, y0 + (h - btn) / 2.0, btn, btn);
         x += btn + 4.0;
-        let forward = (x, (h - btn) / 2.0, btn, btn);
+        let forward = (x, y0 + (h - btn) / 2.0, btn, btn);
         x += btn + 4.0;
-        let reload = (x, (h - btn) / 2.0, btn, btn);
+        let reload = (x, y0 + (h - btn) / 2.0, btn, btn);
         x += btn + 8.0;
-        let favicon = (x, (h - fav) / 2.0, fav, fav);
+        let favicon = (x, y0 + (h - fav) / 2.0, fav, fav);
         x += fav + 6.0;
-        // Reserve a close button on the far right.
-        let close = (width - pad - btn, (h - btn) / 2.0, btn, btn);
+        let close = (width - pad - btn, y0 + (h - btn) / 2.0, btn, btn);
         let addr_w = (close.0 - x - 6.0).max(60.0);
-        let address = (x, (h - 26.0) / 2.0, addr_w, 26.0);
+        let address = (x, y0 + (h - 26.0) / 2.0, addr_w, 26.0);
         Self {
             back,
             forward,
@@ -2619,6 +2753,37 @@ fn run_scripts_ssr(html: &str) -> String {
 }
 
 // ── Built-in pages ──────────────────────────────────────────
+
+/// Built-in start page for new tabs.
+fn start_page() -> String {
+    "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">\
+     <title>aris — new tab</title>\
+     <style>\
+     body { margin:0; background:#1a1b26; font-family:system-ui,sans-serif; color:#a9b1d6; }\
+     .wrap { max-width:640px; margin:80px auto; padding:0 24px; text-align:center; }\
+     h1 { color:#7aa2f7; font-size:42px; margin:0 0 8px; }\
+     p.sub { color:#565f89; margin:0 0 32px; }\
+     .bookmarks { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }\
+     a.card { display:block; background:#24283b; color:#c0caf5; text-decoration:none;\
+              padding:16px; border-radius:10px; transition:background .15s; }\
+     a.card:hover { background:#2f344d; }\
+     .card .t { color:#7dcfff; font-weight:600; }\
+     .card .d { color:#565f89; font-size:13px; margin-top:4px; }\
+     .hint { color:#565f89; font-size:13px; margin-top:32px; }\
+     kbd { background:#24283b; padding:2px 6px; border-radius:4px; color:#7dcfff; }\
+     </style></head><body>\
+     <div class=\"wrap\">\
+       <h1>aris</h1>\
+       <p class=\"sub\">a browser engine built on servo's pure-Rust front-end</p>\
+       <div class=\"bookmarks\">\
+         <a class=\"card\" href=\"https://example.com\"><span class=\"t\">example.com</span><div class=\"d\">test page</div></a>\
+         <a class=\"card\" href=\"about:about\"><span class=\"t\">about:about</span><div class=\"d\">aris info</div></a>\
+       </div>\
+       <p class=\"hint\">Type a URL or search in the address bar, or press <kbd>Ctrl+L</kbd>.</p>\
+     </div>\
+     </body></html>"
+        .to_string()
+}
 
 fn loading_page(url: &str) -> String {
     format!(
