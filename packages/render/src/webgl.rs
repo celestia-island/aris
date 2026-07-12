@@ -14,7 +14,6 @@
 
 #![cfg(feature = "webgl")]
 
-
 /// A WebGL context backed by a real wgpu device.
 pub struct WebGLContext {
     device: wgpu::Device,

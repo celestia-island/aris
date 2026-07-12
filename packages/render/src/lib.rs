@@ -32,6 +32,9 @@ pub mod canvas;
 #[cfg(feature = "webgl")]
 pub mod webgl;
 
+#[cfg(feature = "webrtc")]
+pub mod webrtc;
+
 #[cfg(feature = "render")]
 use anyrender::ImageRenderer;
 

@@ -63,6 +63,8 @@ png = { version = "0.17", optional = true }
 wgpu = { version = "30", optional = true }
 naga = { version = "30", features = ["wgsl-out", "glsl-in"], optional = true }
 pollster = { version = "0.4", optional = true }
+# WebRTC support (str0m = pure Rust sans-IO WebRTC, with pure Rust crypto).
+str0m = { version = "0.21", default-features = false, features = ["rust-crypto"], optional = true }
 
 [features]
 default = ["desktop", "render"]
@@ -78,6 +80,8 @@ desktop = ["blitz-dom/system_fonts", "blitz-dom/svg"]
 js = ["dep:aris-js", "dep:boa_engine", "dep:boa_gc"]
 # WebGL support via wgpu (GLSL→WGSL via naga, renders to offscreen texture).
 webgl = ["dep:wgpu", "dep:naga", "dep:pollster"]
+# WebRTC support via str0m (pure Rust sans-IO WebRTC).
+webrtc = ["dep:str0m"]
 # Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with
 # a full browser chrome: address bar, back/forward, HTTP networking.
 winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http", "dep:serde_json", "dep:image"]
