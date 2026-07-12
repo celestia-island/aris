@@ -1544,6 +1544,20 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
+        // Poll JS timers (setTimeout/setInterval) for the active tab.
+        #[cfg(feature = "js")]
+        {
+            let tab = self.tabs.get_mut(self.active);
+            if let Some(tab) = tab
+                && let (Some(rt), Some(doc)) = (tab.js.as_mut(), tab.doc.as_mut())
+                && rt.poll_timers(doc)
+            {
+                tab.needs_rerender = true;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
         // Drain async loads / redraw requests from providers.
         if self
             .active_tab()

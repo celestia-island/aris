@@ -248,7 +248,7 @@ impl JsRuntime {
         if fired {
             self.apply_ops(doc);
             self.harvest_listeners();
-        self.harvest_timers();
+            self.harvest_timers();
             self.harvest_timers();
         }
         fired
@@ -463,7 +463,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
             let _ = ctx.global_object().insert_property(
                 boa_engine::js_string!(name.clone()),
                 boa_engine::property::PropertyDescriptor::builder()
-                    .value(cb.into())
+                    .value(JsValue::from(cb.clone()))
                     .writable(true)
                     .configurable(true)
                     .build(),
@@ -492,7 +492,7 @@ fn install_timers(ctx: &mut Context, bridge: &Gc<GcRefCell<Bridge>>) {
             let _ = ctx.global_object().insert_property(
                 boa_engine::js_string!(name.clone()),
                 boa_engine::property::PropertyDescriptor::builder()
-                    .value(cb.into())
+                    .value(JsValue::from(cb.clone()))
                     .writable(true)
                     .configurable(true)
                     .build(),
