@@ -121,6 +121,7 @@ fn run_window_impl(
         chrome: ChromeState::new(),
         last_mouse: (0.0, 0.0),
         modifiers: ModifiersState::default(),
+        context_menu: None,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -148,6 +149,8 @@ struct App {
     chrome: ChromeState,
     last_mouse: (f32, f32),
     modifiers: ModifiersState,
+    /// Right-click context menu overlay, when open.
+    context_menu: Option<ContextMenu>,
 }
 
 impl App {
@@ -319,6 +322,7 @@ impl App {
         let focused = self.chrome.address_focused;
         let caret_on = self.chrome.caret_visible();
         let hover_region = self.chrome.hover;
+        let menu = self.context_menu.clone();
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -397,6 +401,11 @@ impl App {
                     }
                 }
             }
+        }
+
+        // Context menu overlay (top-most).
+        if let Some(menu) = &menu {
+            draw_context_menu(&mut buffer, buf_w, buf_h, scale, menu);
         }
 
         let _ = buffer.present();
@@ -548,6 +557,81 @@ impl App {
             ChromeAction::RedrawOnly => {}
         }
     }
+
+    /// Open a right-click context menu at (x, y), populated based on context.
+    fn open_context_menu(&mut self, x: f32, y: f32) {
+        let mut items: Vec<(String, ContextMenuAction)> = Vec::new();
+        items.push((
+            if self.state.can_go_back() {
+                "Back".to_string()
+            } else {
+                "Back (dim)".to_string()
+            },
+            ContextMenuAction::GoBack,
+        ));
+        items.push((
+            if self.state.can_go_forward() {
+                "Forward".to_string()
+            } else {
+                "Forward (dim)".to_string()
+            },
+            ContextMenuAction::GoForward,
+        ));
+        items.push(("Reload".to_string(), ContextMenuAction::Reload));
+        if self.hovered_link_url().is_some() {
+            items.push(("Copy link address".to_string(), ContextMenuAction::CopyLink));
+        }
+        if self.current_url.is_some() {
+            items.push(("Copy page URL".to_string(), ContextMenuAction::CopyUrl));
+        }
+        items.push(("Edit address".to_string(), ContextMenuAction::FocusAddress));
+        self.context_menu = Some(ContextMenu {
+            x,
+            y,
+            items,
+            hover: None,
+        });
+    }
+
+    /// Execute the chosen context-menu action.
+    fn handle_context_menu_action(&mut self, action: ContextMenuAction) {
+        match action {
+            ContextMenuAction::GoBack => {
+                self.state.go_back();
+            }
+            ContextMenuAction::GoForward => {
+                self.state.go_forward();
+            }
+            ContextMenuAction::Reload => {
+                self.state.reload();
+            }
+            ContextMenuAction::CopyUrl | ContextMenuAction::CopyLink => {
+                let url = if action == ContextMenuAction::CopyLink {
+                    self.hovered_link_url()
+                } else {
+                    self.current_url.as_ref().map(|u| u.to_string())
+                };
+                if let Some(url) = url {
+                    // Best-effort clipboard via the shell provider. Fall back to
+                    // logging if the clipboard isn't available.
+                    if let Some(doc) = self.doc.as_ref() {
+                        if doc.shell_provider.set_clipboard_text(url.clone()).is_err() {
+                            tracing::info!("clipboard (unavailable) URL: {}", url);
+                        }
+                    } else {
+                        tracing::info!("clipboard (no doc) URL: {}", url);
+                    }
+                }
+            }
+            ContextMenuAction::FocusAddress => {
+                self.chrome.focus_address();
+            }
+            ContextMenuAction::Close => {
+                self.context_menu = None;
+            }
+        }
+        self.context_menu = None;
+    }
 }
 
 impl ApplicationHandler for App {
@@ -569,6 +653,14 @@ impl ApplicationHandler for App {
         self.scale_factor = window.scale_factor();
         let inner = window.inner_size();
         self.phys_size = (inner.width.max(1), inner.height.max(1));
+        tracing::info!(
+            "resumed: scale_factor={} inner={}x{} (logical {}x{})",
+            self.scale_factor,
+            inner.width,
+            inner.height,
+            self.config.width,
+            self.config.height
+        );
 
         let context = softbuffer::Context::new(window.clone()).expect("ctx");
         let surface = softbuffer::Surface::new(&context, window.clone()).expect("surface");
@@ -623,6 +715,21 @@ impl ApplicationHandler for App {
                 let css_y = (position.y / self.scale_factor) as f32;
                 self.last_mouse = (css_x, css_y);
                 let css_w = self.css_size().0;
+                // If the context menu is open, track hover over its items.
+                if let Some(menu) = self.context_menu.as_mut() {
+                    let h = ContextMenu::item_height();
+                    menu.hover = (0..menu.items.len()).find(|&i| {
+                        let iy = menu.y + 4.0 + i as f32 * h;
+                        css_x >= menu.x
+                            && css_x <= menu.x + menu.width()
+                            && css_y >= iy
+                            && css_y < iy + h
+                    });
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 if css_y < CHROME_HEIGHT_CSS {
                     self.chrome.hover = self.chrome.region_at(css_x, css_y, css_w);
                     self.update_cursor_icon();
@@ -645,7 +752,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::MouseInput {
                 state: mstate,
-                button: MouseButton::Left,
+                button,
                 ..
             } => {
                 if mstate != ElementState::Pressed {
@@ -653,6 +760,29 @@ impl ApplicationHandler for App {
                 }
                 let (cx, cy) = self.last_mouse;
                 let css_w = self.css_size().0;
+
+                // Right-click opens a context menu anywhere in the window.
+                if button == MouseButton::Right {
+                    self.open_context_menu(cx, cy);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                if button != MouseButton::Left {
+                    return;
+                }
+                // If a context menu is open, a left click either selects an
+                // item or dismisses the menu (click outside).
+                if let Some(menu) = self.context_menu.take() {
+                    if let Some(action) = menu.item_at(cx, cy) {
+                        self.handle_context_menu_action(action);
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 if cy < CHROME_HEIGHT_CSS {
                     if let Some(action) = self.chrome.click_at(cx, cy, css_w) {
                         self.handle_chrome_action(action);
@@ -701,6 +831,16 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if pressed {
+                    // Escape dismisses an open context menu before quitting.
+                    if matches!(&event.logical_key, Key::Named(NamedKey::Escape))
+                        && self.context_menu.is_some()
+                    {
+                        self.context_menu = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
                     // Global shortcuts.
                     let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
                     match &event.logical_key {
@@ -821,11 +961,66 @@ enum ChromeAction {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum ChromeRegion {
+pub enum ChromeRegion {
     Back,
     Forward,
     Reload,
     Address,
+}
+
+/// A right-click context menu overlay. `None` means no menu is open.
+#[derive(Clone)]
+struct ContextMenu {
+    /// Top-left of the menu, in CSS px relative to the window.
+    x: f32,
+    y: f32,
+    /// Items: (label, action).
+    items: Vec<(String, ContextMenuAction)>,
+    /// Index of the currently hovered item, if any.
+    hover: Option<usize>,
+}
+
+/// What a context-menu item does when clicked.
+#[derive(Clone, Copy, PartialEq)]
+enum ContextMenuAction {
+    GoBack,
+    GoForward,
+    Reload,
+    CopyUrl,
+    CopyLink,
+    FocusAddress,
+    Close,
+}
+
+impl ContextMenu {
+    fn item_height() -> f32 {
+        26.0
+    }
+    fn min_width() -> f32 {
+        160.0
+    }
+
+    fn height(&self) -> f32 {
+        Self::item_height() * self.items.len() as f32 + 8.0
+    }
+    fn width(&self) -> f32 {
+        Self::min_width()
+    }
+
+    /// Hit-test a CSS-px point. Returns the action if a menu item was clicked.
+    fn item_at(&self, x: f32, y: f32) -> Option<ContextMenuAction> {
+        let h = Self::item_height();
+        if x < self.x || x > self.x + self.width() {
+            return None;
+        }
+        for (i, (_, action)) in self.items.iter().enumerate() {
+            let iy = self.y + 4.0 + i as f32 * h;
+            if y >= iy && y < iy + h {
+                return Some(*action);
+            }
+        }
+        None
+    }
 }
 
 struct ChromeState {
@@ -1024,7 +1219,7 @@ fn winit_modifiers_to_blitz(m: ModifiersState) -> keyboard_types::Modifiers {
 // ── Chrome drawing ──────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
-fn draw_chrome(
+pub fn draw_chrome(
     buffer: &mut [u32],
     buf_w: usize,
     chrome_h: usize,
@@ -1195,7 +1390,9 @@ fn draw_chrome(
             stroke,
             color,
         );
-        // arc: M3 13a9 9 0 1 0 3-7.7 -> circle centered ~(12,13) r~9
+        // arc: M3 13a9 9 0 1 0 3-7.7 -> circle centered ~(12,13) r~9. The point
+        // (3,13) sits at 180° from center. Sweep clockwise ~330° (leave a gap
+        // at the top where the arrowhead corner sits).
         draw_circle(
             buffer,
             buf_w,
@@ -1204,11 +1401,8 @@ fn draw_chrome(
             9.0 * unit,
             stroke,
             color,
-            // Start at the bottom-left where the arc meets (3,13) and sweep
-            // clockwise almost all the way around, leaving a small gap where
-            // the arrowhead corner sits.
-            205.0_f32.to_radians(),
-            175.0_f32.to_radians(),
+            180.0_f32.to_radians(),
+            330.0_f32.to_radians(),
         );
     }
 
@@ -1355,6 +1549,10 @@ fn draw_line(
 }
 
 /// Draw a stroked circle (or arc) centered at (cx, cy) in physical px.
+///
+/// `start_rad` is the angle (radians, 0 = +x axis, increasing clockwise in
+/// screen coords) where the arc begins; `sweep_rad` is how far it sweeps
+/// (positive = clockwise/increasing angle). Pass `TAU` for a full circle.
 fn draw_circle(
     buffer: &mut [u32],
     buf_w: usize,
@@ -1364,22 +1562,19 @@ fn draw_circle(
     width: f32,
     color: u32,
     start_rad: f32,
-    end_rad: f32,
+    sweep_rad: f32,
 ) {
-    let circumference = std::f32::consts::TAU * radius;
-    let steps = (circumference * 2.0).ceil() as i32;
+    let arc_len = radius * sweep_rad.abs();
+    let steps = (arc_len * 2.0).ceil() as i32;
     let half = width / 2.0;
     let r = half.ceil() as i32;
     for i in 0..=steps {
-        let frac = i as f32 / steps as f32;
-        let mut a = start_rad + frac * (end_rad - start_rad);
-        // Normalize and handle wrap-around.
-        while a < 0.0 {
-            a += std::f32::consts::TAU;
-        }
-        while a > std::f32::consts::TAU {
-            a -= std::f32::consts::TAU;
-        }
+        let frac = if steps > 0 {
+            i as f32 / steps as f32
+        } else {
+            0.0
+        };
+        let a = start_rad + frac * sweep_rad;
         let x = cx + a.cos() * radius;
         let y = cy + a.sin() * radius;
         for py in -r..=r {
@@ -1388,10 +1583,61 @@ fn draw_circle(
                     plot(
                         buffer,
                         buf_w,
-                        (x + px as f32) as usize,
-                        (y + py as f32) as usize,
+                        x as usize + px as usize,
+                        y as usize + py as usize,
                         color,
                     );
+                }
+            }
+        }
+    }
+}
+
+/// Draw the right-click context menu overlay.
+fn draw_context_menu(
+    buffer: &mut [u32],
+    buf_w: usize,
+    buf_h: usize,
+    scale: f32,
+    menu: &ContextMenu,
+) {
+    let mw = menu.width() * scale;
+    let mh = menu.height() * scale;
+    let mx = (menu.x * scale) as i32;
+    let my = (menu.y * scale) as i32;
+    let item_h = (ContextMenu::item_height() * scale) as i32;
+
+    let bg = 0x2D2D3A;
+    let border = 0x3A3A4E;
+    let hover_bg = 0x4A6FCE;
+
+    // Background + border.
+    for ry in 0..(mh as i32) {
+        for rx in 0..(mw as i32) {
+            let x = mx + rx;
+            let y = my + ry;
+            if x >= 0 && (x as usize) < buf_w && y >= 0 && (y as usize) < buf_h {
+                let idx = y as usize * buf_w + x as usize;
+                if idx < buffer.len() {
+                    let on_border =
+                        rx == 0 || rx == mw as i32 - 1 || ry == 0 || ry == mh as i32 - 1;
+                    buffer[idx] = if on_border { border } else { bg };
+                }
+            }
+        }
+    }
+    // Hover highlight rect on the selected item.
+    if let Some(hi) = menu.hover {
+        let iy = my + (4.0 * scale) as i32 + hi as i32 * item_h;
+        for ry in 0..item_h {
+            for rx in 2..(mw as i32 - 2) {
+                let x = mx + rx;
+                let y = iy + ry;
+                if x >= 0 && (x as usize) < buf_w && y >= 0 && (y as usize) < buf_h {
+                    let idx = y as usize * buf_w + x as usize;
+                    if idx < buffer.len() {
+                        buffer[idx] = hover_bg;
+                    }
                 }
             }
         }

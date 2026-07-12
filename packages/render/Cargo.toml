@@ -45,6 +45,9 @@ http = { version = "1", optional = true }
 # construct BlitzKeyEvent values when forwarding winit key events to blitz-dom.
 keyboard-types = "0.7"
 
+# Dev-only: PNG encoding for the offscreen_chrome test binary.
+png = "0.17"
+
 [features]
 default = ["desktop"]
 fbdev = []
