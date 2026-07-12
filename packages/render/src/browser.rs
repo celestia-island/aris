@@ -65,6 +65,9 @@ pub struct BrowserState {
     pub navigating: AtomicBool,
     /// Latest window-title string pushed by the shell provider.
     pending_title: Mutex<Option<String>>,
+    /// In-memory clipboard buffer for text selection copy/paste. Backed by the
+    /// OS clipboard when possible; falls back to this buffer.
+    clipboard: Mutex<Option<String>>,
     /// Latest IME state pushed by the shell provider.
     pending_ime: Mutex<Option<(bool, f32, f32, f32, f32)>>,
 }
@@ -79,6 +82,7 @@ impl BrowserState {
             redraw_requested: AtomicBool::new(false),
             navigating: AtomicBool::new(false),
             pending_title: Mutex::new(None),
+            clipboard: Mutex::new(None),
             pending_ime: Mutex::new(None),
         }
     }
@@ -463,6 +467,68 @@ impl ShellProvider for BrowserShellProvider {
             .unwrap()
             .replace((true, x, y, width, height));
     }
+
+    fn set_clipboard_text(&self, text: String) -> Result<(), blitz_traits::shell::ClipboardError> {
+        // Try the OS clipboard first; fall back to the in-memory buffer.
+        if let Err(e) = os_clipboard_set(&text) {
+            debug!("os clipboard set failed ({}), buffering", e);
+        }
+        *self.state.clipboard.lock().unwrap() = Some(text);
+        Ok(())
+    }
+
+    fn get_clipboard_text(&self) -> Result<String, blitz_traits::shell::ClipboardError> {
+        // Prefer the OS clipboard; fall back to the buffer.
+        match os_clipboard_get() {
+            Ok(s) => Ok(s),
+            Err(_) => Ok(self
+                .state
+                .clipboard
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_default()),
+        }
+    }
+}
+
+/// Set the OS clipboard text. Returns Err with a message if unavailable.
+#[cfg(target_os = "windows")]
+fn os_clipboard_set(text: &str) -> Result<(), String> {
+    use std::process::Command;
+    // clip.exe reads stdin and puts it on the clipboard.
+    let mut child = Command::new("clip")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    use std::io::Write;
+    if let Some(stdin) = child.stdin.as_mut() {
+        // clip.exe expects the system codepage; for non-ASCII this is lossy.
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    let _ = child.wait();
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn os_clipboard_set(_text: &str) -> Result<(), String> {
+    Err("clipboard not supported on this platform".to_string())
+}
+
+/// Get the OS clipboard text.
+#[cfg(target_os = "windows")]
+fn os_clipboard_get() -> Result<String, String> {
+    use std::process::Command;
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn os_clipboard_get() -> Result<String, String> {
+    Err("clipboard not supported on this platform".to_string())
 }
 
 // ── URL normalization ───────────────────────────────────────
