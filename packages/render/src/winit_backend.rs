@@ -947,6 +947,7 @@ struct ChromeLayout {
     back: (f32, f32, f32, f32),
     forward: (f32, f32, f32, f32),
     reload: (f32, f32, f32, f32),
+    favicon: (f32, f32, f32, f32),
     address: (f32, f32, f32, f32),
 }
 
@@ -955,6 +956,7 @@ impl ChromeLayout {
         let h = CHROME_HEIGHT_CSS;
         let pad = 8.0;
         let btn = 28.0;
+        let fav = 18.0; // favicon slot size
         let mut x = pad;
         let back = (x, (h - btn) / 2.0, btn, btn);
         x += btn + 4.0;
@@ -962,12 +964,15 @@ impl ChromeLayout {
         x += btn + 4.0;
         let reload = (x, (h - btn) / 2.0, btn, btn);
         x += btn + 8.0;
+        let favicon = (x, (h - fav) / 2.0, fav, fav);
+        x += fav + 6.0;
         let addr_w = (width - x - pad).max(60.0);
         let address = (x, (h - 26.0) / 2.0, addr_w, 26.0);
         Self {
             back,
             forward,
             reload,
+            favicon,
             address,
         }
     }
@@ -1427,6 +1432,20 @@ pub fn draw_chrome(
         );
     }
 
+    // Favicon slot: a colored rounded square derived from the URL host, so
+    // each site gets a stable, distinct color even before/without fetching a
+    // real icon. (A real favicon fetch can layer on top of this later.)
+    {
+        let rect = layout.favicon;
+        let color = favicon_color(display);
+        let fx = to_phys(rect.0) as i32;
+        let fy = to_phys(rect.1) as i32;
+        let fw = to_phys(rect.2) as i32;
+        let fh = to_phys(rect.3) as i32;
+        let radius = (fw as f32 * 0.22) as i32;
+        fill_rounded_rect(buffer, buf_w, fx, fy, fw, fh, radius, color);
+    }
+
     // Address bar background + border.
     let ax = to_phys(layout.address.0);
     let ay = to_phys(layout.address.1);
@@ -1510,6 +1529,91 @@ fn plot(buffer: &mut [u32], buf_w: usize, x: usize, y: usize, color: u32) {
         let idx = y * buf_w + x;
         if idx < buffer.len() {
             buffer[idx] = color;
+        }
+    }
+}
+
+/// Derive a stable, pleasant color (XRGB) for a URL by hashing its host. Empty
+/// or local input yields a neutral gray, so the slot reads as "no favicon".
+fn favicon_color(url: &str) -> u32 {
+    if url.trim().is_empty() {
+        return 0x4A4A5E;
+    }
+    // Extract the host portion if this is a URL.
+    let host = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    let mut h: u32 = 2166136261;
+    for b in host.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    // Map the hash into HSL space with fixed S/L for a soft, distinct color.
+    let hue = (h % 360) as f32;
+    let (r, g, b) = hsl_to_rgb(hue, 0.55, 0.55);
+    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u32, u32, u32) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0).round() as u32,
+        ((g1 + m) * 255.0).round() as u32,
+        ((b1 + m) * 255.0).round() as u32,
+    )
+}
+
+/// Fill an axis-aligned rounded rectangle.
+fn fill_rounded_rect(
+    buffer: &mut [u32],
+    buf_w: usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    radius: i32,
+    color: u32,
+) {
+    let r = radius.min(w / 2).min(h / 2);
+    for ry in 0..h {
+        for rx in 0..w {
+            // Corner test: distance from the nearest corner center.
+            let mut inside = true;
+            let cx = rx;
+            let cy = ry;
+            for (ccx, ccy) in [
+                (r, r),
+                (w - r - 1, r),
+                (r, h - r - 1),
+                (w - r - 1, h - r - 1),
+            ] {
+                if (cx < r || cx > w - r - 1) && (cy < r || cy > h - r - 1) {
+                    let dx = (cx - ccx) as f32;
+                    let dy = (cy - ccy) as f32;
+                    if dx.hypot(dy) > r as f32 {
+                        inside = false;
+                        break;
+                    }
+                }
+            }
+            if inside {
+                plot(buffer, buf_w, (x + rx) as usize, (y + ry) as usize, color);
+            }
         }
     }
 }
