@@ -118,6 +118,28 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
     use blitz_html::HtmlDocument;
     use blitz_traits::shell::Viewport;
 
+    // Pre-initialize parley's font system to avoid NULL deref in skrifa/
+    // fontique when Blitz DOM creates nodes. Register the embedded font
+    // so that Metrics::new and Charmap::map have valid font data.
+    {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+        use parley::FontContext;
+        use linebender_resource_handle::Blob;
+        use std::sync::Arc;
+        let mut font_ctx = FontContext {
+            source_cache: SourceCache::new_shared(),
+            collection: Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            }),
+        };
+        font_ctx
+            .collection
+            .register_fonts(Blob::new(Arc::new(EMBEDDED_FONT) as _), None);
+        // font_ctx is dropped here, but the global fontique state is initialized.
+        drop(font_ctx);
+    }
+
     let viewport = Viewport {
         window_size: (width, height),
         hidpi_scale: config.scale,
@@ -126,6 +148,7 @@ pub fn render_html(html: &str, config: &RenderConfig) -> anyhow::Result<Frame> {
 
     let doc_config = DocumentConfig {
         viewport: Some(viewport),
+        font_ctx: None, // Let Blitz create its own (now that fontique is initialized)
         ..Default::default()
     };
 
