@@ -23,6 +23,7 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -120,6 +121,7 @@ fn run_window_impl(
         find: None,
         zoom: 1.0,
         title: "New Tab".to_string(),
+        favicon: None,
     };
     let mut app = App {
         config: config.clone(),
@@ -138,6 +140,7 @@ fn run_window_impl(
         context_menu: None,
         should_quit: false,
         scrollbar_drag: None,
+        favicon_inbox: Arc::new(Mutex::new(Vec::new())),
     };
     // If no explicit URL was given, try restoring the last session.
     if initial_url.is_none() {
@@ -171,6 +174,16 @@ struct Tab {
     zoom: f32,
     /// Tab title (for the tab strip), from the page <title> or URL.
     title: String,
+    /// Cached decoded favicon (RGBA8 + dimensions), fetched async.
+    favicon: Option<Favicon>,
+}
+
+/// A decoded favicon image.
+#[derive(Clone)]
+struct Favicon {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
 /// The browser application state, held across the event loop.
@@ -195,6 +208,8 @@ struct App {
     should_quit: bool,
     /// When dragging the scrollbar, the Y where the drag started (CSS px).
     scrollbar_drag: Option<f32>,
+    /// Inbox for favicons fetched by background threads: (tab_index, favicon).
+    favicon_inbox: Arc<Mutex<Vec<(usize, Favicon)>>>,
 }
 
 impl App {
@@ -221,6 +236,7 @@ impl App {
             find: None,
             zoom: 1.0,
             title: "New Tab".to_string(),
+            favicon: None,
         };
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
@@ -547,6 +563,8 @@ impl App {
             })
             .collect();
         let active_tab_idx = self.active;
+        // Snapshot the active tab's favicon (cloned to avoid borrow conflict).
+        let favicon_opt: Option<Favicon> = self.active_tab().favicon.clone();
 
         let Some(surface) = self.surface.as_mut() else {
             return;
@@ -588,6 +606,35 @@ impl App {
             can_fwd,
             hover_region,
         );
+
+        // Overlay the real favicon (if fetched) on top of the colored fallback.
+        if let Some(fav) = &favicon_opt {
+            let layout = ChromeLayout::compute(css_w);
+            let rect = layout.favicon;
+            let fx = (rect.0 * scale) as usize;
+            let fy = (rect.1 * scale) as usize;
+            let fw = (rect.2 * scale) as usize;
+            let fh = (rect.3 * scale) as usize;
+            for ty in 0..fh {
+                for tx in 0..fw {
+                    let sx = (tx as u32 * fav.width) / fw as u32;
+                    let sy = (ty as u32 * fav.height) / fh as u32;
+                    let sidx = ((sy * fav.width + sx) * 4) as usize;
+                    if sidx + 2 < fav.rgba.len() {
+                        let r = fav.rgba[sidx] as u32;
+                        let g = fav.rgba[sidx + 1] as u32;
+                        let b = fav.rgba[sidx + 2] as u32;
+                        plot(
+                            &mut buffer,
+                            buf_w,
+                            fx + tx,
+                            fy + ty,
+                            (r << 16) | (g << 8) | b,
+                        );
+                    }
+                }
+            }
+        }
 
         // Tab strip (drawn above the chrome bar).
         draw_tab_strip(
@@ -906,7 +953,57 @@ impl App {
             self.chrome.set_url(load.url.as_ref());
             self.build_doc();
             self.active_tab().state.commit_load(load.url);
+            // Try to fetch the favicon for this page.
+            self.try_fetch_favicon();
         }
+    }
+
+    /// Fetch and decode the favicon for the active tab's current page, in a
+    /// background thread. The decoded RGBA is pushed to `favicon_inbox` for
+    /// the render loop to drain and attach to the tab.
+    fn try_fetch_favicon(&mut self) {
+        let base_url = match &self.active_tab().current_url {
+            Some(u) => u.clone(),
+            None => return,
+        };
+        let href = match self.active_tab().doc.as_ref().and_then(|d| d.favicon_url()) {
+            Some(h) => h,
+            None => return,
+        };
+        let fav_url = match base_url.join(&href) {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        if fav_url.scheme() != "http" && fav_url.scheme() != "https" {
+            return;
+        }
+        let url_str = fav_url.to_string();
+        let active = self.active;
+        let inbox = Arc::clone(&self.favicon_inbox);
+        std::thread::spawn(move || {
+            let client = reqwest::blocking::Client::builder()
+                .user_agent("aris/0.1 (like Gecko)")
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            let Ok(resp) = client.get(&url_str).send() else {
+                return;
+            };
+            if !resp.status().is_success() {
+                return;
+            }
+            let Ok(bytes) = resp.bytes() else {
+                return;
+            };
+            if let Ok(img) = image::load_from_memory(&bytes) {
+                let rgba = img.to_rgba8();
+                let fav = Favicon {
+                    rgba: rgba.as_raw().to_vec(),
+                    width: rgba.width(),
+                    height: rgba.height(),
+                };
+                inbox.lock().unwrap().push((active, fav));
+            }
+        });
     }
 
     fn pump_messages(&mut self) {
@@ -1559,6 +1656,19 @@ impl ApplicationHandler for App {
             }
             event_loop.exit();
             return;
+        }
+        // Drain any favicons fetched by background threads.
+        {
+            let favicons = std::mem::take(&mut *self.favicon_inbox.lock().unwrap());
+            for (idx, fav) in favicons {
+                if idx < self.tabs.len() {
+                    self.tabs[idx].favicon = Some(fav);
+                    if idx == self.active
+                        && let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                }
+            }
         }
         // Poll JS timers (setTimeout/setInterval) for the active tab.
         #[cfg(feature = "js")]
@@ -2259,9 +2369,8 @@ pub fn draw_chrome(
         );
     }
 
-    // Favicon slot: a colored rounded square derived from the URL host, so
-    // each site gets a stable, distinct color even before/without fetching a
-    // real icon. (A real favicon fetch can layer on top of this later.)
+    // Favicon slot: colored rounded square as fallback. Real favicons are
+    // drawn as an overlay in present() after draw_chrome returns.
     {
         let rect = layout.favicon;
         let color = favicon_color(display);
