@@ -127,6 +127,7 @@ fn run_window_impl(
         #[cfg(feature = "js")]
         js: None,
         find: None,
+        zoom: 1.0,
     };
     event_loop.run_app(&mut app)?;
     Ok(())
@@ -166,6 +167,8 @@ struct App {
     js: Option<crate::js_runtime::JsRuntime>,
     /// Ctrl+F find-in-page state, when the find bar is open.
     find: Option<FindState>,
+    /// Page zoom level (1.0 = 100%). Ctrl+=/Ctrl+-/Ctrl+0 adjust it.
+    zoom: f32,
 }
 
 /// State for the find-in-page overlay.
@@ -202,6 +205,7 @@ impl App {
         let viewport = Viewport {
             window_size: (page_w, page_h),
             hidpi_scale: self.scale_factor as f32,
+            zoom: self.zoom,
             ..Default::default()
         };
 
@@ -1140,6 +1144,40 @@ impl ApplicationHandler for App {
                         && matches!(&event.logical_key, Key::Character(c) if c.as_str().eq_ignore_ascii_case("f"))
                     {
                         self.open_find();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    // Ctrl+= / Ctrl+Plus zoom in, Ctrl+- zoom out, Ctrl+0 reset.
+                    if ctrl
+                        && matches!(
+                            &event.logical_key,
+                            Key::Character(c) if c.as_str() == "=" || c.as_str() == "+"
+                        )
+                    {
+                        self.zoom = (self.zoom * 1.2).min(5.0);
+                        self.build_doc();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if ctrl
+                        && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "-")
+                    {
+                        self.zoom = (self.zoom / 1.2).max(0.2);
+                        self.build_doc();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if ctrl
+                        && matches!(&event.logical_key, Key::Character(c) if c.as_str() == "0")
+                    {
+                        self.zoom = 1.0;
+                        self.build_doc();
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
