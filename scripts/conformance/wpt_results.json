@@ -1,5 +1,5 @@
 {
-  "pass_rate": 34,
+  "pass_rate": 35,
   "results": [
     {
       "fail": 0,
@@ -38,9 +38,9 @@
       "tests": 1
     },
     {
-      "fail": 4,
+      "fail": 3,
       "file": "attributes-are-nodes.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 4
     },
@@ -1324,10 +1324,10 @@
       "tests": 80
     },
     {
-      "fail": 8,
+      "fail": 0,
       "file": "interface-objects.html",
-      "pass": 15,
-      "status": "fail",
+      "pass": 23,
+      "status": "pass",
       "tests": 23
     },
     {
@@ -1401,9 +1401,9 @@
       "tests": 18
     },
     {
-      "fail": 12,
+      "fail": 9,
       "file": "nodes\\CharacterData-remove.html",
-      "pass": 0,
+      "pass": 3,
       "status": "fail",
       "tests": 12
     },
@@ -1429,16 +1429,16 @@
       "tests": 8
     },
     {
-      "fail": 35,
+      "fail": 21,
       "file": "nodes\\ChildNode-after.html",
-      "pass": 10,
+      "pass": 24,
       "status": "fail",
       "tests": 45
     },
     {
-      "fail": 35,
+      "fail": 21,
       "file": "nodes\\ChildNode-before.html",
-      "pass": 10,
+      "pass": 24,
       "status": "fail",
       "tests": 45
     },
@@ -1760,9 +1760,9 @@
       "tests": 147
     },
     {
-      "fail": 461,
+      "fail": 460,
       "file": "nodes\\Document-createElementNS.html",
-      "pass": 135,
+      "pass": 136,
       "status": "fail",
       "tests": 596
     },
@@ -1964,9 +1964,9 @@
       "tests": 0
     },
     {
-      "fail": 18,
+      "fail": 16,
       "file": "nodes\\Element-getElementsByTagName.html",
-      "pass": 1,
+      "pass": 3,
       "status": "fail",
       "tests": 19
     },
@@ -2083,9 +2083,9 @@
       "tests": 1
     },
     {
-      "fail": 3,
+      "fail": 2,
       "file": "nodes\\Element-tagName.html",
-      "pass": 3,
+      "pass": 4,
       "status": "fail",
       "tests": 6
     },
@@ -2272,9 +2272,9 @@
       "tests": 0
     },
     {
-      "fail": 8,
+      "fail": 3,
       "file": "nodes\\Node-constants.html",
-      "pass": 0,
+      "pass": 5,
       "status": "fail",
       "tests": 8
     },
@@ -2307,9 +2307,9 @@
       "tests": 2
     },
     {
-      "fail": 9,
+      "fail": 8,
       "file": "nodes\\Node-isEqualNode.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 9
     },
@@ -2335,10 +2335,10 @@
       "tests": 2
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Node-nodeName.html",
-      "pass": 5,
-      "status": "fail",
+      "pass": 6,
+      "status": "pass",
       "tests": 6
     },
     {
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4634,
+  "total_fail": 4583,
   "total_files": 552,
-  "total_pass": 2419,
+  "total_pass": 2470,
   "total_skip": 30,
   "total_tests": 7053
 }
