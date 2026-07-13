@@ -3129,8 +3129,6 @@ fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context
         let js_str = boa_engine::JsString::from(units);
         // Write to _data (internal) for CharacterData method compatibility.
         let _ = o.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(js_str.clone())));
-        // Also write data as a plain property for direct reads.
-        let _ = o.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(js_str.clone())));
         // Also update textContent and length.
         let _ = o.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(js_str)));
         let _ = o.insert_property(
