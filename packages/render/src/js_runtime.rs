@@ -2189,6 +2189,17 @@ fn install_dom_globals(ctx: &mut Context) {
                     .configurable(true)
                     .build(),
             );
+            // Set prototype to Text.prototype → CharacterData.prototype → Node.prototype
+            // so Node constants are inherited.
+            if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                if let Some(tc) = text_ctor.as_object() {
+                    if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2878,6 +2889,28 @@ fn install_dom_globals(ctx: &mut Context) {
         {
             if let Some(p) = get_proto(name, ctx) {
                 let _ = p.set_prototype(Some(html_proto.clone()));
+            }
+        }
+    }
+
+    // Link Text.prototype → CharacterData.prototype → Node.prototype
+    // Link Comment.prototype → CharacterData.prototype → Node.prototype
+    // Link Document.prototype → Node.prototype
+    // Link DocumentFragment.prototype → Node.prototype
+    // Link Attr.prototype → Node.prototype
+    if let Some(node_proto) = get_proto("Node", ctx) {
+        if let Some(char_proto) = get_proto("CharacterData", ctx) {
+            let _ = char_proto.set_prototype(Some(node_proto.clone()));
+            if let Some(text_proto) = get_proto("Text", ctx) {
+                let _ = text_proto.set_prototype(Some(char_proto.clone()));
+            }
+            if let Some(comment_proto) = get_proto("Comment", ctx) {
+                let _ = comment_proto.set_prototype(Some(char_proto.clone()));
+            }
+        }
+        for name in &["Document", "DocumentFragment", "Attr", "DocumentType", "ProcessingInstruction"] {
+            if let Some(p) = get_proto(name, ctx) {
+                let _ = p.set_prototype(Some(node_proto.clone()));
             }
         }
     }
