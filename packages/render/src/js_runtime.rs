@@ -5770,6 +5770,31 @@ fn make_element_handle(
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
             }
             let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(matching.len() as u32)));
+            // item(index) method.
+            let item_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let idx = args.first().and_then(|v| v.as_number()).unwrap_or(-1.0) as i32;
+                if idx < 0 { return Ok(JsValue::null()); }
+                if let Some(o) = this.as_object() {
+                    let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    if (idx as u32) < len {
+                        return Ok(o.get(idx as u32, ctx).unwrap_or(JsValue::null()));
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let _ = arr.insert_property(boa_engine::js_string!("item"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), item_fn).build())));
+            // Set HTMLCollection.prototype.
+            if let Ok(hc_ctor) = ctx.global_object().get(boa_engine::js_string!("HTMLCollection"), ctx) {
+                if let Some(hc) = hc_ctor.as_object() {
+                    if let Ok(proto_val) = hc.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = arr.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             Ok(arr.into())
         },
         Gc::clone(&bridge),
