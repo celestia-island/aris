@@ -3847,9 +3847,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             };
             let html_ns = "http://www.w3.org/1999/xhtml";
             let is_html = ns == html_ns;
-            // For HTML namespace, tagName is ASCII-uppercased; otherwise preserve case.
+            // For HTML namespace, tagName/nodeName is ASCII-uppercased full qualifiedName; otherwise preserve case.
             let tag_name = if is_html {
-                local.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect::<String>()
+                qname.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect::<String>()
             } else {
                 qname.clone()
             };
