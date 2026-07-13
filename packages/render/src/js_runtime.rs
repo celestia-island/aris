@@ -4551,23 +4551,33 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 return Err(boa_engine::JsNativeError::typ()
                     .with_message("NAMESPACE_ERR").into());
             }
-            // Check prefix is not 'xml' unless namespace is XML namespace.
+            // NAMESPACE_ERR checks per spec.
             if let Some(idx) = qname.find(':') {
                 let prefix_str = &qname[..idx];
+                let local_name = &qname[idx + 1..];
+                // Namespace is null/empty but qualifiedName has prefix → NAMESPACE_ERR.
+                if ns_is_null || ns.is_empty() {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+                // Prefix 'xml' but namespace is not XML namespace.
                 if prefix_str == "xml" && ns != "http://www.w3.org/XML/1998/namespace" {
                     return Err(boa_engine::JsNativeError::typ()
                         .with_message("NAMESPACE_ERR").into());
                 }
+                // Prefix 'xmlns' but namespace is not XMLNS namespace.
                 if prefix_str == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
                     return Err(boa_engine::JsNativeError::typ()
                         .with_message("NAMESPACE_ERR").into());
                 }
-                if prefix_str == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
-                    return Err(boa_engine::JsNativeError::typ()
-                        .with_message("NAMESPACE_ERR").into());
-                }
-                let local_name = &qname[idx + 1..];
+                // localName 'xmlns' but namespace is not XMLNS namespace.
                 if local_name == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+            } else {
+                // No prefix. localName 'xmlns' without XMLNS namespace → NAMESPACE_ERR.
+                if qname == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
                     return Err(boa_engine::JsNativeError::typ()
                         .with_message("NAMESPACE_ERR").into());
                 }
