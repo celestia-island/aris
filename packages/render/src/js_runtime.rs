@@ -2164,6 +2164,59 @@ fn install_dom_globals(ctx: &mut Context) {
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_fn).build())));
         // Add DOM methods to the document itself (appendChild, etc.)
         add_dom_methods(&d, ctx);
+        // createRange on this document.
+        let doc_for_cr = d.clone();
+        let cr_fn = NativeFunction::from_copy_closure_with_captures(move |_t, _a, doc_for_cr, ctx| {
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let r = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = r.insert_property(boa_engine::js_string!("startContainer"), pd2(JsValue::from(doc_for_cr.clone())));
+            let _ = r.insert_property(boa_engine::js_string!("endContainer"), pd2(JsValue::from(doc_for_cr.clone())));
+            let _ = r.insert_property(boa_engine::js_string!("startOffset"), pd2(JsValue::from(0u32)));
+            let _ = r.insert_property(boa_engine::js_string!("endOffset"), pd2(JsValue::from(0u32)));
+            let _ = r.insert_property(boa_engine::js_string!("collapsed"), pd2(JsValue::from(true)));
+            let _ = r.insert_property(boa_engine::js_string!("commonAncestorContainer"), pd2(JsValue::from(doc_for_cr.clone())));
+            // setStart/setEnd
+            let ss_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let container = args.first().cloned().unwrap_or(JsValue::null());
+                    let offset = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    let _ = o.insert_property(boa_engine::js_string!("startContainer"), pd3(container));
+                    let _ = o.insert_property(boa_engine::js_string!("startOffset"), pd3(JsValue::from(offset)));
+                }
+                Ok(JsValue::undefined())
+            });
+            let se_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let container = args.first().cloned().unwrap_or(JsValue::null());
+                    let offset = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    let _ = o.insert_property(boa_engine::js_string!("endContainer"), pd3(container));
+                    let _ = o.insert_property(boa_engine::js_string!("endOffset"), pd3(JsValue::from(offset)));
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = r.insert_property(boa_engine::js_string!("setStart"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ss_fn).build())));
+            let _ = r.insert_property(boa_engine::js_string!("setEnd"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), se_fn).build())));
+            // Register in __active_ranges via Array.prototype.push.
+            let global = ctx.global_object();
+            if let Ok(ar) = global.get(boa_engine::js_string!("__active_ranges"), ctx) {
+                if let Some(arr) = ar.as_object() {
+                    // Use push method if available, otherwise set directly.
+                    if let Ok(push_val) = arr.get(boa_engine::js_string!("push"), ctx) {
+                        if let Some(push_fn) = push_val.as_object() {
+                            if push_fn.is_callable() {
+                                let _ = push_fn.call(&JsValue::from(arr.clone()), &[JsValue::from(r.clone())], ctx);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(r.into())
+        }, doc_for_cr);
+        let _ = d.insert_property(boa_engine::js_string!("createRange"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cr_fn).build())));
+        add_dom_methods(&d, ctx);
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(

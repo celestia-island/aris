@@ -297,6 +297,9 @@ var __pass = 0;
 var __fail = 0;
 var __tests = 0;
 var __active_ranges = [];
+// Ensure it's a proper array with mutable length
+__active_ranges.push = function(item) { this[this.length] = item; };
+__active_ranges.clear = function() { while(this.length > 0) this.pop(); };
 
 function test(fn, name) {
     __tests++;
