@@ -3811,7 +3811,8 @@ fn make_element_handle(
     // setAttribute
     let set_attr = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, ctx| {
-            let name = arg_string(args, 0);
+            // HTML attribute names are case-insensitive → lowercase.
+            let name = arg_string(args, 0).to_ascii_lowercase();
             let value = arg_string(args, 1);
             if let Some(nid) = read_handle_id(this) {
                 b.borrow_mut().ops.push(Op::SetAttr {
@@ -3894,7 +3895,8 @@ fn make_element_handle(
 
     // getAttribute — reads from JS-visible properties (snapshot from creation).
     let get_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let name = arg_string(args, 0);
+        // HTML attribute names are case-insensitive → lowercase for lookup.
+        let name = arg_string(args, 0).to_ascii_lowercase();
         let obj = this.as_object();
         let v = match &obj {
             Some(o) => o
