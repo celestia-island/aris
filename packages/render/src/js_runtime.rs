@@ -6064,7 +6064,7 @@ fn make_element_handle(
             };
             // Replace all children with a single text node.
             let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
-            // Create new _children with single text node.
+            // Create new _children with single text node (with Text.prototype).
             let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = text_node.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
             let _ = text_node.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
@@ -6073,6 +6073,16 @@ fn make_element_handle(
             let _ = text_node.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(s))));
             let _ = text_node.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
             let _ = text_node.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(o.clone())));
+            // Set Text.prototype so instanceof Text works.
+            if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                if let Some(tc) = text_ctor.as_object() {
+                    if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = text_node.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = new_arr.insert_property(0u32, pd(JsValue::from(text_node)));
             let _ = new_arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(1u32)));
