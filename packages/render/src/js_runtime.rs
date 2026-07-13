@@ -4314,8 +4314,26 @@ fn make_element_handle(
     init.function(contains_fn, boa_engine::js_string!("contains"), 1);
 
     // replaceChild(newChild, oldChild) — returns oldChild (simplified).
-    let replace_child = NativeFunction::from_copy_closure(|_this, args, _ctx| {
-        Ok(args.get(1).cloned().unwrap_or(JsValue::null()))
+    let replace_child = NativeFunction::from_copy_closure(|this, args, ctx| {
+        // Per spec: if newChild or oldChild is null/undefined, throw TypeError.
+        let new_child = args.first().cloned().unwrap_or(JsValue::null());
+        let old_child = args.get(1).cloned().unwrap_or(JsValue::null());
+        if new_child.is_null() || new_child.is_undefined()
+            || old_child.is_null() || old_child.is_undefined()
+        {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("Argument is not an object")
+                .into());
+        }
+        // JS-level: replace old_child with new_child in _children.
+        if let Some(parent_obj) = this.as_object() {
+            if let (Some(new_obj), Some(old_obj)) = (new_child.as_object(), old_child.as_object()) {
+                // Insert new_child before old_child, then remove old_child.
+                insert_into_children(&parent_obj, &new_obj, Some(old_obj.clone()), ctx);
+                remove_from_children(&parent_obj, &old_obj, ctx);
+            }
+        }
+        Ok(old_child)
     });
     init.function(replace_child, boa_engine::js_string!("replaceChild"), 2);
 
