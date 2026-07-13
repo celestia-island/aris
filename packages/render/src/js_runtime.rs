@@ -2462,6 +2462,10 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::js_string!("nodeType"),
             pd(JsValue::from(9u32)),
         );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("textContent"),
+            pd(JsValue::null()),
+        );
         // doctype stub — the real doctype comes from the parsed HTML.
         let doctype_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
         let _ = doctype_obj.insert_property(
@@ -2483,6 +2487,14 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = doctype_obj.insert_property(
             boa_engine::js_string!("nodeType"),
             pd(JsValue::from(10u32)),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("textContent"),
+            pd(JsValue::null()),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("nodeValue"),
+            pd(JsValue::null()),
         );
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("doctype"),
@@ -3380,8 +3392,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(JsValue::from(1u32)),
             );
             let _ = handle.insert_property(
-                boa_engine::js_string!("textContent"),
-                pd(JsValue::from(boa_engine::js_string!(""))),
+                boa_engine::js_string!("nodeValue"),
+                pd(JsValue::null()),
+            );
+            // textContent is set as an accessor by make_element_handle.
+            let _ = handle.insert_property(
+                boa_engine::js_string!("ownerDocument"),
+                pd(ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null())),
             );
             // innerHTML is set as an accessor by make_element_handle.
             let _ = handle.insert_property(
@@ -3535,7 +3552,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix.to_string())) }));
             let _ = handle.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
             let _ = handle.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
-            let _ = handle.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
+            // textContent is set as an accessor by make_element_handle.
             let _ = handle.insert_property(boa_engine::js_string!("id"), pd(JsValue::from(boa_engine::js_string!(""))));
             let _ = handle.insert_property(boa_engine::js_string!("className"), pd(JsValue::from(boa_engine::js_string!(""))));
             // ownerDocument = the global document.
