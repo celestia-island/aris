@@ -1,5 +1,5 @@
 {
-  "pass_rate": 29,
+  "pass_rate": 35,
   "results": [
     {
       "fail": 0,
@@ -1317,9 +1317,9 @@
       "tests": 10
     },
     {
-      "fail": 8,
+      "fail": 4,
       "file": "historical.html",
-      "pass": 72,
+      "pass": 76,
       "status": "fail",
       "tests": 80
     },
@@ -1340,9 +1340,9 @@
     {
       "fail": 0,
       "file": "lists\\DOMTokenList-coverage-for-attributes.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 175,
+      "status": "pass",
+      "tests": 175
     },
     {
       "fail": 6,
@@ -2014,9 +2014,9 @@
       "tests": 1
     },
     {
-      "fail": 6,
+      "fail": 4,
       "file": "nodes\\Element-matches-namespaced-elements.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 6
     },
@@ -2084,9 +2084,9 @@
       "tests": 1
     },
     {
-      "fail": 5,
+      "fail": 4,
       "file": "nodes\\Element-tagName.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 6
     },
@@ -2252,16 +2252,16 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 4,
       "file": "nodes\\Node-cloneNode-svg.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 4
     },
     {
-      "fail": 15,
+      "fail": 13,
       "file": "nodes\\Node-cloneNode.html",
-      "pass": 120,
+      "pass": 122,
       "status": "fail",
       "tests": 135
     },
@@ -2315,18 +2315,18 @@
       "tests": 9
     },
     {
-      "fail": 9,
+      "fail": 8,
       "file": "nodes\\Node-isSameNode.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 9
     },
     {
-      "fail": 18,
+      "fail": 28,
       "file": "nodes\\Node-lookupNamespaceURI.html",
       "pass": 0,
       "status": "fail",
-      "tests": 18
+      "tests": 28
     },
     {
       "fail": 2,
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1529,
+  "total_fail": 1533,
   "total_files": 552,
-  "total_pass": 649,
+  "total_pass": 834,
   "total_skip": 31,
-  "total_tests": 2178
+  "total_tests": 2367
 }
