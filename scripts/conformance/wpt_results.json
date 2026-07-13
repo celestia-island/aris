@@ -1,5 +1,5 @@
 {
-  "pass_rate": 33,
+  "pass_rate": 34,
   "results": [
     {
       "fail": 0,
@@ -1317,16 +1317,16 @@
       "tests": 10
     },
     {
-      "fail": 4,
+      "fail": 2,
       "file": "historical.html",
-      "pass": 76,
+      "pass": 78,
       "status": "fail",
       "tests": 80
     },
     {
-      "fail": 12,
+      "fail": 8,
       "file": "interface-objects.html",
-      "pass": 11,
+      "pass": 15,
       "status": "fail",
       "tests": 23
     },
@@ -1492,9 +1492,9 @@
       "tests": 1
     },
     {
-      "fail": 11,
+      "fail": 10,
       "file": "nodes\\DOMImplementation-createHTMLDocument.html",
-      "pass": 2,
+      "pass": 3,
       "status": "fail",
       "tests": 13
     },
@@ -1746,9 +1746,9 @@
       "tests": 0
     },
     {
-      "fail": 50,
+      "fail": 49,
       "file": "nodes\\Document-createElement-namespace.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 51
     },
@@ -1788,9 +1788,9 @@
       "tests": 6
     },
     {
-      "fail": 5,
+      "fail": 1,
       "file": "nodes\\Document-createTreeWalker.html",
-      "pass": 0,
+      "pass": 4,
       "status": "fail",
       "tests": 5
     },
@@ -2286,9 +2286,9 @@
       "tests": 0
     },
     {
-      "fail": 29,
+      "fail": 28,
       "file": "nodes\\Node-insertBefore.html",
-      "pass": 11,
+      "pass": 12,
       "status": "fail",
       "tests": 40
     },
@@ -2321,11 +2321,11 @@
       "tests": 9
     },
     {
-      "fail": 54,
+      "fail": 47,
       "file": "nodes\\Node-lookupNamespaceURI.html",
-      "pass": 16,
+      "pass": 25,
       "status": "fail",
-      "tests": 70
+      "tests": 72
     },
     {
       "fail": 2,
@@ -2455,9 +2455,9 @@
       "tests": 1
     },
     {
-      "fail": 21,
+      "fail": 20,
       "file": "nodes\\ParentNode-append.html",
-      "pass": 4,
+      "pass": 5,
       "status": "fail",
       "tests": 25
     },
@@ -2469,9 +2469,9 @@
       "tests": 1
     },
     {
-      "fail": 18,
+      "fail": 17,
       "file": "nodes\\ParentNode-prepend.html",
-      "pass": 4,
+      "pass": 5,
       "status": "fail",
       "tests": 22
     },
@@ -2788,9 +2788,9 @@
       "tests": 2
     },
     {
-      "fail": 22,
+      "fail": 21,
       "file": "nodes\\moveBefore\\Node-moveBefore.html",
-      "pass": 10,
+      "pass": 11,
       "status": "fail",
       "tests": 32
     },
@@ -3749,11 +3749,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "traversal\\NodeFilter-constants.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 2
     },
     {
       "fail": 4,
@@ -3770,9 +3770,9 @@
       "tests": 0
     },
     {
-      "fail": 6,
+      "fail": 5,
       "file": "traversal\\NodeIterator.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 6
     },
@@ -3798,9 +3798,9 @@
       "tests": 12
     },
     {
-      "fail": 6,
+      "fail": 5,
       "file": "traversal\\TreeWalker-basic.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 6
     },
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4658,
+  "total_fail": 4634,
   "total_files": 552,
-  "total_pass": 2391,
+  "total_pass": 2419,
   "total_skip": 30,
-  "total_tests": 7049
+  "total_tests": 7053
 }
