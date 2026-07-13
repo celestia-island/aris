@@ -157,16 +157,16 @@
       "tests": 48
     },
     {
-      "fail": 3,
+      "fail": 2,
       "file": "events\\CustomEvent.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 3
     },
     {
-      "fail": 8,
+      "fail": 6,
       "file": "events\\Event-cancelBubble.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 8
     },
@@ -185,9 +185,9 @@
       "tests": 2
     },
     {
-      "fail": 8,
+      "fail": 3,
       "file": "events\\Event-defaultPrevented.html",
-      "pass": 0,
+      "pass": 5,
       "status": "fail",
       "tests": 8
     },
@@ -360,23 +360,23 @@
       "tests": 1
     },
     {
-      "fail": 12,
+      "fail": 5,
       "file": "events\\Event-initEvent.html",
-      "pass": 0,
+      "pass": 7,
       "status": "fail",
       "tests": 12
     },
     {
-      "fail": 0,
+      "fail": 7,
       "file": "events\\Event-propagation.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 7
     },
     {
-      "fail": 6,
+      "fail": 5,
       "file": "events\\Event-returnValue.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 7
     },
@@ -437,10 +437,10 @@
       "tests": 2
     },
     {
-      "fail": 2,
+      "fail": 0,
       "file": "events\\Event-type.html",
-      "pass": 1,
-      "status": "fail",
+      "pass": 3,
+      "status": "pass",
       "tests": 3
     },
     {
@@ -535,9 +535,9 @@
       "tests": 6
     },
     {
-      "fail": 3,
+      "fail": 2,
       "file": "events\\KeyEvent-initKeyEvent.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 3
     },
@@ -2063,10 +2063,10 @@
       "tests": 1
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Element-setAttribute-crbug-1138487.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1402,
+  "total_fail": 1389,
   "total_files": 552,
-  "total_pass": 983,
+  "total_pass": 1003,
   "total_skip": 31,
-  "total_tests": 2385
+  "total_tests": 2392
 }
