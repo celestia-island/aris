@@ -4003,11 +4003,23 @@ fn serialize_children(o: &boa_engine::object::JsObject, ctx: &mut Context) -> St
     let mut html = String::new();
     if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
         if let Some(ca) = cv.as_object() {
-            let clen = ca.get(boa_engine::js_string!("length"), ctx).ok()
-                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-            for i in 0..clen {
-                if let Ok(child) = ca.get(i as u32, ctx) {
-                    html.push_str(&serialize_node_depth(&child, ctx, 1));
+            let ca_ref = &ca;
+            // Try JsArray first, fallback to plain object get.
+            if let Ok(arr) = JsArray::from_object(ca_ref.clone()) {
+                if let Ok(clen) = arr.length(ctx) {
+                    for i in 0..clen as u32 {
+                        if let Ok(child) = arr.at(i, ctx) {
+                            html.push_str(&serialize_node_depth(&child, ctx, 1));
+                        }
+                    }
+                }
+            } else {
+                let clen = ca_ref.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                for i in 0..clen {
+                    if let Ok(child) = ca_ref.get(i as u32, ctx) {
+                        html.push_str(&serialize_node_depth(&child, ctx, 1));
+                    }
                 }
             }
         }
