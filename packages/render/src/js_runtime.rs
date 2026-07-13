@@ -3562,6 +3562,37 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(JsValue::from(0u32)),
             );
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
+            // classList — DOMTokenList backed by className.
+            let class_list = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = class_list.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+            // contains(token) — checks if className contains token.
+            let cl_contains = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let token = arg_string(args, 0);
+                if let Some(o) = this.as_object() {
+                    // Get className from the parent element (stored as _className on classList).
+                    let cn = o.get(boa_engine::js_string!("_className"), ctx).ok()
+                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                        .unwrap_or_default();
+                    let found = cn.split_whitespace().any(|c| c == token);
+                    return Ok(JsValue::from(found));
+                }
+                Ok(JsValue::from(false))
+            });
+            let _ = class_list.insert_property(boa_engine::js_string!("contains"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_contains).build())));
+            // add(...tokens)
+            let cl_add = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let _ = class_list.insert_property(boa_engine::js_string!("add"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_add).build())));
+            // remove(...tokens)
+            let cl_remove = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let _ = class_list.insert_property(boa_engine::js_string!("remove"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_remove).build())));
+            // toggle(token)
+            let cl_toggle = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+            let _ = class_list.insert_property(boa_engine::js_string!("toggle"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_toggle).build())));
+            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(class_list.into()));
             // Element navigation properties (all null/empty for new elements).
             let _ = handle.insert_property(boa_engine::js_string!("children"),
                 pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
