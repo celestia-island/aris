@@ -1953,8 +1953,9 @@ fn install_dom_globals(ctx: &mut Context) {
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ =
                 obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32))); // TEXT_NODE
+            // Store data in an internal _data property (accessor reads/writes this).
             let _ = obj.insert_property(
-                boa_engine::js_string!("data"),
+                boa_engine::js_string!("_data"),
                 pd(JsValue::from(boa_engine::js_string!(text.clone()))),
             );
             let _ = obj.insert_property(
@@ -2053,6 +2054,65 @@ fn install_dom_globals(ctx: &mut Context) {
                 pd(JsValue::from(
                     boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), whole_text).build(),
                 )),
+            );
+            // nodeValue as accessor: getter returns data, setter updates data.
+            let nv_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let nv_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                // Per spec: null → "", undefined → "undefined", else String(val)
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let nv_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_get).build();
+            let nv_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(nv_get_fn)
+                    .set(nv_set_fn)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+            // data as accessor too (same get/set as nodeValue).
+            let data_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let data_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let dg_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_get).build();
+            let ds_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(dg_fn)
+                    .set(ds_fn)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
             );
             Ok(obj.into())
         });
@@ -2425,13 +2485,25 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
 
 /// Read the "data" property of a CharacterData node as UTF-16 code units.
 fn read_data_utf16(this: &boa_engine::JsValue, ctx: &mut Context) -> Vec<u16> {
-    this.as_object()
-        .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
-        .and_then(|v| v.as_string().map(|s| s.iter().collect::<Vec<u16>>()))
-        .unwrap_or_default()
+    // Try _data first (internal store for accessor-based nodes), then data.
+    if let Some(o) = this.as_object() {
+        if let Ok(v) = o.get(boa_engine::js_string!("_data"), ctx) {
+            if let Some(s) = v.as_string() {
+                return s.iter().collect();
+            }
+        }
+    }
+    if let Some(o) = this.as_object() {
+        if let Ok(v) = o.get(boa_engine::js_string!("data"), ctx) {
+            if let Some(s) = v.as_string() {
+                return s.iter().collect();
+            }
+        }
+    }
+    Vec::new()
 }
 
-/// Write UTF-16 code units to "data" and update textContent/length.
+/// Write UTF-16 code units to _data/data and update textContent/length.
 fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context) {
     if let Some(o) = this.as_object() {
         let pd = |val: JsValue| {
@@ -2443,7 +2515,11 @@ fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context
                 .build()
         };
         let js_str = boa_engine::JsString::from(units);
+        // Write to _data (internal) so accessor getter reads the updated value.
+        let _ = o.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(js_str.clone())));
+        // Also write to data for nodes that don't use the accessor pattern.
         let _ = o.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(js_str.clone())));
+        // Also update textContent and length.
         let _ = o.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(js_str)));
         let _ = o.insert_property(
             boa_engine::js_string!("length"),
