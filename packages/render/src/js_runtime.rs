@@ -1805,11 +1805,37 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_doc).build(),
         )),
     );
-    let create_html_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+    let create_html_doc = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let title = arg_string(args, 0);
         let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        // Give it its own implementation object so createDocumentType works on it.
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        // Build a proper document with doctype, head, title, body.
+        let doctype = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = doctype.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!("html"))));
+        let _ = doctype.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("html"))));
+        let _ = doctype.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = doctype.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = doctype.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
+        let _ = doctype.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(d.clone())));
+        let _ = d.insert_property(boa_engine::js_string!("doctype"), pd(doctype.into()));
+        let _ = d.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(9u32)));
+        let _ = d.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#document"))));
+        let _ = d.insert_property(boa_engine::js_string!("contentType"), pd(JsValue::from(boa_engine::js_string!("text/html"))));
+        let _ = d.insert_property(boa_engine::js_string!("URL"), pd(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("documentURI"), pd(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("compatMode"), pd(JsValue::from(boa_engine::js_string!("CSS1Compat"))));
+        let _ = d.insert_property(boa_engine::js_string!("characterSet"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("charset"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("inputEncoding"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("location"), pd(JsValue::null()));
+        // Build the implementation that knows its owner document.
         let impl2 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        let cdt_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let doc_ref = d.clone();
+        let cdt_fn = NativeFunction::from_copy_closure_with_captures(
+            move |_t, args, doc_ref, ctx| {
             let name = arg_string(args, 0);
             let public_id = arg_string(args, 1);
             let system_id = arg_string(args, 2);
@@ -1825,8 +1851,9 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = dt.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
             let _ = dt.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
             let _ = dt.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+            let _ = dt.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(doc_ref.clone())));
             Ok(dt.into())
-        });
+        }, doc_ref);
         let hf_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
         let _ = impl2.insert_property(boa_engine::js_string!("hasFeature"),
             boa_engine::property::PropertyDescriptor::builder()
@@ -1836,11 +1863,20 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cdt_fn).build()))
                 .writable(true).enumerable(true).configurable(true).build());
-        let pd = |val: JsValue| {
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(val).writable(true).enumerable(true).configurable(true).build()
-        };
         let _ = d.insert_property(boa_engine::js_string!("implementation"), pd(impl2.into()));
+        // head + body stubs.
+        let head = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = head.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HEAD"))));
+        let title_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = title_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("TITLE"))));
+        let _ = title_el.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(title))));
+        let _ = d.insert_property(boa_engine::js_string!("head"), pd(head.into()));
+        let body = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = body.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("BODY"))));
+        let _ = d.insert_property(boa_engine::js_string!("body"), pd(body.into()));
+        let html_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = html_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HTML"))));
+        let _ = d.insert_property(boa_engine::js_string!("documentElement"), pd(html_el.into()));
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
