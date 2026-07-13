@@ -3799,39 +3799,30 @@ fn insert_into_children(parent: &boa_engine::object::JsObject, child: &boa_engin
         let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
         let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
     } else {
-        // For insertBefore, find position and use JS Array.splice via JS call.
-        // This is faster than doing the shift loop in Rust with insert_property.
+        // For insertBefore: find ref_node position, shift elements, insert.
         let ref_node = before.unwrap();
-        // Use array push + sort won't work. Instead, rebuild the array via JS.
-        // Build a new _children by calling splice.
-        let splice_fn = arr.get(boa_engine::js_string!("splice"), ctx).ok()
-            .and_then(|v| v.as_object());
-        if let Some(sf) = splice_fn {
-            if sf.is_callable() {
-                // Find index of ref_node.
-                let mut ref_idx = len;
-                for i in 0..len {
-                    if let Ok(v) = arr.get(i as u32, ctx) {
-                        if let Some(o) = v.as_object() {
-                            if boa_engine::object::JsObject::equals(&o, &ref_node) {
-                                ref_idx = i;
-                                break;
-                            }
-                        }
+        let mut ref_idx = len;
+        for i in 0..len {
+            if let Ok(v) = arr.get(i as u32, ctx) {
+                if let Some(o) = v.as_object() {
+                    if boa_engine::object::JsObject::equals(&o, &ref_node) {
+                        ref_idx = i;
+                        break;
                     }
                 }
-                // splice(ref_idx, 0, child) inserts child at ref_idx.
-                let _ = sf.call(&JsValue::from(arr.clone()), &[JsValue::from(ref_idx), JsValue::from(0u32), JsValue::from(child.clone())], ctx);
-            } else {
-                // Fallback: just append.
-                let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
-                let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
             }
-        } else {
-            // Fallback: just append.
-            let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
-            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
         }
+        // Shift elements up from ref_idx using insert_property.
+        if ref_idx < len {
+            for i in (ref_idx..len).rev() {
+                let val = arr.get(i, ctx).unwrap_or(JsValue::undefined());
+                let _ = arr.insert_property(i + 1, pd(val));
+            }
+            let _ = arr.insert_property(ref_idx, pd(JsValue::from(child.clone())));
+        } else {
+            let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
+        }
+        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
     }
     // Set child's parentNode.
     let _ = child.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent.clone())));
