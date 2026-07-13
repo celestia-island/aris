@@ -27,3 +27,4 @@ packages/js/target/
 /.just/
 /celestia-devtools.just
 .wpt/
+patches/boa_engine_021/target/

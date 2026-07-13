@@ -177,7 +177,12 @@ impl JsRuntime {
 
         let _ = url;
         if !script_src.trim().is_empty() {
-            let _ = self.ctx.eval(Source::from_bytes(script_src));
+            match self.ctx.eval(Source::from_bytes(script_src)) {
+                Ok(_v) => {}
+                Err(e) => {
+                    eprintln!("[aris-js] eval error: {}", e.to_string());
+                }
+            }
         }
         self.apply_ops(doc);
         self.harvest_listeners();
@@ -358,19 +363,21 @@ impl JsRuntime {
             .global_object()
             .get(boa_engine::js_string!("document"), &mut self.ctx)
             .ok();
-        let Some(doc_obj) = doc_val.as_ref().and_then(|v| v.as_object()).cloned() else {
+        let Some(doc_obj) = doc_val.as_ref().and_then(|v| v.as_object()) else {
             return;
         };
 
         let bridge = Gc::clone(&self.bridge);
 
-        // Helper: create + populate handle for a node.
+        // Helper: create + populate handle for a node, and set its prototype.
         let mk = |nid: u32, snap: &NodePropSnapshot, ctx: &mut Context| {
             let handle =
                 make_element_handle(ctx, Gc::clone(&bridge), nid, None).unwrap_or_else(|_| {
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
                 });
             populate_props(&handle, snap, ctx);
+            // Set prototype so instanceof works (e.g. body instanceof HTMLBodyElement).
+            set_element_prototype(&handle, &snap.tag_name, ctx);
             handle.into()
         };
 
@@ -450,10 +457,18 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
         let tag = node
             .element_data()
             .map(|e| {
-                format!("{:?}", e.name.local)
-                    .trim_start_matches("Atom('")
-                    .trim_end_matches("' type=static)")
-                    .to_uppercase()
+                // Debug format: Atom('div' type=inline) or Atom('div' type=static)
+                // Extract the tag name between Atom(' and '
+                let dbg = format!("{:?}", e.name.local);
+                if let Some(rest) = dbg.strip_prefix("Atom('") {
+                    if let Some(end) = rest.find('\'') {
+                        rest[..end].to_uppercase()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
             })
             .unwrap_or_default();
         let text = node.text_content();
@@ -604,6 +619,21 @@ fn strip_tags(html: &str) -> String {
         }
     }
     out
+}
+
+/// Set the prototype of an element handle to the corresponding HTMLxxxElement.prototype,
+/// so that `elem instanceof HTMLxxxElement` works.
+fn set_element_prototype(handle: &JsObject, tag: &str, ctx: &mut Context) {
+    let ctor_name = tag_to_html_element_class(tag);
+    if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(ctor_name), ctx) {
+        if let Some(ctor_obj) = ctor_val.as_object() {
+            if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                if let Some(proto) = proto_val.as_object() {
+                    let _ = handle.set_prototype(Some(proto));
+                }
+            }
+        }
+    }
 }
 
 /// Map an HTML tag name to its corresponding HTMLxxxElement constructor name.
@@ -844,7 +874,7 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
                 for (i, ak) in arr_keys.iter().enumerate() {
                     if let Ok(child_val) = arr.get(ak.clone(), ctx) {
                         if let Some(child_obj) = child_val.as_object() {
-                            let child_clone = clone_node_js(Some(child_obj), true, ctx)?;
+                            let child_clone = clone_node_js(Some(&child_obj), true, ctx)?;
                             let _ = new_arr.insert_property(i as u32, pd(child_clone));
                         }
                     }
@@ -860,7 +890,8 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         }
         // Deep clone objects (like firstChild/lastChild).
         if deep && val.as_object().is_some() && !val.is_null() {
-            let child_clone = clone_node_js(val.as_object(), true, ctx)?;
+            let obj = val.as_object();
+            let child_clone = clone_node_js(obj.as_ref(), true, ctx)?;
             let _ = clone.insert_property(key, pd(child_clone));
         } else {
             let _ = clone.insert_property(key, pd(val));
@@ -875,7 +906,8 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
     // captured above. But let's make sure cloneNode itself is available.
     let clone_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
         let d = args.first().and_then(|v| v.as_boolean()).unwrap_or(false);
-        clone_node_js(this.as_object(), d, ctx)
+        let obj = this.as_object();
+        clone_node_js(obj.as_ref(), d, ctx)
     });
     let _ = clone.insert_property(
         boa_engine::js_string!("cloneNode"),
@@ -990,7 +1022,7 @@ fn install_window(ctx: &mut Context, url: String) {
         .build();
 
     // alert(message) — logs the message (a real modal would block; we trace).
-    let alert = NativeFunction::from_copy_closure_with_captures(
+    let alert_fn = NativeFunction::from_copy_closure_with_captures(
         |_this, args, _caps, ctx| {
             let msg = args
                 .first()
@@ -1001,26 +1033,46 @@ fn install_window(ctx: &mut Context, url: String) {
         },
         (),
     );
-
-    let window = ObjectInitializer::new(ctx)
-        .property(
-            boa_engine::js_string!("location"),
-            location,
-            Attribute::all(),
-        )
-        .function(alert, boa_engine::js_string!("alert"), 1)
+    let alert = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), alert_fn)
+        .name(boa_engine::js_string!("alert"))
+        .length(1)
         .build();
 
+    // In a browser, `window` IS the global object. So we install location,
+    // alert, etc. directly on the global object, and make window/self point
+    // back to it.
     let global = ctx.global_object();
     let _ = global.insert_property(
-        boa_engine::js_string!("window"),
+        boa_engine::js_string!("location"),
         boa_engine::property::PropertyDescriptor::builder()
-            .value(window)
+            .value(location)
             .writable(true)
-            .enumerable(false)
+            .enumerable(true)
             .configurable(true)
             .build(),
     );
+    let _ = global.insert_property(
+        boa_engine::js_string!("alert"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(alert)
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    // window, self, globalThis all point to the global object itself.
+    let self_ref = JsValue::from(global.clone());
+    for name in &["window", "self", "globalThis", "top", "parent"] {
+        let _ = global.insert_property(
+            boa_engine::js_string!(*name),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(self_ref.clone())
+                .writable(true)
+                .enumerable(false)
+                .configurable(true)
+                .build(),
+        );
+    }
 }
 
 /// Install a `console` global with `log`/`warn`/`error`/`info` methods that
@@ -1556,14 +1608,14 @@ fn install_dom_globals(ctx: &mut Context) {
         .global_object()
         .get(boa_engine::js_string!("document"), &mut *ctx)
         .ok();
-    if let Some(doc_obj) = doc_val.as_ref().and_then(|v| v.as_object()).cloned() {
+    if let Some(doc_obj) = doc_val.as_ref().and_then(|v| v.as_object()) {
         let create_range = NativeFunction::from_copy_closure(|_t, _a, ctx| {
             // Call the Range constructor.
             let range_ctor = ctx
                 .global_object()
                 .get(boa_engine::js_string!("Range"), ctx)
                 .ok();
-            let ctor_obj = range_ctor.as_ref().and_then(|v| v.as_object()).cloned();
+            let ctor_obj = range_ctor.as_ref().and_then(|v| v.as_object());
             if let Some(ctor) = ctor_obj {
                 match ctor.construct(&[], None, ctx) {
                     Ok(v) => return Ok(v.into()),
@@ -1929,7 +1981,7 @@ fn install_dom_globals(ctx: &mut Context) {
         // (walking up the prototype chain).
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
-            if let Some(ctor_obj) = ctor_val.as_object().cloned() {
+            if let Some(ctor_obj) = ctor_val.as_object() {
                 // Create a prototype object that inherits from Object.prototype.
                 let proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                 let _ = proto.insert_property(
@@ -1951,7 +2003,7 @@ fn install_dom_globals(ctx: &mut Context) {
         let proto_val = ctor_obj
             .get(boa_engine::js_string!("prototype"), ctx)
             .ok()?;
-        proto_val.as_object().cloned()
+        proto_val.as_object()
     };
 
     // Link: HTMLElement.prototype.__proto__ = Element.prototype.__proto__ = Node.prototype
@@ -2251,21 +2303,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 ))),
             );
             // Set the prototype chain so instanceof works.
-            // Map tag → HTMLxxxElement constructor name.
-            let ctor_name = tag_to_html_element_class(&tag);
-            if let Ok(ctor_val) = ctx
-                .global_object()
-                .get(boa_engine::js_string!(ctor_name), ctx)
-            {
-                if let Some(ctor_obj) = ctor_val.as_object() {
-                    // Get constructor.prototype
-                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
-                        if let Some(proto) = proto_val.as_object() {
-                            let _ = handle.set_prototype(Some(proto.clone()));
-                        }
-                    }
-                }
-            }
+            set_element_prototype(&handle, &tag, ctx);
             Ok(handle.into())
         },
         Gc::clone(&bridge),
@@ -3030,7 +3068,7 @@ fn make_element_handle(
     let clone = NativeFunction::from_copy_closure(|this, args, ctx| {
         let deep = args.first().and_then(|v| v.as_boolean()).unwrap_or(false);
         let this_obj = this.as_object();
-        clone_node_js(this_obj, deep, ctx)
+        clone_node_js(this_obj.as_ref(), deep, ctx)
     });
     init.function(clone, boa_engine::js_string!("cloneNode"), 0);
 

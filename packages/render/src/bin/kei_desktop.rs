@@ -459,28 +459,37 @@ fn main() {
         draw_text_small(&mut buf, "2026-07-13", clk_x + 8, tb_y + 26, text_grey);
 
         // ---- 6. Write framebuffer to /dev/fb0 ----
-        // Write in moderate chunks (8KB each) in a single positioned write at
-        // offset 0. The kernel fb write_at already chunks internally and flushes
-        // once per write_at call, so a single large write = one flush.
+        // Write in moderate chunks, then trigger a SINGLE flush via the
+        // FBIOPAN_DISPLAY ioctl. The kernel fb write_at path does NOT flush on
+        // each write (to avoid a deterministic ostd page-table crash under
+        // repeated flushes). This single ioctl-triggered flush pushes the whole
+        // frame to the virtio-gpu scanout in one TRANSFER_TO_HOST_2D.
         log(b"kei_desktop: writing framebuffer to /dev/fb0\n");
         let _ = file.seek(std::io::SeekFrom::Start(0));
-        // Write in 8KB chunks to avoid the large-write hang in the kei fb
-        // write_at path (each chunk is a separate write() syscall, but all at
-        // increasing file offsets within one open fd).
         const CHUNK: usize = 8192;
         let mut written = 0usize;
         while written < fb_size {
             let end = (written + CHUNK).min(fb_size);
             let n = file.write(&buf[written..end]).unwrap_or(0);
             if n == 0 {
-                // write stalled; retry once then break to avoid infinite loop
                 break;
             }
             written += n;
         }
-        drop(file);
         let m = format!("kei_desktop: wrote {} of {} bytes\n", written, fb_size);
         log(m.as_bytes());
+
+        // Trigger the single flush: FBIOPAN_DISPLAY = 0x4606 (kei hijacks this
+        // ioctl to flush the Blit-backed framebuffer to the scanout).
+        log(b"kei_desktop: triggering flush (FBIOPAN_DISPLAY)\n");
+        #[cfg(unix)]
+        unsafe {
+            // ioctl(fd, FBIOPAN_DISPLAY, 0) — no argument data needed.
+            const FBIOPAN_DISPLAY: u64 = 0x4606;
+            let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+            let _ = libc::ioctl(fd, FBIOPAN_DISPLAY as _, 0usize);
+        }
+        drop(file);
         log(b"kei_desktop: done - desktop rendered.\n");
     }
 

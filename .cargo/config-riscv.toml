@@ -1,0 +1,3 @@
+[target.riscv64gc-unknown-linux-musl]
+linker = "D:\源代码\工程项目\celestia\tools\riscv64-linux-musl-cross\bin\riscv64-linux-musl-gcc.exe"
+rustflags = ["-C", "link-arg=-static"]

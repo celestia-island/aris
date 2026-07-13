@@ -8,4 +8,4 @@ description = "Boa JS engine integration for aris HMI"
 
 [dependencies]
 tracing.workspace = true
-boa_engine = "=0.20.0"
+boa_engine = "=0.21.1"
