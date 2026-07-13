@@ -1761,6 +1761,40 @@ fn install_dom_globals(ctx: &mut Context) {
     );
     let create_html_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
         let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // Give it its own implementation object so createDocumentType works on it.
+        let impl2 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let cdt_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let name = arg_string(args, 0);
+            let public_id = arg_string(args, 1);
+            let system_id = arg_string(args, 2);
+            let dt = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            let _ = dt.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+            let _ = dt.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name))));
+            let _ = dt.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(public_id))));
+            let _ = dt.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(system_id))));
+            let _ = dt.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+            let _ = dt.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
+            let _ = dt.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+            Ok(dt.into())
+        });
+        let hf_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
+        let _ = impl2.insert_property(boa_engine::js_string!("hasFeature"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), hf_fn).build()))
+                .writable(true).enumerable(true).configurable(true).build());
+        let _ = impl2.insert_property(boa_engine::js_string!("createDocumentType"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cdt_fn).build()))
+                .writable(true).enumerable(true).configurable(true).build());
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        let _ = d.insert_property(boa_engine::js_string!("implementation"), pd(impl2.into()));
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
@@ -1769,8 +1803,25 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_html_doc).build(),
         )),
     );
-    let create_dt = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+    let create_dt = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let name = arg_string(args, 0);
+        let public_id = arg_string(args, 1);
+        let system_id = arg_string(args, 2);
         let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        let _ = d.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+        let _ = d.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+        let _ = d.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(public_id))));
+        let _ = d.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(system_id))));
+        let _ = d.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+        let _ = d.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32))); // DOCUMENT_TYPE_NODE
+        let _ = d.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+        // ownerDocument = the current document.
+        let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
+        let _ = d.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
