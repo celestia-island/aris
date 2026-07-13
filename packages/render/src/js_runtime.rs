@@ -4529,44 +4529,6 @@ fn make_element_handle(
         Ok(JsValue::undefined())
     });
     init.function(remove_listener, boa_engine::js_string!("removeEventListener"), 2);
-    let dispatch = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let event = args.first().cloned().unwrap_or(JsValue::null());
-        // Get event type to find matching listeners.
-        let event_type = event
-            .as_object()
-            .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
-            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-            .unwrap_or_default();
-        // Set event.target = this.
-        if let Some(ev_obj) = event.as_object() {
-            let _ = ev_obj.insert_property(
-                boa_engine::js_string!("target"),
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(this.clone())
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build(),
-            );
-        }
-        // For now, we look for event handler properties (onclick, onload, etc.)
-        // and call them. addEventListener-registered handlers are fired via
-        // fire_click for click events.
-        if !event_type.is_empty() {
-            let handler_prop = format!("on{}", event_type);
-            if let Some(this_obj) = this.as_object() {
-                if let Ok(handler) = this_obj.get(boa_engine::js_string!(handler_prop), ctx) {
-                    if let Some(fn_obj) = handler.as_object() {
-                        if fn_obj.is_callable() {
-                            let _ = fn_obj.call(this, &[event.clone()], ctx);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(JsValue::from(true))
-    });
-    init.function(dispatch, boa_engine::js_string!("dispatchEvent"), 1);
 
     // appendChild
     let append = NativeFunction::from_copy_closure_with_captures(
