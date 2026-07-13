@@ -98,7 +98,11 @@ fn run_tests() {
         }
 
         // Prepend testharness.js shim, then combine all scripts.
-        let combined = format!("{}\n{}", HARNESS_SHIM, scripts.join("\n;\n"));
+        // Strip "use strict" from external scripts so var declarations stay global.
+        let processed_scripts: Vec<String> = scripts.iter()
+            .map(|s| s.replace("\"use strict\"", "").replace("'use strict'", ""))
+            .collect();
+        let combined = format!("{}\n{}", HARNESS_SHIM, processed_scripts.join("\n;\n"));
 
         // Set up the document + runtime (wrapped in catch_unwind so a single
         // test crash doesn't abort the whole batch).
