@@ -2399,6 +2399,187 @@ fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context
     }
 }
 
+/// Check if a JS element object matches a simple CSS selector.
+/// Supports: tag, .class, #id, [attr], [attr=val], tag.class, tag#id, tag[attr],
+/// div:not(.cls), tag.cls#id[attr=val], comma-separated selector lists.
+fn element_matches_selector(obj: &boa_engine::object::JsObject, selector: &str, ctx: &mut Context) -> bool {
+    let selector = selector.trim();
+    if selector.is_empty() { return false; }
+    // Handle comma-separated selector lists: match if ANY sub-selector matches.
+    for sub in selector.split(',') {
+        let sub = sub.trim();
+        if element_matches_single_selector(obj, sub, ctx) {
+            return true;
+        }
+    }
+    false
+}
+
+fn element_matches_single_selector(obj: &boa_engine::object::JsObject, selector: &str, ctx: &mut Context) -> bool {
+    let selector = selector.trim();
+    if selector.is_empty() { return false; }
+
+    // Handle :not(...) pseudo-class.
+    if let Some(rest) = selector.strip_prefix(":not(") {
+        if let Some(inner) = rest.strip_suffix(')') {
+            return !element_matches_single_selector(obj, inner.trim(), ctx);
+        }
+    }
+
+    // Parse compound selector: tag.class#id[attr=val]...
+    let mut tag = String::new();
+    let mut classes: Vec<String> = Vec::new();
+    let mut id: Option<String> = None;
+    let mut attrs: Vec<(String, Option<String>)> = Vec::new();
+    let mut pseudo_not: Option<String> = None;
+
+    // Extract pseudo-class :not(...) first.
+    let working = if let Some(idx) = selector.find(":not(") {
+        let before = &selector[..idx];
+        let after_paren = &selector[idx + 5..];
+        if let Some(end) = after_paren.find(')') {
+            pseudo_not = Some(after_paren[..end].to_string());
+        }
+        before.to_string()
+    } else {
+        selector.to_string()
+    };
+
+    // Parse the compound selector character by character.
+    let mut chars = working.chars().peekable();
+    let mut current = String::new();
+    let mut state = 't'; // t=tag, .=class, #=id, [=attr
+    let mut attr_name = String::new();
+    let mut attr_val: Option<String> = None;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '.' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                else if state == ']' { attrs.push((attr_name.clone(), attr_val.clone())); }
+                current.clear();
+                state = '.';
+            }
+            '#' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                else if state == ']' { attrs.push((attr_name.clone(), attr_val.clone())); }
+                current.clear();
+                state = '#';
+            }
+            '[' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                current.clear();
+                attr_name.clear();
+                attr_val = None;
+                state = '[';
+            }
+            ']' => {
+                // Parse attr_name=val from current.
+                if let Some(eq) = current.find('=') {
+                    attr_name = current[..eq].trim().to_string();
+                    let v = current[eq + 1..].trim().to_string();
+                    attr_val = Some(v.trim_matches('"').trim_matches('\'').to_string());
+                } else {
+                    attr_name = current.trim().to_string();
+                }
+                attrs.push((attr_name.clone(), attr_val.clone()));
+                current.clear();
+                state = ']';
+            }
+            _ => { current.push(c); }
+        }
+    }
+    // Handle trailing state.
+    match state {
+        't' => { if !current.is_empty() { tag = current; } }
+        '.' => { classes.push(current); }
+        '#' => { id = Some(current); }
+        '[' => {
+            if let Some(eq) = current.find('=') {
+                attr_name = current[..eq].trim().to_string();
+                let v = current[eq + 1..].trim().to_string();
+                attr_val = Some(v.trim_matches('"').trim_matches('\'').to_string());
+            } else {
+                attr_name = current.trim().to_string();
+            }
+            attrs.push((attr_name, attr_val));
+        }
+        _ => {}
+    }
+
+    // Check tag name.
+    if !tag.is_empty() {
+        let tn = obj.get(boa_engine::js_string!("tagName"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if !tn.eq_ignore_ascii_case(&tag) { return false; }
+    }
+    // Check classes.
+    for cls in &classes {
+        let cn = obj.get(boa_engine::js_string!("className"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if !cn.split_whitespace().any(|c| c.eq_ignore_ascii_case(cls)) { return false; }
+    }
+    // Check id.
+    if let Some(ref id_val) = id {
+        let eid = obj.get(boa_engine::js_string!("id"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if &eid != id_val { return false; }
+    }
+    // Check attributes.
+    for (aname, aval) in &attrs {
+        let has = obj.get(boa_engine::js_string!(aname.clone()), ctx).ok();
+        match has {
+            Some(v) => {
+                if let Some(expected) = aval {
+                    let actual = v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default();
+                    if &actual != expected { return false; }
+                }
+            }
+            None => {
+                // Check if it's in the NamedNodeMap.
+                let found = if let Ok(av2) = obj.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(ao) = av2.as_object() {
+                        let len = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        let mut f = false;
+                        for i in 0..len {
+                            if let Ok(a) = ao.get(i as u32, ctx) {
+                                if let Some(a_obj) = a.as_object() {
+                                    if let Ok(an) = a_obj.get(boa_engine::js_string!("name"), ctx) {
+                                        if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&aname.to_ascii_lowercase()) {
+                                            if let Some(expected) = aval {
+                                                if let Ok(av3) = a_obj.get(boa_engine::js_string!("value"), ctx) {
+                                                    if av3.as_string().map(|s| s.to_std_string_escaped()).as_deref() == Some(expected.as_str()) { f = true; break; }
+                                                }
+                                            } else { f = true; break; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        f
+                    } else { false }
+                } else { false };
+                if !found { return false; }
+            }
+        }
+    }
+    // Check :not() pseudo-class.
+    if let Some(not_sel) = pseudo_not {
+        if element_matches_single_selector(obj, &not_sel, ctx) { return false; }
+    }
+    true
+}
+
 /// Throw an IndexSizeError DOMException-like error.
 fn throw_index_size(ctx: &mut Context) -> JsResult<JsValue> {
     Err(boa_engine::JsNativeError::typ()
@@ -3750,34 +3931,49 @@ fn make_element_handle(
     });
     init.function(get_root_node, boa_engine::js_string!("getRootNode"), 0);
 
+    // lookupNamespaceURI(prefix) — returns namespace URI for given prefix.
+    // Simplified: always null except 'xml' → XML namespace, 'xmlns' → xmlns namespace.
+    let lookup_ns_uri = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let prefix = args.first().map(|v| {
+            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
+        }).unwrap_or_default();
+        match prefix.as_str() {
+            "xml" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/XML/1998/namespace"))),
+            "xmlns" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/2000/xmlns/"))),
+            _ => Ok(JsValue::null()),
+        }
+    });
+    init.function(lookup_ns_uri, boa_engine::js_string!("lookupNamespaceURI"), 1);
+
+    // lookupPrefix(namespace) — returns prefix for given namespace (simplified: null).
+    let lookup_prefix = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
+    init.function(lookup_prefix, boa_engine::js_string!("lookupPrefix"), 1);
+
+    // isDefaultNamespace(namespace) — true if namespace is null or empty.
+    let is_default_ns = NativeFunction::from_copy_closure(|_this, args, _ctx| {
+        let ns = args.first().map(|v| {
+            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
+        }).unwrap_or_default();
+        // Default namespace is null/empty for HTML documents.
+        Ok(JsValue::from(ns.is_empty() || ns == "http://www.w3.org/1999/xhtml"))
+    });
+    init.function(is_default_ns, boa_engine::js_string!("isDefaultNamespace"), 1);
+
+    // normalize() — no-op.
+    let normalize_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(normalize_fn, boa_engine::js_string!("normalize"), 0);
+
     // closest(selector) — walks up parentNode chain matching selector.
     let closest_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
         let selector = arg_string(args, 0);
         if selector.is_empty() { return Ok(JsValue::null()); }
         let mut current = this.as_object();
         for _ in 0..1000 {
-            let node = match current {
-                Some(o) => o,
+            let node = match current.as_ref() {
+                Some(o) => o.clone(),
                 None => break,
             };
-            // Simple selector matching: tag name, .class, #id
-            let matches = if selector.starts_with('.') {
-                let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                cn.split_whitespace().any(|c| format!(".{}", c) == selector)
-            } else if selector.starts_with('#') {
-                let id = node.get(boa_engine::js_string!("id"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                format!("#{}", id) == selector
-            } else {
-                let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                tn.eq_ignore_ascii_case(&selector)
-            };
-            if matches {
+            if element_matches_selector(&node, &selector, ctx) {
                 return Ok(JsValue::from(node));
             }
             // Move to parent.
@@ -3796,23 +3992,7 @@ fn make_element_handle(
             Some(o) => o,
             None => return Ok(JsValue::from(false)),
         };
-        let matches = if selector.starts_with('.') {
-            let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            cn.split_whitespace().any(|c| format!(".{}", c) == selector)
-        } else if selector.starts_with('#') {
-            let id = node.get(boa_engine::js_string!("id"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            format!("#{}", id) == selector
-        } else {
-            let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            tn.eq_ignore_ascii_case(&selector)
-        };
-        Ok(JsValue::from(matches))
+        Ok(JsValue::from(element_matches_selector(&node, &selector, ctx)))
     });
     init.function(matches_fn, boa_engine::js_string!("matches"), 1);
 
