@@ -3362,6 +3362,90 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         .function(query_sel, boa_engine::js_string!("querySelector"), 1)
         .build();
 
+    // Add addEventListener/dispatchEvent to document (EventTarget interface).
+    {
+        let doc_ref = document.clone();
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        let doc_for_add = doc_ref.clone();
+        let add_ev = NativeFunction::from_copy_closure_with_captures(move |_this, args, doc_for_add, ctx| {
+            let event_type = arg_string(args, 0);
+            let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            let lmap = doc_for_add.get(boa_engine::js_string!("_js_listeners"), ctx).ok()
+                .and_then(|v| v.as_object());
+            let lm = match lmap {
+                Some(m) => m,
+                None => {
+                    let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let _ = doc_for_add.insert_property(boa_engine::js_string!("_js_listeners"), pd2(m.clone().into()));
+                    m
+                }
+            };
+            let type_arr = lm.get(boa_engine::js_string!(event_type.clone()), ctx).ok()
+                .and_then(|v| v.as_object());
+            let arr = match type_arr {
+                Some(a) => a,
+                None => {
+                    let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let _ = a.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(0u32)));
+                    let _ = lm.insert_property(boa_engine::js_string!(event_type.clone()), pd2(a.clone().into()));
+                    a
+                }
+            };
+            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = arr.insert_property(len, pd2(handler));
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(len + 1)));
+            Ok(JsValue::undefined())
+        }, doc_for_add);
+        let doc_for_disp = doc_ref.clone();
+        let disp_ev = NativeFunction::from_copy_closure_with_captures(move |_this, args, doc_for_disp, ctx| {
+            let event = args.first().cloned().unwrap_or(JsValue::null());
+            let event_type = event.as_object()
+                .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            let mut not_canceled = true;
+            if let Ok(lmap) = doc_for_disp.get(boa_engine::js_string!("_js_listeners"), ctx) {
+                if let Some(lm) = lmap.as_object() {
+                    if let Ok(type_arr) = lm.get(boa_engine::js_string!(event_type), ctx) {
+                        if let Some(arr) = type_arr.as_object() {
+                            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            for i in 0..len {
+                                if let Ok(handler) = arr.get(i as u32, ctx) {
+                                    if let Some(fn_obj) = handler.as_object() {
+                                        if fn_obj.is_callable() {
+                                            let _ = fn_obj.call(&JsValue::null(), &[event.clone()], ctx);
+                                        }
+                                    }
+                                }
+                                if let Some(ev_obj) = event.as_object() {
+                                    let dp = ev_obj.get(boa_engine::js_string!("defaultPrevented"), ctx).ok()
+                                        .and_then(|v| v.as_boolean()).unwrap_or(false);
+                                    if dp { not_canceled = false; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(JsValue::from(not_canceled))
+        }, doc_for_disp);
+        let rm_ev = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+        let _ = document.insert_property(boa_engine::js_string!("addEventListener"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), add_ev).build())));
+        let _ = document.insert_property(boa_engine::js_string!("dispatchEvent"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), disp_ev).build())));
+        let _ = document.insert_property(boa_engine::js_string!("removeEventListener"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), rm_ev).build())));
+    }
+
     let global = ctx.global_object();
     let _ = global.insert_property(
         boa_engine::js_string!("document"),
@@ -4200,37 +4284,169 @@ fn make_element_handle(
     init.function(has_attributes, boa_engine::js_string!("hasAttributes"), 0);
 
     // addEventListener
-    let add_listener = NativeFunction::from_copy_closure_with_captures(
-        |this, args, b, _ctx| {
-            let kind = arg_string(args, 0);
-            if kind != "click" {
-                return Ok(JsValue::undefined());
-            }
-            let handle_id = read_handle_id(this);
-            if let (Some(nid), Some(handler)) = (handle_id, args.get(1)) {
-                let name = format!("__aris_listener_obj_{}", {
-                    let mut bb = b.borrow_mut();
-                    bb.next_pending += 1;
-                    bb.next_pending
-                });
-                let _ = _ctx.global_object().insert_property(
-                    boa_engine::js_string!(name.clone()),
-                    boa_engine::property::PropertyDescriptor::builder()
-                        .value(handler.clone())
-                        .writable(true)
-                        .enumerable(false)
-                        .configurable(true)
-                        .build(),
-                );
-                b.borrow_mut().new_listeners.push((nid, name));
-            }
-            Ok(JsValue::undefined())
-        },
-        Gc::clone(&bridge),
-    );
+    let add_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event_type = arg_string(args, 0);
+        let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+        if let Some(o) = this.as_object() {
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            // Get or create _js_listeners map on this object.
+            let listeners = o.get(boa_engine::js_string!("_js_listeners"), ctx).ok()
+                .and_then(|v| v.as_object());
+            let lmap = match listeners {
+                Some(m) => m,
+                None => {
+                    let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = o.insert_property(boa_engine::js_string!("_js_listeners"), pd(m.clone().into()));
+                    m
+                }
+            };
+            // Get or create the array for this event type.
+            let type_arr = lmap.get(boa_engine::js_string!(event_type.clone()), ctx).ok()
+                .and_then(|v| v.as_object());
+            let arr = match type_arr {
+                Some(a) => a,
+                None => {
+                    let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = a.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+                    let _ = lmap.insert_property(boa_engine::js_string!(event_type.clone()), pd(a.clone().into()));
+                    a
+                }
+            };
+            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+            let _ = arr.insert_property(len, pd(handler));
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+        }
+        Ok(JsValue::undefined())
+    });
     init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
-    // dispatchEvent(event) — calls listeners registered for event.type.
+    // dispatchEvent(event) — calls listeners registered via addEventListener
+    // + on<type> property handlers.
+    let dispatch = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event = args.first().cloned().unwrap_or(JsValue::null());
+        let event_type = event.as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        // Set event.target = this.
+        if let Some(ev_obj) = event.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("target"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(this.clone())
+                    .writable(true).enumerable(true).configurable(true).build(),
+            );
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(this.clone())
+                    .writable(true).enumerable(true).configurable(true).build(),
+            );
+        }
+        let mut not_canceled = true;
+        // 1. Call on<type> property handler.
+        if !event_type.is_empty() {
+            if let Some(o) = this.as_object() {
+                let handler_prop = format!("on{}", event_type);
+                if let Ok(handler) = o.get(boa_engine::js_string!(handler_prop), ctx) {
+                    if let Some(fn_obj) = handler.as_object() {
+                        if fn_obj.is_callable() {
+                            let _ = fn_obj.call(&this, &[event.clone()], ctx);
+                            // Check defaultPrevented.
+                            if let Some(ev_obj) = event.as_object() {
+                                let dp = ev_obj.get(boa_engine::js_string!("defaultPrevented"), ctx).ok()
+                                    .and_then(|v| v.as_boolean()).unwrap_or(false);
+                                if dp { not_canceled = false; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 2. Call addEventListener listeners from _js_listeners.
+        if let Some(o) = this.as_object() {
+            if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
+                if let Some(lm) = lmap.as_object() {
+                    if let Ok(type_arr) = lm.get(boa_engine::js_string!(event_type.clone()), ctx) {
+                        if let Some(arr) = type_arr.as_object() {
+                            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            for i in 0..len {
+                                if let Ok(handler) = arr.get(i as u32, ctx) {
+                                    if let Some(fn_obj) = handler.as_object() {
+                                        if fn_obj.is_callable() {
+                                            let _ = fn_obj.call(&this, &[event.clone()], ctx);
+                                        }
+                                    } else if let Some(ho) = handler.as_object() {
+                                        if let Ok(he) = ho.get(boa_engine::js_string!("handleEvent"), ctx) {
+                                            if let Some(he_fn) = he.as_object() {
+                                                if he_fn.is_callable() {
+                                                    let _ = he_fn.call(&handler, &[event.clone()], ctx);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Check defaultPrevented after each handler.
+                                if let Some(ev_obj) = event.as_object() {
+                                    let dp = ev_obj.get(boa_engine::js_string!("defaultPrevented"), ctx).ok()
+                                        .and_then(|v| v.as_boolean()).unwrap_or(false);
+                                    if dp { not_canceled = false; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(not_canceled))
+    });
+    init.function(dispatch, boa_engine::js_string!("dispatchEvent"), 1);
+
+    // removeEventListener — removes from _js_listeners.
+    let remove_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let event_type = arg_string(args, 0);
+        let handler_obj = args.get(1).and_then(|v| v.as_object());
+        if let Some(o) = this.as_object() {
+            if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
+                if let Some(lm) = lmap.as_object() {
+                    if let Ok(type_arr) = lm.get(boa_engine::js_string!(event_type.clone()), ctx) {
+                        if let Some(arr) = type_arr.as_object() {
+                            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                            let pd = |val: JsValue| {
+                                boa_engine::property::PropertyDescriptor::builder()
+                                    .value(val).writable(true).enumerable(true).configurable(true).build()
+                            };
+                            let mut new_len = 0u32;
+                            for i in 0..len {
+                                if let Ok(h) = arr.get(i as u32, ctx) {
+                                    let matches = match (&handler_obj, h.as_object()) {
+                                        (Some(target), Some(ho)) => boa_engine::object::JsObject::equals(target, &ho),
+                                        _ => false,
+                                    };
+                                    if !matches {
+                                        let _ = new_arr.insert_property(new_len, pd(h));
+                                        new_len += 1;
+                                    }
+                                }
+                            }
+                            let _ = new_arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(new_len)));
+                            let _ = lm.insert_property(boa_engine::js_string!(event_type),
+                                pd(JsValue::from(new_arr)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    init.function(remove_listener, boa_engine::js_string!("removeEventListener"), 2);
     let dispatch = NativeFunction::from_copy_closure(|this, args, ctx| {
         let event = args.first().cloned().unwrap_or(JsValue::null());
         // Get event type to find matching listeners.
