@@ -2412,6 +2412,12 @@ fn install_dom_globals(ctx: &mut Context) {
 
             // initEvent(type, bubbles, cancelable)
             let init_ev = NativeFunction::from_copy_closure(|this, args, ctx| {
+                // First parameter (type) is mandatory.
+                if args.is_empty() || args.first().map(|v| v.is_undefined()).unwrap_or(true) {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("initEvent requires at least 1 argument")
+                        .into());
+                }
                 if let Some(o) = this.as_object() {
                     let pd = |val: JsValue| {
                         boa_engine::property::PropertyDescriptor::builder()
