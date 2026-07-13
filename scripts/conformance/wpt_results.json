@@ -1,5 +1,5 @@
 {
-  "pass_rate": 29,
+  "pass_rate": 31,
   "results": [
     {
       "fail": 0,
@@ -1971,16 +1971,16 @@
       "tests": 19
     },
     {
-      "fail": 16,
+      "fail": 12,
       "file": "nodes\\Element-getElementsByTagNameNS.html",
-      "pass": 0,
+      "pass": 4,
       "status": "fail",
       "tests": 16
     },
     {
-      "fail": 2,
+      "fail": 1,
       "file": "nodes\\Element-hasAttribute.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 2
     },
@@ -2055,10 +2055,10 @@
       "tests": 2
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Element-removeAttributeNS.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -2314,18 +2314,18 @@
       "tests": 9
     },
     {
-      "fail": 8,
+      "fail": 7,
       "file": "nodes\\Node-isSameNode.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 9
     },
     {
-      "fail": 19,
+      "fail": 54,
       "file": "nodes\\Node-lookupNamespaceURI.html",
-      "pass": 9,
+      "pass": 16,
       "status": "fail",
-      "tests": 28
+      "tests": 70
     },
     {
       "fail": 2,
@@ -2576,23 +2576,23 @@
       "tests": 5
     },
     {
-      "fail": 8,
+      "fail": 6,
       "file": "nodes\\attributes-namednodemap.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 8
     },
     {
-      "fail": 40,
+      "fail": 41,
       "file": "nodes\\attributes.html",
-      "pass": 18,
+      "pass": 17,
       "status": "fail",
       "tests": 58
     },
     {
-      "fail": 285,
+      "fail": 70,
       "file": "nodes\\case.html",
-      "pass": 0,
+      "pass": 215,
       "status": "fail",
       "tests": 285
     },
@@ -3504,18 +3504,18 @@
       "tests": 384
     },
     {
-      "fail": 392,
+      "fail": 407,
       "file": "ranges\\Range-mutations-dataChange.html",
       "pass": 0,
       "status": "fail",
-      "tests": 393
+      "tests": 408
     },
     {
-      "fail": 392,
+      "fail": 407,
       "file": "ranges\\Range-mutations-deleteData.html",
       "pass": 0,
       "status": "fail",
-      "tests": 393
+      "tests": 408
     },
     {
       "fail": 76,
@@ -3546,11 +3546,11 @@
       "tests": 60
     },
     {
-      "fail": 392,
+      "fail": 407,
       "file": "ranges\\Range-mutations-replaceData.html",
       "pass": 0,
       "status": "fail",
-      "tests": 393
+      "tests": 408
     },
     {
       "fail": 116,
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4939,
+  "total_fail": 4796,
   "total_files": 552,
-  "total_pass": 2023,
+  "total_pass": 2253,
   "total_skip": 30,
-  "total_tests": 6962
+  "total_tests": 7049
 }
