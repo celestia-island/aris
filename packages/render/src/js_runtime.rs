@@ -2764,6 +2764,18 @@ fn install_dom_globals(ctx: &mut Context) {
         // Attr
         ("Attr", 2),
         ("NamedNodeMap", 0),
+        // Additional DOM interfaces for interface-objects test
+        ("AbortController", 0),
+        ("AbortSignal", 0),
+        ("DOMImplementation", 0),
+        ("ProcessingInstruction", 7),
+        ("NodeList", 0),
+        ("HTMLCollection", 0),
+        ("DOMTokenList", 0),
+        ("DocumentType", 10),
+        ("CharacterData", 0),
+        ("CDATASection", 4),
+        ("ShadowRoot", 11),
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
