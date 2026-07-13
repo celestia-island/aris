@@ -1247,7 +1247,10 @@ fn install_event_api(ctx: &mut Context) {
             boa_engine::js_string!("defaultPrevented"),
             pd(JsValue::from(false)),
         );
+        let _ = obj.insert_property(boa_engine::js_string!("returnValue"), pd(JsValue::from(true)));
+        let _ = obj.insert_property(boa_engine::js_string!("cancelBubble"), pd(JsValue::from(false)));
         let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
+        let _ = obj.insert_property(boa_engine::js_string!("srcElement"), pd(JsValue::null()));
         let _ = obj.insert_property(boa_engine::js_string!("currentTarget"), pd(JsValue::null()));
         let _ = obj.insert_property(boa_engine::js_string!("timeStamp"), pd(JsValue::from(0u32)));
         let _ = obj.insert_property(
@@ -1259,12 +1262,29 @@ fn install_event_api(ctx: &mut Context) {
             pd(JsValue::from(0u32)),
         );
         // Methods
-        let noop_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let pd_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            if let Some(o) = this.as_object() {
+                // Only prevent if cancelable and not passive.
+                let cancelable = o.get(boa_engine::js_string!("cancelable"), ctx).ok()
+                    .and_then(|v| v.as_boolean()).unwrap_or(false);
+                let passive = o.get(boa_engine::js_string!("_passive"), ctx).ok()
+                    .and_then(|v| v.as_boolean()).unwrap_or(false);
+                if cancelable && !passive {
+                    let pd2 = |val: JsValue| {
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(val).writable(true).enumerable(true).configurable(true).build()
+                    };
+                    let _ = o.insert_property(boa_engine::js_string!("defaultPrevented"), pd2(JsValue::from(true)));
+                    let _ = o.insert_property(boa_engine::js_string!("returnValue"), pd2(JsValue::from(false)));
+                }
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("preventDefault"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn).build(),
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pd_fn).build(),
                 ))
                 .writable(true)
                 .enumerable(true)
@@ -4287,6 +4307,29 @@ fn make_element_handle(
     let add_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
         let event_type = arg_string(args, 0);
         let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+        // Check if options specify passive.
+        let explicit_passive = args.get(2).and_then(|o| o.as_object())
+            .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
+            .and_then(|v| v.as_boolean());
+        // Determine default passive: touchstart, touchmove, wheel, mousewheel
+        // are passive by default on window/document/documentElement/body.
+        let is_passive_event = matches!(event_type.as_str(),
+            "touchstart" | "touchmove" | "wheel" | "mousewheel");
+        // Check if this target is a passive-by-default target.
+        // Window: this === global object. Document: nodeName=#document.
+        // documentElement: nodeName=HTML. body: nodeName=BODY.
+        let is_window = this.as_object().map(|o| {
+            // Check if this is the global object by comparing with ctx.global_object().
+            boa_engine::object::JsObject::equals(&o, &ctx.global_object())
+        }).unwrap_or(false);
+        let target_name = this.as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("nodeName"), ctx).ok())
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        let is_passive_target = is_window
+            || target_name == "#document"
+            || target_name == "HTML" || target_name == "BODY";
+        let passive = explicit_passive.unwrap_or(is_passive_event && is_passive_target);
         if let Some(o) = this.as_object() {
             let pd = |val: JsValue| {
                 boa_engine::property::PropertyDescriptor::builder()
@@ -4317,7 +4360,11 @@ fn make_element_handle(
             };
             let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
                 .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-            let _ = arr.insert_property(len, pd(handler));
+            // Store handler as {callback, passive} object.
+            let listener_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = listener_obj.insert_property(boa_engine::js_string!("callback"), pd(handler));
+            let _ = listener_obj.insert_property(boa_engine::js_string!("passive"), pd(JsValue::from(passive)));
+            let _ = arr.insert_property(len, pd(listener_obj.into()));
             let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
         }
         Ok(JsValue::undefined())
@@ -4376,16 +4423,28 @@ fn make_element_handle(
                             let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
                                 .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
                             for i in 0..len {
-                                if let Ok(handler) = arr.get(i as u32, ctx) {
-                                    if let Some(fn_obj) = handler.as_object() {
+                                if let Ok(listener) = arr.get(i as u32, ctx) {
+                                    // Listener is {callback, passive} or raw function.
+                                    let (callback, is_passive) = if let Some(lo) = listener.as_object() {
+                                        let cb = lo.get(boa_engine::js_string!("callback"), ctx).ok().unwrap_or(JsValue::undefined());
+                                        let p = lo.get(boa_engine::js_string!("passive"), ctx).ok()
+                                            .and_then(|v| v.as_boolean()).unwrap_or(false);
+                                        (cb, p)
+                                    } else {
+                                        (listener, false)
+                                    };
+                                    // Set _passive flag on event so preventDefault is a no-op.
+                                    if let Some(ev_obj) = event.as_object() {
+                                        let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(false).configurable(true).build() };
+                                        let _ = ev_obj.insert_property(boa_engine::js_string!("_passive"), pd2(JsValue::from(is_passive)));
+                                    }
+                                    if let Some(fn_obj) = callback.as_object() {
                                         if fn_obj.is_callable() {
                                             let _ = fn_obj.call(&this, &[event.clone()], ctx);
-                                        }
-                                    } else if let Some(ho) = handler.as_object() {
-                                        if let Ok(he) = ho.get(boa_engine::js_string!("handleEvent"), ctx) {
+                                        } else if let Ok(he) = fn_obj.get(boa_engine::js_string!("handleEvent"), ctx) {
                                             if let Some(he_fn) = he.as_object() {
                                                 if he_fn.is_callable() {
-                                                    let _ = he_fn.call(&handler, &[event.clone()], ctx);
+                                                    let _ = he_fn.call(&callback, &[event.clone()], ctx);
                                                 }
                                             }
                                         }

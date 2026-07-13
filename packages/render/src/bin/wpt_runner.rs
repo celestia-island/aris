@@ -475,6 +475,7 @@ function assert_throws_js(name, fn, msg) {
 // EventTarget support on window: store listeners, dispatch on dispatchEvent.
 // "load" fires immediately (document is already loaded).
 var __event_listeners = {};
+var __passive_events = {touchstart: true, touchmove: true, wheel: true, mousewheel: true};
 this.addEventListener = function(type, cb, options) {
     if (type === "load") {
         // Load fires immediately.
@@ -483,8 +484,12 @@ this.addEventListener = function(type, cb, options) {
         }
         return;
     }
+    // Determine passive flag.
+    var explicitPassive = (options && typeof options === 'object') ? options.passive : undefined;
+    var passive = (explicitPassive !== undefined) ? explicitPassive
+        : (__passive_events[type] === true); // passive by default for touch/wheel on window
     if (!__event_listeners[type]) __event_listeners[type] = [];
-    __event_listeners[type].push({callback: cb, options: options || {}});
+    __event_listeners[type].push({callback: cb, passive: passive});
 };
 this.removeEventListener = function(type, cb) {
     if (!__event_listeners[type]) return;
@@ -506,6 +511,9 @@ this.dispatchEvent = function(event) {
         var copy = listeners.slice();
         for (var i = 0; i < copy.length; i++) {
             var cb = copy[i].callback;
+            var isPassive = copy[i].passive;
+            // Set _passive flag so preventDefault is a no-op for passive listeners.
+            event._passive = isPassive;
             try {
                 if (typeof cb === 'function') {
                     cb(event);
