@@ -326,6 +326,47 @@ function format_value(v) {
     return String(v);
 }
 
+// setup(func, config) — runs setup function, stores config.
+// Many WPT tests call setup() at the top to configure the test run.
+var __setup_done = false;
+function setup(func, properties) {
+    if (typeof func === 'function') {
+        try { func(); } catch(e) {}
+    }
+    __setup_done = true;
+}
+
+// done() — signals all tests are complete (no-op in sync mode).
+function done() {}
+
+// assert_exists(object, property, msg) — check property exists.
+function assert_exists(object, property, msg) {
+    if (object === null || object === undefined || !(property in object)) {
+        throw new Error((msg || "") + " missing property " + property);
+    }
+}
+
+// assert_implements(condition, msg) — skip test if feature not supported.
+function assert_implements(condition, msg) {
+    if (!condition) {
+        throw new Error((msg || "") + " feature not supported");
+    }
+}
+
+// assert_implements_optional(condition, msg) — best-effort check.
+function assert_implements_optional(condition, msg) {}
+
+// assert_readonly is already defined above.
+
+// subsetTest(testObj, shouldRun, name) — run test only if shouldRun is true.
+function subsetTest(testObjFunc, shouldRun, name) {
+    if (shouldRun) {
+        return testObjFunc(name);
+    }
+    // Skip: increment __tests but don't run.
+    return { done: function() {}, step: function(f) {} };
+}
+
 // Missing harness helpers used by many WPT tests.
 function promise_test(fn, name) {
     __tests++;
@@ -431,17 +472,53 @@ function assert_throws_js(name, fn, msg) {
     throw new Error((msg || "") + " did not throw " + name);
 }
 
-// EventTarget support on window: since aris fires load synchronously,
-// addEventListener("load", cb) calls cb immediately.
-this.addEventListener = function(type, cb) {
-    if (typeof cb === 'function') {
-        try { cb({type: type, target: this}); } catch(e) {}
+// EventTarget support on window: store listeners, dispatch on dispatchEvent.
+// "load" fires immediately (document is already loaded).
+var __event_listeners = {};
+this.addEventListener = function(type, cb, options) {
+    if (type === "load") {
+        // Load fires immediately.
+        if (typeof cb === 'function') {
+            try { cb({type: type, target: this, currentTarget: this}); } catch(e) {}
+        }
+        return;
     }
-    if (typeof cb === 'object' && cb && typeof cb.handleEvent === 'function') {
-        try { cb.handleEvent({type: type, target: this}); } catch(e) {}
-    }
+    if (!__event_listeners[type]) __event_listeners[type] = [];
+    __event_listeners[type].push({callback: cb, options: options || {}});
 };
-this.removeEventListener = function() {};
+this.removeEventListener = function(type, cb) {
+    if (!__event_listeners[type]) return;
+    __event_listeners[type] = __event_listeners[type].filter(function(l) {
+        return l.callback !== cb;
+    });
+};
+this.dispatchEvent = function(event) {
+    if (!event || typeof event !== 'object') return true;
+    var type = event.type;
+    if (!type) return true;
+    // Set target/currentTarget.
+    event.target = event.target || this;
+    event.currentTarget = this;
+    var listeners = __event_listeners[type];
+    var notCanceled = true;
+    if (listeners) {
+        // Copy array to allow removal during iteration.
+        var copy = listeners.slice();
+        for (var i = 0; i < copy.length; i++) {
+            var cb = copy[i].callback;
+            try {
+                if (typeof cb === 'function') {
+                    cb(event);
+                } else if (cb && typeof cb.handleEvent === 'function') {
+                    cb.handleEvent(event);
+                }
+            } catch(e) {}
+            if (event.defaultPrevented) notCanceled = false;
+            if (event._stopImmediatePropagation) break;
+        }
+    }
+    return notCanceled;
+};
 
 // Node constants used by many tests.
 if (typeof Node === 'undefined') Node = {};
