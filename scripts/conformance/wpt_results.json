@@ -1,5 +1,5 @@
 {
-  "pass_rate": 43,
+  "pass_rate": 27,
   "results": [
     {
       "fail": 0,
@@ -171,11 +171,11 @@
       "tests": 8
     },
     {
-      "fail": 0,
+      "fail": 4,
       "file": "events\\Event-constants.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 4
     },
     {
       "fail": 3,
@@ -1401,11 +1401,11 @@
       "tests": 18
     },
     {
-      "fail": 0,
+      "fail": 12,
       "file": "nodes\\CharacterData-remove.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 12
     },
     {
       "fail": 6,
@@ -1450,11 +1450,11 @@
       "tests": 33
     },
     {
-      "fail": 0,
+      "fail": 15,
       "file": "nodes\\Comment-constructor.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 16
     },
     {
       "fail": 0,
@@ -1492,11 +1492,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 11,
       "file": "nodes\\DOMImplementation-createHTMLDocument.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 2,
+      "status": "fail",
+      "tests": 13
     },
     {
       "fail": 0,
@@ -1522,16 +1522,16 @@
     {
       "fail": 0,
       "file": "nodes\\Document-characterSet-normalization-1.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 315,
+      "status": "pass",
+      "tests": 315
     },
     {
       "fail": 0,
       "file": "nodes\\Document-characterSet-normalization-2.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 339,
+      "status": "pass",
+      "tests": 339
     },
     {
       "fail": 5,
@@ -1661,11 +1661,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 6,
       "file": "nodes\\Document-createComment.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 6
     },
     {
       "fail": 0,
@@ -1760,33 +1760,32 @@
       "tests": 147
     },
     {
-      "fail": 0,
+      "fail": 595,
       "file": "nodes\\Document-createElementNS.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 596
     },
     {
-      "fail": 0,
+      "fail": 216,
       "file": "nodes\\Document-createEvent.https.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 63,
+      "status": "fail",
+      "tests": 279
     },
     {
-      "fail": 0,
+      "fail": 11,
       "file": "nodes\\Document-createProcessingInstruction.html",
-      "pass": 0,
-      "reason": "no inline scripts",
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 12
     },
     {
-      "fail": 0,
+      "fail": 6,
       "file": "nodes\\Document-createTextNode.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 6
     },
     {
       "fail": 5,
@@ -1817,18 +1816,18 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 18,
       "file": "nodes\\Document-getElementsByTagName.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 18
     },
     {
-      "fail": 0,
+      "fail": 14,
       "file": "nodes\\Document-getElementsByTagNameNS.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 14
     },
     {
       "fail": 1,
@@ -1873,11 +1872,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 4,
       "file": "nodes\\DocumentType-remove.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 4
     },
     {
       "fail": 0,
@@ -1965,18 +1964,18 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 18,
       "file": "nodes\\Element-getElementsByTagName.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 19
     },
     {
-      "fail": 0,
+      "fail": 16,
       "file": "nodes\\Element-getElementsByTagNameNS.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 16
     },
     {
       "fail": 2,
@@ -2042,11 +2041,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "nodes\\Element-remove.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 3,
+      "status": "fail",
+      "tests": 4
     },
     {
       "fail": 2,
@@ -2100,9 +2099,9 @@
     {
       "fail": 0,
       "file": "nodes\\MutationObserver-attributes.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
     },
     {
       "fail": 0,
@@ -2115,16 +2114,16 @@
     {
       "fail": 0,
       "file": "nodes\\MutationObserver-characterData.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
     },
     {
       "fail": 0,
       "file": "nodes\\MutationObserver-childList.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
     },
     {
       "fail": 0,
@@ -2152,9 +2151,9 @@
     {
       "fail": 0,
       "file": "nodes\\MutationObserver-inner-outer.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
     },
     {
       "fail": 0,
@@ -2273,11 +2272,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 8,
       "file": "nodes\\Node-constants.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 8
     },
     {
       "fail": 0,
@@ -2287,11 +2286,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 29,
       "file": "nodes\\Node-insertBefore.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 11,
+      "status": "fail",
+      "tests": 40
     },
     {
       "fail": 2,
@@ -2386,18 +2385,18 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 28,
       "file": "nodes\\Node-removeChild.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 28
     },
     {
-      "fail": 23,
+      "fail": 25,
       "file": "nodes\\Node-replaceChild.html",
-      "pass": 1,
+      "pass": 4,
       "status": "fail",
-      "tests": 24
+      "tests": 29
     },
     {
       "fail": 72,
@@ -2456,11 +2455,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 21,
       "file": "nodes\\ParentNode-append.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 4,
+      "status": "fail",
+      "tests": 25
     },
     {
       "fail": 1,
@@ -2470,11 +2469,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 18,
       "file": "nodes\\ParentNode-prepend.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 4,
+      "status": "fail",
+      "tests": 22
     },
     {
       "fail": 0,
@@ -2549,11 +2548,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 15,
       "file": "nodes\\Text-constructor.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 16
     },
     {
       "fail": 2,
@@ -2584,18 +2583,18 @@
       "tests": 8
     },
     {
-      "fail": 46,
+      "fail": 40,
       "file": "nodes\\attributes.html",
-      "pass": 12,
+      "pass": 18,
       "status": "fail",
       "tests": 58
     },
     {
-      "fail": 0,
+      "fail": 285,
       "file": "nodes\\case.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 285
     },
     {
       "fail": 0,
@@ -2789,11 +2788,11 @@
       "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 22,
       "file": "nodes\\moveBefore\\Node-moveBefore.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 10,
+      "status": "fail",
+      "tests": 32
     },
     {
       "fail": 1,
@@ -3491,74 +3490,74 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 70,
       "file": "ranges\\Range-mutations-appendChild.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 70
     },
     {
-      "fail": 0,
+      "fail": 384,
       "file": "ranges\\Range-mutations-appendData.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 384
     },
     {
-      "fail": 0,
+      "fail": 392,
       "file": "ranges\\Range-mutations-dataChange.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 393
     },
     {
-      "fail": 0,
+      "fail": 392,
       "file": "ranges\\Range-mutations-deleteData.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 393
     },
     {
-      "fail": 0,
+      "fail": 76,
       "file": "ranges\\Range-mutations-insertBefore.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 76
     },
     {
-      "fail": 0,
+      "fail": 382,
       "file": "ranges\\Range-mutations-insertData.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 382
     },
     {
-      "fail": 0,
+      "fail": 20,
       "file": "ranges\\Range-mutations-removeChild.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 20
     },
     {
-      "fail": 0,
+      "fail": 60,
       "file": "ranges\\Range-mutations-replaceChild.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 60
     },
     {
-      "fail": 0,
+      "fail": 392,
       "file": "ranges\\Range-mutations-replaceData.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 393
     },
     {
-      "fail": 0,
+      "fail": 116,
       "file": "ranges\\Range-mutations-splitText.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 116
     },
     {
       "fail": 0,
@@ -3898,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1425,
+  "total_fail": 5078,
   "total_files": 552,
-  "total_pass": 1115,
-  "total_skip": 31,
-  "total_tests": 2537
+  "total_pass": 1884,
+  "total_skip": 30,
+  "total_tests": 6962
 }
