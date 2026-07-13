@@ -2087,9 +2087,15 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = d.insert_property(boa_engine::js_string!("head"), pd(head.into()));
         let body = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
         let _ = body.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("BODY"))));
+        let _ = body.insert_property(boa_engine::js_string!("tagName"), pd(JsValue::from(boa_engine::js_string!("BODY"))));
+        let _ = body.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
+        add_dom_methods(&body, ctx);
         let _ = d.insert_property(boa_engine::js_string!("body"), pd(body.into()));
         let html_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
         let _ = html_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HTML"))));
+        let _ = html_el.insert_property(boa_engine::js_string!("tagName"), pd(JsValue::from(boa_engine::js_string!("HTML"))));
+        let _ = html_el.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
+        add_dom_methods(&html_el, ctx);
         let _ = d.insert_property(boa_engine::js_string!("documentElement"), pd(html_el.into()));
         // createElement on this document (sets ownerDocument = this doc).
         let doc_for_ce = d.clone();
@@ -2107,9 +2113,7 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = el.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(1u32)));
             let _ = el.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
             let _ = el.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::from(doc_for_ce.clone())));
-            let am = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = am.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(0u32)));
-            let _ = el.insert_property(boa_engine::js_string!("attributes"), pd2(am.into()));
+            add_dom_methods(&el, ctx);
             Ok(el.into())
         }, doc_for_ce);
         let _ = d.insert_property(boa_engine::js_string!("createElement"),
