@@ -3814,32 +3814,11 @@ fn insert_into_children(parent: &JsObject, child: &JsObject, before: Option<JsOb
 /// This is used by both make_element_handle (bridge elements) and
 /// new Document().createElement() (JS-only elements).
 fn add_dom_methods(obj: &JsObject, ctx: &mut Context) {
-    // appendChild
+    // appendChild — delegates to insert_into_children for consistency
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
         let child = args.first().cloned().unwrap_or(JsValue::null());
         if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
-            let arr_opt = parent_obj.get(boa_engine::js_string!("_children"), ctx).ok()
-                .and_then(|v| v.as_object());
-            let arr = match arr_opt {
-                Some(a) => a,
-                None => {
-                    let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
-                    let _ = a.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(0u32)));
-                    let _ = parent_obj.insert_property(boa_engine::js_string!("_children"), pd2(a.clone().into()));
-                    a
-                }
-            };
-            let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
-                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-            if len < 500 {
-                let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
-                let _ = arr.insert_property(len, pd2(JsValue::from(child_obj.clone())));
-                let _ = arr.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(len + 1)));
-            }
-            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
-            let _ = child_obj.insert_property(boa_engine::js_string!("parentNode"), pd2(JsValue::from(parent_obj.clone())));
-            let _ = child_obj.insert_property(boa_engine::js_string!("parentElement"), pd2(JsValue::from(parent_obj.clone())));
+            insert_into_children(&parent_obj, &child_obj, None, ctx);
         }
         Ok(child)
     });
@@ -5907,33 +5886,9 @@ fn make_element_handle(
                     pending_id: child_pending,
                 });
             }
-            // JS-level children tracking: append-only.
-            if let Some(parent_obj) = this.as_object() {
-                if let Some(child_obj) = child.as_object() {
-                    let pd = |val: JsValue| {
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(val).writable(true).enumerable(true).configurable(true).build()
-                    };
-                    let arr_opt = parent_obj.get(boa_engine::js_string!("_children"), ctx).ok()
-                        .and_then(|v| v.as_object());
-                    let arr = match arr_opt {
-                        Some(a) => a,
-                        None => {
-                            let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                            let _ = a.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
-                            let _ = parent_obj.insert_property(boa_engine::js_string!("_children"), pd(a.clone().into()));
-                            a
-                        }
-                    };
-                    let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
-                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-                    if len < 500 {
-                        let _ = arr.insert_property(len, pd(JsValue::from(child_obj.clone())));
-                        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
-                    }
-                    let _ = child_obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent_obj.clone())));
-                    let _ = child_obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::from(parent_obj.clone())));
-                }
+            // JS-level children tracking via insert_into_children (uses JsArray).
+            if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
+                insert_into_children(&parent_obj, &child_obj, None, ctx);
             }
             Ok(child)
         },
