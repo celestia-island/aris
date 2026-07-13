@@ -2057,47 +2057,63 @@ fn install_dom_globals(ctx: &mut Context) {
                     boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), whole_text).build(),
                 )),
             );
-            // nodeValue as plain data property (accessor version caused stack overflow).
-            // The CharacterData methods update both _data and data via write_data_utf16.
-            // nodeValue is set initially from text and kept in sync by CharacterData methods.
-            // (Accessor version disabled to prevent recursion issues.)
-            // data as accessor too (same get/set as nodeValue).
-            // DISABLED: causes stack overflow in some WPT tests.
-            // let data_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
-            //     let units = read_data_utf16(&this, ctx);
-            //     Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
-            // });
-            // let data_set = NativeFunction::from_copy_closure(|this, args, ctx| {
-            //     let val = match args.first() {
-            //         Some(v) if v.is_null() => String::new(),
-            //         Some(v) => match v.to_string(ctx) {
-            //             Ok(s) => s.to_std_string_escaped(),
-            //             Err(_) => String::new(),
-            //         },
-            //         None => String::new(),
-            //     };
-            //     let units: Vec<u16> = val.encode_utf16().collect();
-            //     write_data_utf16(&this, &units, ctx);
-            //     Ok(JsValue::undefined())
-            // });
-            // let dg_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_get).build();
-            // let ds_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_set).build();
-            // let _ = obj.insert_property(
-            //     boa_engine::js_string!("data"),
-            //     boa_engine::property::PropertyDescriptor::builder()
-            //         .get(dg_fn)
-            //         .set(ds_fn)
-            //         .enumerable(true)
-            //         .configurable(true)
-            //         .build(),
-            // );
-            // Add data as a plain data property (synced from _data).
-            // The CharacterData methods (replaceData etc.) update _data via write_data_utf16.
-            // We also set data here for direct reads.
-            let cur_data = read_data_utf16(&JsValue::from(obj.clone()), ctx);
+            // nodeValue as accessor: getter returns _data, setter updates _data.
+            let nv_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let nv_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let nv_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_get).build();
+            let nv_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(nv_get_fn)
+                    .set(nv_set_fn)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+            // data as accessor (same get/set as nodeValue).
+            let data_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let data_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let dg_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_get).build();
+            let ds_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), data_set).build();
             let _ = obj.insert_property(
                 boa_engine::js_string!("data"),
-                pd(JsValue::from(boa_engine::JsString::from(&cur_data[..]))),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(dg_fn)
+                    .set(ds_fn)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
             );
             Ok(obj.into())
         });
