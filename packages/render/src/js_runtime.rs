@@ -2176,12 +2176,45 @@ fn install_dom_globals(ctx: &mut Context) {
                 boa_engine::js_string!("nodeName"),
                 pd(JsValue::from(boa_engine::js_string!("#document-fragment"))),
             );
+            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("createDocumentFragment"),
             pd(JsValue::from(
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_frag).build(),
+            )),
+        );
+
+        // document.createProcessingInstruction(target, data)
+        let create_pi = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let target = arg_string(args, 0);
+            let data = arg_string(args, 1);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(7u32))); // PROCESSING_INSTRUCTION_NODE
+            let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(target.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::from(boa_engine::js_string!(target))));
+            // data and nodeValue are the same for PI.
+            let _ = obj.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(data))));
+            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
+            // Add CharacterData methods.
+            for (mname, mfn) in build_character_data_methods() {
+                let _ = obj.insert_property(
+                    boa_engine::js_string!(mname),
+                    pd(JsValue::from(
+                        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), mfn).build(),
+                    )),
+                );
+            }
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createProcessingInstruction"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_pi).build(),
             )),
         );
 
