@@ -2037,6 +2037,7 @@ fn install_dom_globals(ctx: &mut Context) {
         ("Comment", 8),
         ("DocumentFragment", 11),
         ("Document", 9),
+        ("XMLDocument", 9),
         ("CharacterData", 0),
         // HTML element subclasses (all use nodeType=1, same constructor body).
         ("HTMLAnchorElement", 1),
