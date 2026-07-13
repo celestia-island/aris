@@ -1,5 +1,5 @@
 {
-  "pass_rate": 35,
+  "pass_rate": 40,
   "results": [
     {
       "fail": 0,
@@ -1366,10 +1366,10 @@
       "tests": 1
     },
     {
-      "fail": 5,
+      "fail": 0,
       "file": "nodes\\CharacterData-appendChild.html",
-      "pass": 4,
-      "status": "fail",
+      "pass": 9,
+      "status": "pass",
       "tests": 9
     },
     {
@@ -1380,9 +1380,9 @@
       "tests": 14
     },
     {
-      "fail": 14,
+      "fail": 7,
       "file": "nodes\\CharacterData-data.html",
-      "pass": 2,
+      "pass": 9,
       "status": "fail",
       "tests": 16
     },
@@ -1471,9 +1471,9 @@
       "tests": 2
     },
     {
-      "fail": 81,
+      "fail": 2,
       "file": "nodes\\DOMImplementation-createDocumentType.html",
-      "pass": 1,
+      "pass": 80,
       "status": "fail",
       "tests": 82
     },
@@ -1632,10 +1632,10 @@
       "tests": 1
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Document-contentType\\contentType\\createHTMLDocument.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -1753,9 +1753,9 @@
       "tests": 51
     },
     {
-      "fail": 108,
+      "fail": 105,
       "file": "nodes\\Document-createElement.html",
-      "pass": 39,
+      "pass": 42,
       "status": "fail",
       "tests": 147
     },
@@ -1930,9 +1930,9 @@
       "tests": 0
     },
     {
-      "fail": 23,
+      "fail": 21,
       "file": "nodes\\Element-closest.html",
-      "pass": 6,
+      "pass": 8,
       "status": "fail",
       "tests": 29
     },
@@ -2196,9 +2196,9 @@
       "tests": 11
     },
     {
-      "fail": 9,
+      "fail": 7,
       "file": "nodes\\Node-baseURI.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 9
     },
@@ -2322,9 +2322,9 @@
       "tests": 9
     },
     {
-      "fail": 28,
+      "fail": 19,
       "file": "nodes\\Node-lookupNamespaceURI.html",
-      "pass": 0,
+      "pass": 9,
       "status": "fail",
       "tests": 28
     },
@@ -2336,16 +2336,16 @@
       "tests": 2
     },
     {
-      "fail": 3,
+      "fail": 1,
       "file": "nodes\\Node-nodeName.html",
-      "pass": 3,
+      "pass": 5,
       "status": "fail",
       "tests": 6
     },
     {
-      "fail": 7,
+      "fail": 6,
       "file": "nodes\\Node-nodeValue.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 7
     },
@@ -2584,9 +2584,9 @@
       "tests": 8
     },
     {
-      "fail": 50,
+      "fail": 46,
       "file": "nodes\\attributes.html",
-      "pass": 8,
+      "pass": 12,
       "status": "fail",
       "tests": 58
     },
@@ -3323,9 +3323,9 @@
       "tests": 4
     },
     {
-      "fail": 25,
+      "fail": 18,
       "file": "ranges\\Range-attribute-nodes.html",
-      "pass": 1,
+      "pass": 8,
       "status": "fail",
       "tests": 26
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1528,
+  "total_fail": 1406,
   "total_files": 552,
-  "total_pass": 839,
+  "total_pass": 961,
   "total_skip": 31,
   "total_tests": 2367
 }
