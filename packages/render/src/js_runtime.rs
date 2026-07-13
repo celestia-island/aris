@@ -2881,6 +2881,101 @@ fn install_dom_globals(ctx: &mut Context) {
             // Use with_object_proto — the constructor's .prototype is set below.
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
+            // For Document constructor, add document-level methods.
+            if name == "Document" {
+                let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document"))));
+                let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
+                let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::null()));
+                let _ = obj.insert_property(boa_engine::js_string!("contentType"), pd2(JsValue::from(boa_engine::js_string!("text/html"))));
+                let _ = obj.insert_property(boa_engine::js_string!("URL"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
+                let _ = obj.insert_property(boa_engine::js_string!("documentURI"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
+                let _ = obj.insert_property(boa_engine::js_string!("compatMode"), pd2(JsValue::from(boa_engine::js_string!("CSS1Compat"))));
+                let _ = obj.insert_property(boa_engine::js_string!("characterSet"), pd2(JsValue::from(boa_engine::js_string!("UTF-8"))));
+                let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::null()));
+                let _ = obj.insert_property(boa_engine::js_string!("defaultView"), pd2(ctx.global_object().into()));
+                // createElement
+                let doc_ref = obj.clone();
+                let ce_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref, ctx| {
+                    let tag = arg_to_string(args, 0, ctx);
+                    let upper: String = tag.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect();
+                    let lower: String = tag.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
+                    let el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let upper_clone = upper.clone();
+                    let _ = el.insert_property(boa_engine::js_string!("tagName"), pd3(JsValue::from(boa_engine::js_string!(upper))));
+                    let _ = el.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!(upper_clone))));
+                    let _ = el.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(1u32)));
+                    let _ = el.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::null()));
+                    let _ = el.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref.clone())));
+                    let _ = el.insert_property(boa_engine::js_string!("namespaceURI"), pd3(JsValue::from(boa_engine::js_string!("http://www.w3.org/1999/xhtml"))));
+                    let _ = el.insert_property(boa_engine::js_string!("prefix"), pd3(JsValue::null()));
+                    Ok(el.into())
+                }, doc_ref);
+                let _ = obj.insert_property(boa_engine::js_string!("createElement"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ce_fn).build())));
+                // createTextNode
+                let doc_ref2 = obj.clone();
+                let ct_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref2, ctx| {
+                    let text = arg_string(args, 0);
+                    let tn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let _ = tn.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(3u32)));
+                    let _ = tn.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = tn.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = tn.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = tn.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(text))));
+                    let _ = tn.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#text"))));
+                    let _ = tn.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref2.clone())));
+                    Ok(tn.into())
+                }, doc_ref2);
+                let _ = obj.insert_property(boa_engine::js_string!("createTextNode"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ct_fn).build())));
+                // createComment
+                let doc_ref3 = obj.clone();
+                let cc_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref3, ctx| {
+                    let text = arg_string(args, 0);
+                    let cn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let _ = cn.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(8u32)));
+                    let _ = cn.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = cn.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = cn.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+                    let _ = cn.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(text))));
+                    let _ = cn.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#comment"))));
+                    let _ = cn.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref3.clone())));
+                    Ok(cn.into())
+                }, doc_ref3);
+                let _ = obj.insert_property(boa_engine::js_string!("createComment"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cc_fn).build())));
+                // createCDATASection
+                let doc_ref4 = obj.clone();
+                let cd_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref4, ctx| {
+                    let data = arg_string(args, 0);
+                    let cd = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let _ = cd.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(4u32)));
+                    let _ = cd.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(data.clone()))));
+                    let _ = cd.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(data.clone()))));
+                    let _ = cd.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(data.clone()))));
+                    let _ = cd.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(data))));
+                    let _ = cd.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#cdata-section"))));
+                    let _ = cd.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref4.clone())));
+                    Ok(cd.into())
+                }, doc_ref4);
+                let _ = obj.insert_property(boa_engine::js_string!("createCDATASection"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cd_fn).build())));
+                // createRange
+                let doc_ref5 = obj.clone();
+                let cr_fn = NativeFunction::from_copy_closure_with_captures(move |_t, _a, doc_ref5, _ctx| {
+                    let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                    let r = boa_engine::object::JsObject::with_object_proto(_ctx.intrinsics());
+                    let _ = r.insert_property(boa_engine::js_string!("startContainer"), pd3(JsValue::from(doc_ref5.clone())));
+                    let _ = r.insert_property(boa_engine::js_string!("endContainer"), pd3(JsValue::from(doc_ref5.clone())));
+                    let _ = r.insert_property(boa_engine::js_string!("startOffset"), pd3(JsValue::from(0u32)));
+                    let _ = r.insert_property(boa_engine::js_string!("endOffset"), pd3(JsValue::from(0u32)));
+                    let _ = r.insert_property(boa_engine::js_string!("collapsed"), pd3(JsValue::from(true)));
+                    let _ = r.insert_property(boa_engine::js_string!("commonAncestorContainer"), pd3(JsValue::from(doc_ref5.clone())));
+                    Ok(r.into())
+                }, doc_ref5);
+                let _ = obj.insert_property(boa_engine::js_string!("createRange"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cr_fn).build())));
+            }
             Ok(obj.into())
         });
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
