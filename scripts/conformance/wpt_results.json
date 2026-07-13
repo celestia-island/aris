@@ -1,5 +1,5 @@
 {
-  "pass_rate": 40,
+  "pass_rate": 39,
   "results": [
     {
       "fail": 0,
@@ -1380,23 +1380,23 @@
       "tests": 14
     },
     {
-      "fail": 7,
+      "fail": 14,
       "file": "nodes\\CharacterData-data.html",
-      "pass": 9,
+      "pass": 2,
       "status": "fail",
       "tests": 16
     },
     {
-      "fail": 6,
+      "fail": 10,
       "file": "nodes\\CharacterData-deleteData.html",
-      "pass": 12,
+      "pass": 8,
       "status": "fail",
       "tests": 18
     },
     {
-      "fail": 4,
+      "fail": 8,
       "file": "nodes\\CharacterData-insertData.html",
-      "pass": 14,
+      "pass": 10,
       "status": "fail",
       "tests": 18
     },
@@ -1408,44 +1408,44 @@
       "tests": 0
     },
     {
-      "fail": 4,
+      "fail": 8,
       "file": "nodes\\CharacterData-replaceData.html",
-      "pass": 30,
+      "pass": 26,
       "status": "fail",
       "tests": 34
     },
     {
-      "fail": 12,
+      "fail": 16,
       "file": "nodes\\CharacterData-substringData.html",
-      "pass": 16,
+      "pass": 12,
       "status": "fail",
       "tests": 28
     },
     {
-      "fail": 4,
+      "fail": 8,
       "file": "nodes\\CharacterData-surrogates.html",
-      "pass": 4,
+      "pass": 0,
       "status": "fail",
       "tests": 8
     },
     {
-      "fail": 45,
+      "fail": 42,
       "file": "nodes\\ChildNode-after.html",
-      "pass": 0,
+      "pass": 3,
       "status": "fail",
       "tests": 45
     },
     {
-      "fail": 45,
+      "fail": 42,
       "file": "nodes\\ChildNode-before.html",
-      "pass": 0,
+      "pass": 3,
       "status": "fail",
       "tests": 45
     },
     {
-      "fail": 33,
+      "fail": 31,
       "file": "nodes\\ChildNode-replaceWith.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 33
     },
@@ -1513,9 +1513,9 @@
       "tests": 1
     },
     {
-      "fail": 3,
+      "fail": 4,
       "file": "nodes\\Document-adoptNode.html",
-      "pass": 1,
+      "pass": 0,
       "status": "fail",
       "tests": 4
     },
@@ -2343,9 +2343,9 @@
       "tests": 6
     },
     {
-      "fail": 6,
+      "fail": 7,
       "file": "nodes\\Node-nodeValue.html",
-      "pass": 1,
+      "pass": 0,
       "status": "fail",
       "tests": 7
     },
@@ -3274,11 +3274,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "nodes\\remove-next-sibling-during-replace-with.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
       "fail": 6,
@@ -3596,11 +3596,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 16,
       "file": "ranges\\StaticRange-constructor.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 17
     },
     {
       "fail": 0,
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1406,
+  "total_fail": 1444,
   "total_files": 552,
-  "total_pass": 961,
+  "total_pass": 941,
   "total_skip": 31,
-  "total_tests": 2367
+  "total_tests": 2385
 }
