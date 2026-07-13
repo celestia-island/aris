@@ -2446,6 +2446,55 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         Gc::clone(&bridge),
     );
 
+    // createElementNS(namespace, qualifiedName)
+    // Like createElement but respects the namespace and doesn't uppercase for non-HTML.
+    let create_el_ns = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let ns = arg_string(args, 0);
+            let qname = arg_string(args, 1);
+            // Parse prefix:localName from qname.
+            let (prefix, local) = if let Some(idx) = qname.find(':') {
+                (&qname[..idx], &qname[idx + 1..])
+            } else {
+                ("", qname.as_str())
+            };
+            let html_ns = "http://www.w3.org/1999/xhtml";
+            let is_html = ns.is_empty() || ns == html_ns;
+            // For HTML namespace, tagName is uppercased; otherwise preserve case.
+            let tag_name = if is_html { local.to_uppercase() } else { local.to_string() };
+            let tag_name_clone = tag_name.clone();
+            let pid = {
+                let mut bb = b.borrow_mut();
+                let pid = bb.next_pending;
+                bb.next_pending += 1;
+                bb.pending.insert(pid, (local.to_string(), String::new(), Vec::new()));
+                pid
+            };
+            let handle = make_element_handle(ctx, Gc::clone(b), 0, Some(pid))?;
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            let _ = handle.insert_property(boa_engine::js_string!("tagName"), pd(JsValue::from(boa_engine::js_string!(tag_name))));
+            let _ = handle.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(tag_name_clone))));
+            let _ = handle.insert_property(boa_engine::js_string!("localName"), pd(JsValue::from(boa_engine::js_string!(local))));
+            let ns_val = if ns.is_empty() { html_ns.to_string() } else { ns.clone() };
+            let _ = handle.insert_property(boa_engine::js_string!("namespaceURI"), pd(JsValue::from(boa_engine::js_string!(ns_val))));
+            let _ = handle.insert_property(boa_engine::js_string!("prefix"),
+                pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix)) }));
+            let _ = handle.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
+            let _ = handle.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
+            let _ = handle.insert_property(boa_engine::js_string!("id"), pd(JsValue::from(boa_engine::js_string!(""))));
+            let _ = handle.insert_property(boa_engine::js_string!("className"), pd(JsValue::from(boa_engine::js_string!(""))));
+            let attrs_map = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+            let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
+            set_element_prototype(&handle, local, ctx);
+            Ok(handle.into())
+        },
+        Gc::clone(&bridge),
+    );
+
     // querySelector
     let query_sel = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
@@ -2476,6 +2525,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let document = ObjectInitializer::new(ctx)
         .function(get_by_id, boa_engine::js_string!("getElementById"), 1)
         .function(create_el, boa_engine::js_string!("createElement"), 1)
+        .function(create_el_ns, boa_engine::js_string!("createElementNS"), 2)
         .function(query_sel, boa_engine::js_string!("querySelector"), 1)
         .build();
 
