@@ -2218,6 +2218,40 @@ fn install_dom_globals(ctx: &mut Context) {
             )),
         );
 
+        // document.adoptNode(node) — returns the node (simplified: no-op).
+        let adopt_node = NativeFunction::from_copy_closure(|_t, args, _ctx| {
+            Ok(args.first().cloned().unwrap_or(JsValue::null()))
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("adoptNode"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), adopt_node).build(),
+            )),
+        );
+
+        // document.importNode(node, deep?) — returns a clone of the node.
+        let import_node = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let node = args.first().cloned().unwrap_or(JsValue::null());
+            let deep = args.get(1).and_then(|v| v.as_boolean()).unwrap_or(false);
+            // Use cloneNode on the node if available.
+            if let Some(o) = node.as_object() {
+                if let Ok(cn) = o.get(boa_engine::js_string!("cloneNode"), ctx) {
+                    if let Some(cn_fn) = cn.as_object() {
+                        if cn_fn.is_callable() {
+                            return cn_fn.call(&node, &[JsValue::from(deep)], ctx);
+                        }
+                    }
+                }
+            }
+            Ok(node)
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("importNode"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), import_node).build(),
+            )),
+        );
+
         // document.documentElement, document.body, document.head — these are
         // populated lazily by the bridge's node_props snapshots. We install
         // getters that look up the bridge for html/body/head nodes.
@@ -4130,6 +4164,30 @@ fn make_element_handle(
     // normalize() — no-op.
     let normalize_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
     init.function(normalize_fn, boa_engine::js_string!("normalize"), 0);
+
+    // remove() — removes this node from its parent (no-op on blitz side).
+    let remove_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(remove_fn, boa_engine::js_string!("remove"), 0);
+
+    // append(...nodes) — replaces children (simplified no-op).
+    let append_children = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(append_children, boa_engine::js_string!("append"), 0);
+
+    // prepend(...nodes) — inserts before first child (simplified no-op).
+    let prepend_children = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(prepend_children, boa_engine::js_string!("prepend"), 0);
+
+    // after(...nodes) — ChildNode method (simplified no-op).
+    let after_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(after_fn, boa_engine::js_string!("after"), 0);
+
+    // before(...nodes) — ChildNode method (simplified no-op).
+    let before_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(before_fn, boa_engine::js_string!("before"), 0);
+
+    // replaceWith(...nodes) — ChildNode method (simplified no-op).
+    let replace_with_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(replace_with_fn, boa_engine::js_string!("replaceWith"), 0);
 
     // closest(selector) — walks up parentNode chain matching selector.
     let closest_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
