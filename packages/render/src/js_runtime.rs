@@ -983,6 +983,7 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             || key_str.contains("innerHTML") || key_str.contains("outerHTML")
             || key_str.contains("previousSibling") || key_str.contains("nextSibling")
             || key_str.contains("ownerElement")  // Prevent circular reference recursion
+            || key_str.contains("textContent")   // Accessor property
         {
             continue;
         }
@@ -2835,6 +2836,40 @@ fn value_to_node(val: &JsValue, ctx: &mut Context) -> JsValue {
 }
 
 /// Serialize a node to HTML string for innerHTML.
+/// Collect text content from a node and all its descendants.
+fn collect_text_content(o: &boa_engine::object::JsObject, ctx: &mut Context, depth: u32) -> String {
+    if depth > 50 { return String::new(); }
+    let nt = o.get(boa_engine::js_string!("nodeType"), ctx).ok()
+        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    // Text, comment, PI nodes: return their data.
+    if nt == 3 || nt == 8 || nt == 7 {
+        // Read from _data or data.
+        if let Ok(v) = o.get(boa_engine::js_string!("_data"), ctx) {
+            if let Some(s) = v.as_string() { return s.to_std_string_escaped(); }
+        }
+        if let Ok(v) = o.get(boa_engine::js_string!("data"), ctx) {
+            if let Some(s) = v.as_string() { return s.to_std_string_escaped(); }
+        }
+        return String::new();
+    }
+    // Element/Document/DocumentFragment: concatenate children's text.
+    let mut result = String::new();
+    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+        if let Some(ca) = cv.as_object() {
+            let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+            for i in 0..len {
+                if let Ok(child) = ca.get(i as u32, ctx) {
+                    if let Some(child_obj) = child.as_object() {
+                        result.push_str(&collect_text_content(&child_obj, ctx, depth + 1));
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 /// Serialize only the children of a node (for innerHTML).
 fn serialize_children(o: &boa_engine::object::JsObject, ctx: &mut Context) -> String {
     let mut html = String::new();
@@ -5228,6 +5263,51 @@ fn make_element_handle(
         boa_engine::property::PropertyDescriptor::builder()
             .get(ih_get_fn)
             .set(ih_set_fn)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+
+    // textContent as accessor: getter concatenates descendant text, setter replaces children.
+    let tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(&o, ctx, 0))));
+        }
+        Ok(JsValue::from(boa_engine::js_string!("")))
+    });
+    let tc_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+        if let Some(o) = this.as_object() {
+            let val = args.first().map(|v| v.clone()).unwrap_or(JsValue::null());
+            let s = if val.is_null() {
+                String::new()
+            } else {
+                val.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default()
+            };
+            // Replace all children with a single text node.
+            let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+            // Create new _children with single text node.
+            let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = text_node.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+            let _ = text_node.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+            let _ = text_node.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+            let _ = text_node.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+            let _ = text_node.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(s))));
+            let _ = text_node.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+            let _ = text_node.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(o.clone())));
+            let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = new_arr.insert_property(0u32, pd(JsValue::from(text_node)));
+            let _ = new_arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(1u32)));
+            let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+        }
+        Ok(JsValue::undefined())
+    });
+    let tc_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_get).build();
+    let tc_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_set).build();
+    let _ = obj.insert_property(
+        boa_engine::js_string!("textContent"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .get(tc_get_fn)
+            .set(tc_set_fn)
             .enumerable(true)
             .configurable(true)
             .build(),
