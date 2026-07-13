@@ -97,8 +97,6 @@ Consulte la [visión general de arquitectura](./architecture/overview.md).
 - **[tairitsu](https://github.com/celestia-island/tairitsu)** — Framework UI WASM
 - **[hikari](https://github.com/celestia-island/hikari)** — Biblioteca de componentes UI
 - **[shirabe](https://github.com/celestia-island/shirabe)** — Automatización de navegador, contrato FFI de renderizado
-- **[evernight](https://github.com/celestia-island/evernight)** — Bróker de protocolos industriales
-- **[entelecheia](https://github.com/celestia-island/entelecheia)** — Plataforma de agentes IA
 
 ## Licencia
 

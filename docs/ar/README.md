@@ -97,8 +97,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 - **[tairitsu](https://github.com/celestia-island/tairitsu)** — إطار عمل UI بتقنية WASM
 - **[hikari](https://github.com/celestia-island/hikari)** — مكتبة مكونات UI
 - **[shirabe](https://github.com/celestia-island/shirabe)** — أتمتة المتصفح، عقد FFI للتصيير
-- **[evernight](https://github.com/celestia-island/evernight)** — وسيط بروتوكولات صناعية
-- **[entelecheia](https://github.com/celestia-island/entelecheia)** — منصة وكلاء الذكاء الاصطناعي
 
 ## الترخيص
 

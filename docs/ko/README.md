@@ -97,8 +97,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 - **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI 프레임워크
 - **[hikari](https://github.com/celestia-island/hikari)** — UI 컴포넌트 라이브러리
 - **[shirabe](https://github.com/celestia-island/shirabe)** — 브라우저 자동화, 렌더링 FFI 계약
-- **[evernight](https://github.com/celestia-island/evernight)** — 산업용 프로토콜 브로커
-- **[entelecheia](https://github.com/celestia-island/entelecheia)** — AI 에이전트 플랫폼
 
 ## 라이선스
 

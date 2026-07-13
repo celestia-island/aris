@@ -62,7 +62,6 @@ ARIS renders to a pixel buffer which can be displayed through multiple backends:
 ┌──────────────────────────────────────────────────────────┐
 │  Application Layer                                       │
 │  tairitsu (VDOM) · hikari (UI components)                │
-│  evernight (protocol broker) · entelecheia (AI agents)   │
 ├──────────────────────────────────────────────────────────┤
 │  ARIS Browser Engine                                     │
 │  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐     │
