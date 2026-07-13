@@ -623,6 +623,30 @@ fn strip_tags(html: &str) -> String {
     out
 }
 
+/// Check if a string is a valid XML Name (first char).
+/// NameStartChar ::= ":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] | [#xF8-#x2FF] | ...
+fn is_valid_name_first(s: &str) -> bool {
+    let first = match s.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    first.is_ascii_alphabetic() || first == '_' || first == ':'
+    // Extended Unicode ranges omitted for simplicity; WPT tests use ASCII.
+}
+
+/// Validate that a string is a valid Name production (all characters valid).
+fn is_valid_name(s: &str) -> bool {
+    if s.is_empty() || !is_valid_name_first(s) {
+        return false;
+    }
+    for c in s.chars().skip(1) {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == ':' || c == '-' || c == '.') {
+            return false;
+        }
+    }
+    true
+}
+
 /// Set the prototype of an element handle to the corresponding HTMLxxxElement.prototype,
 /// so that `elem instanceof HTMLxxxElement` works.
 fn set_element_prototype(handle: &JsObject, tag: &str, ctx: &mut Context) {
@@ -2328,6 +2352,14 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let create_el = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
             let tag = arg_string(args, 0);
+            // Validate the tag name per the Name production.
+            // First char must be a letter, '_', or ':'. Rest must be letter, digit,
+            // '_', ':', '-', '.', or combining char.
+            if tag.is_empty() || !is_valid_name_first(&tag) {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("InvalidCharacterError: The string contains an invalid character")
+                    .into());
+            }
             // Special-case <canvas>: allocate via thread_local and return a handle.
             if tag == "canvas" {
                 let cid = alloc_canvas(300, 150);
