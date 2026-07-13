@@ -296,6 +296,7 @@ const HARNESS_SHIM: &str = r#"
 var __pass = 0;
 var __fail = 0;
 var __tests = 0;
+var __active_ranges = [];
 
 function test(fn, name) {
     __tests++;
@@ -595,6 +596,41 @@ this.dispatchEvent = function(event) {
         }
     }
     return notCanceled;
+};
+
+// Wrap document.createRange to track active ranges for mutation tracking.
+var __origCreateRange = document.createRange.bind(document);
+document.createRange = function() {
+  var r = __origCreateRange();
+  __active_ranges.push(r);
+  return r;
+};
+// Also wrap createRange on synthetic documents.
+var __origImplCreateDoc = document.implementation.createDocument.bind(document.implementation);
+document.implementation.createDocument = function() {
+  var d = __origImplCreateDoc.apply(this, arguments);
+  if (d && d.createRange) {
+    var origCR = d.createRange.bind(d);
+    d.createRange = function() {
+      var r = origCR();
+      __active_ranges.push(r);
+      return r;
+    };
+  }
+  return d;
+};
+var __origImplCreateHTML = document.implementation.createHTMLDocument.bind(document.implementation);
+document.implementation.createHTMLDocument = function() {
+  var d = __origImplCreateHTML.apply(this, arguments);
+  if (d && d.createRange) {
+    var origCR = d.createRange.bind(d);
+    d.createRange = function() {
+      var r = origCR();
+      __active_ranges.push(r);
+      return r;
+    };
+  }
+  return d;
 };
 
 // Node constants used by many tests.

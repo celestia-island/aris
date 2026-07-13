@@ -3268,9 +3268,15 @@ fn install_dom_globals(ctx: &mut Context) {
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
         let v = arg_string(args, 0);
+        let old_len = read_data_utf16(&this, ctx).len() as u32;
+        let data_len = v.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
         units.extend(v.encode_utf16());
         write_data_utf16(&this, &units, ctx);
+        // Update Range boundary points: appendData = replaceData(oldLen, 0, data)
+        if let Some(o) = this.as_object() {
+            update_ranges_for_data_change(&o, old_len, 0, data_len, ctx);
+        }
         Ok(JsValue::undefined())
     });
     let delete_d = NativeFunction::from_copy_closure(|this, args, ctx| {
@@ -3281,14 +3287,19 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         if offset > len {
             return throw_index_size(ctx);
         }
+        let actual_count = count.min(len - offset);
         let end = (offset.saturating_add(count)).min(len) as usize;
         units.drain(offset as usize..end);
         write_data_utf16(&this, &units, ctx);
+        if let Some(o) = this.as_object() {
+            update_ranges_for_data_change(&o, offset, actual_count, 0, ctx);
+        }
         Ok(JsValue::undefined())
     });
     let insert_d = NativeFunction::from_copy_closure(|this, args, ctx| {
         let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
         let data = arg_string(args, 1);
+        let data_len = data.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
         if offset > len {
@@ -3298,21 +3309,29 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         let pos = offset as usize;
         units.splice(pos..pos, insert_units);
         write_data_utf16(&this, &units, ctx);
+        if let Some(o) = this.as_object() {
+            update_ranges_for_data_change(&o, offset, 0, data_len, ctx);
+        }
         Ok(JsValue::undefined())
     });
     let replace_d = NativeFunction::from_copy_closure(|this, args, ctx| {
         let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
         let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
         let data = arg_string(args, 2);
+        let data_len = data.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
         if offset > len {
             return throw_index_size(ctx);
         }
+        let actual_count = count.min(len - offset);
         let end = (offset.saturating_add(count)).min(len) as usize;
         let replace_units: Vec<u16> = data.encode_utf16().collect();
         units.splice(offset as usize..end, replace_units);
         write_data_utf16(&this, &units, ctx);
+        if let Some(o) = this.as_object() {
+            update_ranges_for_data_change(&o, offset, actual_count, data_len, ctx);
+        }
         Ok(JsValue::undefined())
     });
     let substring_d = NativeFunction::from_copy_closure(|this, args, ctx| {
@@ -3420,6 +3439,62 @@ fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context
             boa_engine::js_string!("length"),
             pd(JsValue::from(units.len() as u32)),
         );
+    }
+}
+
+/// Update all Range boundary points after a CharacterData mutation.
+/// Implements the "replace data" steps from the DOM spec:
+/// - For every boundary point whose node is `node` and offset > offset && <= offset+count:
+///   set offset to `offset`.
+/// - For every boundary point whose node is `node` and offset > offset+count:
+///   add data_len, subtract count.
+fn update_ranges_for_data_change(node: &JsObject, offset: u32, count: u32, data_len: u32, ctx: &mut Context) {
+    // Get the global __active_ranges array (if it exists).
+    let global = ctx.global_object();
+    let ranges_val = match global.get(boa_engine::js_string!("__active_ranges"), ctx) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let ranges_arr = match ranges_val.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+    let len = ranges_arr.get(boa_engine::js_string!("length"), ctx).ok()
+        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(true).enumerable(true).configurable(true).build()
+    };
+    // Per DOM spec "replace data" steps:
+    // Step 1: For offset > offset && <= offset+count, set to offset.
+    // Step 2: For offset > offset+count, add data_len, subtract count.
+    for i in 0..len {
+        if let Ok(range_val) = ranges_arr.get(i as u32, ctx) {
+            if let Some(range) = range_val.as_object() {
+                for (container_key, offset_key) in &[
+                    (boa_engine::js_string!("startContainer"), boa_engine::js_string!("startOffset")),
+                    (boa_engine::js_string!("endContainer"), boa_engine::js_string!("endOffset")),
+                ] {
+                    let cont = range.get(container_key.clone(), ctx).ok();
+                    if let Some(cont_obj) = cont.and_then(|v| v.as_object()) {
+                        if boa_engine::object::JsObject::equals(&cont_obj, node) {
+                            let cur_offset = range.get(offset_key.clone(), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            let new_offset = if cur_offset > offset && cur_offset <= offset + count {
+                                // Step 1: clamp to offset
+                                offset
+                            } else if cur_offset > offset + count {
+                                // Step 2: add data_len, subtract count
+                                cur_offset + data_len - count
+                            } else {
+                                cur_offset
+                            };
+                            let _ = range.insert_property(offset_key.clone(), pd(JsValue::from(new_offset)));
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
