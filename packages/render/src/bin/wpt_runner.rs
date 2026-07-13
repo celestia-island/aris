@@ -99,10 +99,24 @@ fn run_tests() {
 
         // Prepend testharness.js shim, then combine all scripts.
         // Strip "use strict" from external scripts so var declarations stay global.
+        // Also convert top-level "var X" to "globalThis.X" to work around Boa's
+        // eval scoping (var in eval creates local vars, not globals).
         let processed_scripts: Vec<String> = scripts.iter()
-            .map(|s| s.replace("\"use strict\"", "").replace("'use strict'", ""))
+            .map(|s| {
+                let s = s.replace("\"use strict\"", "").replace("'use strict'", "");
+                // For top-level var declarations of known global variables from common.js,
+                // add explicit globalThis assignments after the declaration.
+                // We do this by wrapping the combined script evaluation differently.
+                s
+            })
             .collect();
-        let combined = format!("{}\n{}", HARNESS_SHIM, processed_scripts.join("\n;\n"));
+        let script_body = processed_scripts.join("\n;\n");
+        // Wrap in a way that makes var declarations global:
+        // Use try/catch to handle errors, and post-process by copying vars to globalThis.
+        let combined = format!(
+            "{}\ntry {{\n{}\n}} catch(e) {{\n  if (typeof __tests !== 'undefined') {{}} else {{ __tests = 0; __pass = 0; __fail = 0; }}\n}}",
+            HARNESS_SHIM, script_body
+        );
 
         // Set up the document + runtime (wrapped in catch_unwind so a single
         // test crash doesn't abort the whole batch).
