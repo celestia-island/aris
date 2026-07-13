@@ -2314,6 +2314,26 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(boa_engine::js_string!("timeStamp"), pd(JsValue::from(0u32)));
             let _ = obj.insert_property(boa_engine::js_string!("eventPhase"), pd(JsValue::from(0u32)));
             let _ = obj.insert_property(boa_engine::js_string!("cancelBubble"), pd(JsValue::from(false)));
+
+            // Resolve the event type alias to the interface name.
+            let iface_name = match event_type.as_str() {
+                "Events" | "HTMLEvents" | "SVGEvents" => "Event",
+                "MouseEvents" => "MouseEvent",
+                "UIEvents" => "UIEvent",
+                _ => &event_type,
+            };
+
+            // Look up the constructor on the global object and set prototype.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(iface_name), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
+
             // initEvent(type, bubbles, cancelable)
             let init_ev = NativeFunction::from_copy_closure(|this, args, ctx| {
                 if let Some(o) = this.as_object() {
@@ -2337,15 +2357,21 @@ fn install_dom_globals(ctx: &mut Context) {
             });
             let _ = obj.insert_property(boa_engine::js_string!("initEvent"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), init_ev).build())));
-            // preventDefault, stopPropagation, stopImmediatePropagation
+            // preventDefault with _passive check
             let pd_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
                 if let Some(o) = this.as_object() {
-                    let _ = o.insert_property(boa_engine::js_string!("defaultPrevented"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(true)).writable(true).enumerable(true).configurable(true).build());
-                    let _ = o.insert_property(boa_engine::js_string!("returnValue"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(false)).writable(true).enumerable(true).configurable(true).build());
+                    let cancelable = o.get(boa_engine::js_string!("cancelable"), ctx).ok()
+                        .and_then(|v| v.as_boolean()).unwrap_or(false);
+                    let passive = o.get(boa_engine::js_string!("_passive"), ctx).ok()
+                        .and_then(|v| v.as_boolean()).unwrap_or(false);
+                    if cancelable && !passive {
+                        let pd2 = |val: JsValue| {
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(val).writable(true).enumerable(true).configurable(true).build()
+                        };
+                        let _ = o.insert_property(boa_engine::js_string!("defaultPrevented"), pd2(JsValue::from(true)));
+                        let _ = o.insert_property(boa_engine::js_string!("returnValue"), pd2(JsValue::from(false)));
+                    }
                 }
                 Ok(JsValue::undefined())
             });
@@ -2356,7 +2382,6 @@ fn install_dom_globals(ctx: &mut Context) {
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn.clone()).build())));
             let _ = obj.insert_property(boa_engine::js_string!("stopImmediatePropagation"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn).build())));
-            let _ = event_type; // suppress unused warning
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2528,6 +2553,31 @@ fn install_dom_globals(ctx: &mut Context) {
         // SVG element
         ("SVGElement", 1),
         ("MathMLElement", 1),
+        // Event interfaces (for createEvent prototype checks)
+        ("UIEvent", 0),
+        ("FocusEvent", 0),
+        ("MouseEvent", 0),
+        ("KeyboardEvent", 0),
+        ("WheelEvent", 0),
+        ("BeforeUnloadEvent", 0),
+        ("CompositionEvent", 0),
+        ("DeviceMotionEvent", 0),
+        ("DeviceOrientationEvent", 0),
+        ("DragEvent", 0),
+        ("HashChangeEvent", 0),
+        ("MessageEvent", 0),
+        ("StorageEvent", 0),
+        ("TextEvent", 0),
+        ("TouchEvent", 0),
+        ("AnimationEvent", 0),
+        ("TransitionEvent", 0),
+        ("PageTransitionEvent", 0),
+        ("BeforeInputEvent", 0),
+        ("InputEvent", 0),
+        ("CloseEvent", 0),
+        ("ErrorEvent", 0),
+        ("ProgressEvent", 0),
+        ("SecurityPolicyViolationEvent", 0),
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
