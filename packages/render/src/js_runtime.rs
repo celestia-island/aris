@@ -2157,6 +2157,49 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::js_string!("characterSet"),
             pd(JsValue::from(boa_engine::js_string!("UTF-8"))),
         );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("charset"),
+            pd(JsValue::from(boa_engine::js_string!("UTF-8"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("inputEncoding"),
+            pd(JsValue::from(boa_engine::js_string!("UTF-8"))),
+        );
+        // nodeName = "#document" for Document nodes.
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("nodeName"),
+            pd(JsValue::from(boa_engine::js_string!("#document"))),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("nodeType"),
+            pd(JsValue::from(9u32)),
+        );
+        // doctype stub — the real doctype comes from the parsed HTML.
+        let doctype_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("name"),
+            pd(JsValue::from(boa_engine::js_string!("html"))),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("nodeName"),
+            pd(JsValue::from(boa_engine::js_string!("html"))),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("publicId"),
+            pd(JsValue::from(boa_engine::js_string!(""))),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("systemId"),
+            pd(JsValue::from(boa_engine::js_string!(""))),
+        );
+        let _ = doctype_obj.insert_property(
+            boa_engine::js_string!("nodeType"),
+            pd(JsValue::from(10u32)),
+        );
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("doctype"),
+            pd(doctype_obj.into()),
+        );
     }
 
     // Global constructors for instanceof checks: Node, Element, Text, Comment,
