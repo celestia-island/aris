@@ -799,6 +799,16 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         JsValue::null()
     };
     let _ = obj.insert_property(boa_engine::js_string!("namespaceURI"), pd(ns));
+    // baseURI and isConnected for all nodes.
+    let _ = obj.insert_property(
+        boa_engine::js_string!("baseURI"),
+        pd(JsValue::from(boa_engine::js_string!("about:blank"))),
+    );
+    // isConnected: true for nodes in the document tree (simplified: true for elements with valid id).
+    let _ = obj.insert_property(
+        boa_engine::js_string!("isConnected"),
+        pd(JsValue::from(s.node_type > 0)),
+    );
     let _ = obj.insert_property(
         boa_engine::js_string!("length"),
         pd(JsValue::from(s.text_content.chars().count() as u32)),
@@ -2760,7 +2770,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
             let _ = handle.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
             let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
-            let _ = handle.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
+            let _ = handle.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val.clone()));
+            // baseURI = document.URL (about:blank by default)
+            let base_uri = doc_val.as_object()
+                .and_then(|d| d.get(boa_engine::js_string!("URL"), ctx).ok())
+                .unwrap_or(JsValue::from(boa_engine::js_string!("about:blank")));
+            let _ = handle.insert_property(boa_engine::js_string!("baseURI"), pd(base_uri));
+            let _ = handle.insert_property(boa_engine::js_string!("isConnected"), pd(JsValue::from(false)));
             // Set the prototype chain so instanceof works.
             set_element_prototype(&handle, &tag, ctx);
             Ok(handle.into())
