@@ -374,9 +374,9 @@
       "tests": 7
     },
     {
-      "fail": 5,
+      "fail": 2,
       "file": "events\\Event-returnValue.html",
-      "pass": 2,
+      "pass": 5,
       "status": "fail",
       "tests": 7
     },
@@ -585,10 +585,10 @@
       "tests": 2
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "events\\event-src-element-nullable.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -928,9 +928,9 @@
       "tests": 12
     },
     {
-      "fail": 74,
+      "fail": 73,
       "file": "events\\passive-by-default.html",
-      "pass": 26,
+      "pass": 27,
       "status": "fail",
       "tests": 100
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1487,
+  "total_fail": 1482,
   "total_files": 552,
-  "total_pass": 1050,
+  "total_pass": 1055,
   "total_skip": 31,
   "total_tests": 2537
 }
