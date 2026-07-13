@@ -3419,7 +3419,16 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
                 .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
             let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
-            let _ = arr.insert_property(len, pd2(handler));
+            // Determine passive: touch/wheel events are passive by default on document.
+            let explicit_passive = args.get(2).and_then(|o| o.as_object())
+                .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
+                .and_then(|v| v.as_boolean());
+            let is_passive_event = matches!(event_type.as_str(), "touchstart" | "touchmove" | "wheel" | "mousewheel");
+            let passive = explicit_passive.unwrap_or(is_passive_event);
+            let listener_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = listener_obj.insert_property(boa_engine::js_string!("callback"), pd2(handler));
+            let _ = listener_obj.insert_property(boa_engine::js_string!("passive"), pd2(JsValue::from(passive)));
+            let _ = arr.insert_property(len, pd2(listener_obj.into()));
             let _ = arr.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(len + 1)));
             Ok(JsValue::undefined())
         }, doc_for_add);
@@ -3438,8 +3447,22 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                             let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
                                 .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
                             for i in 0..len {
-                                if let Ok(handler) = arr.get(i as u32, ctx) {
-                                    if let Some(fn_obj) = handler.as_object() {
+                                if let Ok(listener) = arr.get(i as u32, ctx) {
+                                    // Listener is {callback, passive} or raw function.
+                                    let (callback, is_passive) = if let Some(lo) = listener.as_object() {
+                                        let cb = lo.get(boa_engine::js_string!("callback"), ctx).ok().unwrap_or(listener.clone());
+                                        let p = lo.get(boa_engine::js_string!("passive"), ctx).ok()
+                                            .and_then(|v| v.as_boolean()).unwrap_or(false);
+                                        (cb, p)
+                                    } else {
+                                        (listener, false)
+                                    };
+                                    // Set _passive flag on event.
+                                    if let Some(ev_obj) = event.as_object() {
+                                        let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(false).configurable(true).build() };
+                                        let _ = ev_obj.insert_property(boa_engine::js_string!("_passive"), pd2(JsValue::from(is_passive)));
+                                    }
+                                    if let Some(fn_obj) = callback.as_object() {
                                         if fn_obj.is_callable() {
                                             let _ = fn_obj.call(&JsValue::null(), &[event.clone()], ctx);
                                         }
