@@ -5101,15 +5101,83 @@ fn make_element_handle(
 
     // lookupNamespaceURI(prefix) — returns namespace URI for given prefix.
     // Simplified: always null except 'xml' → XML namespace, 'xmlns' → xmlns namespace.
-    let lookup_ns_uri = NativeFunction::from_copy_closure(|_this, args, ctx| {
-        let prefix = args.first().map(|v| {
-            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
-        }).unwrap_or_default();
-        match prefix.as_str() {
-            "xml" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/XML/1998/namespace"))),
-            "xmlns" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/2000/xmlns/"))),
-            _ => Ok(JsValue::null()),
+    let lookup_ns_uri = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let prefix = args.first().and_then(|v| {
+            if v.is_null() { None } else { v.as_string().map(|s| s.to_std_string_escaped()) }
+        });
+        let prefix_str = prefix.as_deref().unwrap_or("");
+        const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+        const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
+
+        // Special prefixes always return their well-known namespaces.
+        if prefix_str == "xml" {
+            return Ok(JsValue::from(boa_engine::js_string!(XML_NS)));
         }
+        if prefix_str == "xmlns" {
+            return Ok(JsValue::from(boa_engine::js_string!(XMLNS_NS)));
+        }
+
+        let obj = match this.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::null()),
+        };
+
+        // Walk up the parent chain looking for namespace declarations.
+        let mut current = Some(obj);
+        for _ in 0..100 {
+            let node = match current {
+                Some(n) => n,
+                None => break,
+            };
+            let nt = node.get(boa_engine::js_string!("nodeType"), ctx).ok()
+                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+
+            // For element nodes (type 1), check namespace declarations.
+            if nt == 1 {
+                // Check if this element's own prefix matches.
+                if !prefix_str.is_empty() {
+                    let elem_prefix = node.get(boa_engine::js_string!("prefix"), ctx).ok()
+                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()));
+                    if elem_prefix.as_deref() == Some(prefix_str) {
+                        let ns = node.get(boa_engine::js_string!("namespaceURI"), ctx).ok();
+                        return Ok(ns.filter(|v| !v.is_null()).unwrap_or(JsValue::null()));
+                    }
+                }
+                // Check xmlns attributes.
+                if let Ok(attrs) = node.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(ao) = attrs.as_object() {
+                        let alen = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        for i in 0..alen {
+                            if let Ok(a) = ao.get(i as u32, ctx) {
+                                if let Some(a_obj) = a.as_object() {
+                                    let aname = a_obj.get(boa_engine::js_string!("name"), ctx).ok()
+                                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                                        .unwrap_or_default();
+                                    let aval = a_obj.get(boa_engine::js_string!("value"), ctx).ok()
+                                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                                        .unwrap_or_default();
+                                    // xmlns:prefix → matches non-empty prefix
+                                    if prefix_str.is_empty() {
+                                        if aname == "xmlns" {
+                                            return Ok(JsValue::from(boa_engine::js_string!(aval)));
+                                        }
+                                    } else {
+                                        if aname == format!("xmlns:{}", prefix_str) {
+                                            return Ok(JsValue::from(boa_engine::js_string!(aval)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Move to parent.
+            current = node.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+        }
+        Ok(JsValue::null())
     });
     init.function(lookup_ns_uri, boa_engine::js_string!("lookupNamespaceURI"), 1);
 
@@ -5117,13 +5185,26 @@ fn make_element_handle(
     let lookup_prefix = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
     init.function(lookup_prefix, boa_engine::js_string!("lookupPrefix"), 1);
 
-    // isDefaultNamespace(namespace) — true if namespace is null or empty.
-    let is_default_ns = NativeFunction::from_copy_closure(|_this, args, _ctx| {
-        let ns = args.first().map(|v| {
-            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
-        }).unwrap_or_default();
-        // Default namespace is null/empty for HTML documents.
-        Ok(JsValue::from(ns.is_empty() || ns == "http://www.w3.org/1999/xhtml"))
+    // isDefaultNamespace(namespace) — checks if lookupNamespaceURI(null) === namespace.
+    let is_default_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let ns_val = args.first().cloned().unwrap_or(JsValue::null());
+        let ns_str = if ns_val.is_null() {
+            String::new()
+        } else {
+            ns_val.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
+        };
+        // Get the default namespace by calling lookupNamespaceURI(null).
+        let lookup_fn = this.as_object()
+            .and_then(|o| o.get(boa_engine::js_string!("lookupNamespaceURI"), ctx).ok())
+            .and_then(|v| v.as_object());
+        if let Some(lf) = lookup_fn {
+            if let Ok(result) = lf.call(this, &[JsValue::null()], ctx) {
+                let result_str = result.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default();
+                return Ok(JsValue::from(result_str == ns_str));
+            }
+        }
+        // Fallback: default namespace is null/empty.
+        Ok(JsValue::from(ns_str.is_empty()))
     });
     init.function(is_default_ns, boa_engine::js_string!("isDefaultNamespace"), 1);
 
