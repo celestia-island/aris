@@ -758,6 +758,30 @@ fn arg_to_string(args: &[JsValue], idx: usize, ctx: &mut Context) -> String {
 
 /// Populate a JS element handle with real properties from a node snapshot.
 fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
+    // Determine if parent is body/html/documentElement by checking document properties.
+    let parent_is_body = {
+        let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).ok();
+        doc_val.as_ref()
+            .and_then(|v| v.as_object())
+            .and_then(|d| d.get(boa_engine::js_string!("body"), ctx).ok())
+            .and_then(|b| b.as_object())
+            .and_then(|b| b.get(boa_engine::js_string!("_arisId"), ctx).ok())
+            .and_then(|v| v.as_number())
+            .map(|id| id as u32 == s.parent_id)
+            .unwrap_or(false)
+    };
+    let parent_is_html = {
+        let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).ok();
+        doc_val.as_ref()
+            .and_then(|v| v.as_object())
+            .and_then(|d| d.get(boa_engine::js_string!("documentElement"), ctx).ok())
+            .and_then(|b| b.as_object())
+            .and_then(|b| b.get(boa_engine::js_string!("_arisId"), ctx).ok())
+            .and_then(|v| v.as_number())
+            .map(|id| id as u32 == s.parent_id)
+            .unwrap_or(false)
+    };
+    let snapshot_parent_tag = if parent_is_body { "body" } else if parent_is_html { "html" } else { "" };
     let pd = |val: JsValue| {
         boa_engine::property::PropertyDescriptor::builder()
             .value(val)
@@ -911,13 +935,34 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
 
     // parentNode / parentElement
     if s.parent_id > 0 {
-        let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        let _ = pn.insert_property(
-            boa_engine::js_string!("_arisId"),
-            pd(JsValue::from(s.parent_id)),
-        );
-        let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(pn.clone().into()));
-        let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(pn.into()));
+        // Try to use document.body/documentElement if the parent is body/html.
+        // This ensures parentNode has DOM methods (insertBefore, removeChild, etc).
+        let parent_tag = snapshot_parent_tag;
+        let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).ok();
+        let doc_obj = doc_val.as_ref().and_then(|v| v.as_object());
+        let parent_val = if parent_tag == "body" {
+            doc_obj.and_then(|d| d.get(boa_engine::js_string!("body"), ctx).ok())
+                .filter(|v| !v.is_null() && !v.is_undefined())
+                .unwrap_or_else(|| {
+                    let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = pn.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(s.parent_id)));
+                    JsValue::from(pn)
+                })
+        } else if parent_tag == "html" {
+            doc_obj.and_then(|d| d.get(boa_engine::js_string!("documentElement"), ctx).ok())
+                .filter(|v| !v.is_null() && !v.is_undefined())
+                .unwrap_or_else(|| {
+                    let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = pn.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(s.parent_id)));
+                    JsValue::from(pn)
+                })
+        } else {
+            let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = pn.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(s.parent_id)));
+            JsValue::from(pn)
+        };
+        let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(parent_val.clone()));
+        let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(parent_val));
     } else {
         let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
         let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
