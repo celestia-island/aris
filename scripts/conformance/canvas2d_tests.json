@@ -1,0 +1,76 @@
+{
+  "suite": "Canvas 2D API Conformance",
+  "source": "Adapted from W3C web-platform-tests (html/dom/canvas) + MDN reference",
+  "tests": [
+    {
+      "id": "canvas-2d-fillRect-basic",
+      "category": "rectangles",
+      "description": "fillRect draws a filled rectangle at the specified coordinates",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-fillrect",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = '#ff0000'; ctx.fillRect(10, 10, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-strokeRect-basic",
+      "category": "rectangles",
+      "description": "strokeRect draws a rectangle outline",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-strokerect",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.strokeStyle = '#0000ff'; ctx.strokeRect(10, 10, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-clearRect-basic",
+      "category": "rectangles",
+      "description": "clearRect clears a rectangular region to transparent",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-clearrect",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 100, 100); ctx.clearRect(10, 10, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-fillStyle-hex6",
+      "category": "styles",
+      "description": "fillStyle accepts #rrggbb hex colors",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-fillstyle",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = '#00ff00'; ctx.fillRect(0, 0, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-fillStyle-named",
+      "category": "styles",
+      "description": "fillStyle accepts named CSS colors (red, blue, etc.)",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-fillstyle",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-beginPath-fill",
+      "category": "paths",
+      "description": "beginPath + moveTo + lineTo + closePath + fill draws a filled polygon",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-beginpath",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = '#ff0000'; ctx.beginPath(); ctx.moveTo(10, 10); ctx.lineTo(60, 10); ctx.lineTo(35, 60); ctx.closePath(); ctx.fill();"
+    },
+    {
+      "id": "canvas-2d-translate",
+      "category": "transforms",
+      "description": "translate shifts the origin before drawing",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-translate",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.translate(20, 20); ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 50, 50);"
+    },
+    {
+      "id": "canvas-2d-scale",
+      "category": "transforms",
+      "description": "scale scales the drawing",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-scale",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.scale(2, 2); ctx.fillStyle = '#ff0000'; ctx.fillRect(10, 10, 25, 25);"
+    },
+    {
+      "id": "canvas-2d-save-restore",
+      "category": "transforms",
+      "description": "save/restore preserves and restores the transform state",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-save",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.save(); ctx.translate(50, 50); ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 20, 20); ctx.restore(); ctx.fillStyle = '#0000ff'; ctx.fillRect(0, 0, 20, 20);"
+    },
+    {
+      "id": "canvas-2d-multiple-fillRect",
+      "category": "rectangles",
+      "description": "Multiple fillRect calls with different colors accumulate in the scene",
+      "spec": "https://html.spec.whatwg.org/multipage/canvas.html#dom-context-2d-fillrect",
+      "script": "var c = document.createElement('canvas'); var ctx = c.getContext('2d'); ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 30, 30); ctx.fillStyle = '#00ff00'; ctx.fillRect(30, 30, 30, 30);"
+    }
+  ]
+}

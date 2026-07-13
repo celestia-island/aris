@@ -1,11 +1,9 @@
-# クイックスタート — ソースから SD カードまで
+# クイックスタート — ARIS をビルド
 
 ## 前提条件
 
-- Linux x86_64 または ARM64 ホスト
 - Rust 1.85+（`rustup` 経由）
-- `just` コマンドランナー（`cargo install just`）
-- SD カードリーダー + microSD（≥ 8 GB）
+- `just`（`cargo install just`）
 
 ## 1. クローン
 
@@ -14,46 +12,37 @@ git clone https://github.com/celestia-island/aris
 cd aris
 ```
 
-## 2. クロスコンパイルのセットアップ
+## 2. ブラウザエンジンをビルド
 
 ```bash
-just setup-cross
+cargo build -p aris-render --release
+cargo build -p aris-render --release --features winit-backend
+cargo build -p aris-wasm --release
 ```
 
-Rust ターゲット（`aarch64-unknown-linux-musl` など）をインストールし、お使いのディストリビューション向けの GCC ツールチェーン手順を表示します。
-
-## 3. ファームウェアのビルド
+## 3. サンプルを実行
 
 ```bash
-just build-board nanopi-r3s
+cargo run -p aris-render --bin render_test
+cargo run -p aris-render --bin render_lagrange -- path/to/page.html
+cargo run -p aris-render --bin render_window --features winit-backend
+cargo run -p aris-wasm --bin render_wasm -- path/to/component.wasm
 ```
 
-`output/nanopi-r3s/image.img` を生成します。
+## 4. プラットフォーム設定
 
-## 4. SD カードへの書き込み
+### Linux
 
 ```bash
-just flash-sd /dev/sdX
+sudo apt install libx11-dev libxkbcommon-dev libwayland-dev
 ```
 
-`/dev/sdX` をお使いの SD カードデバイスに置き換えてください（`lsblk` で確認）。
+macOS / Windows は追加依存なし。
 
-## 5. 起動
-
-SD カードを NanoPi R3S に挿入し、5V USB-C 電源を接続します。
-
-- **シリアルコンソール**：USB-TTL を 3 ピンのデバッグヘッダー（GND/TX/RX）に接続、1500000 ボー、8N1
-- **SSH**：起動後、`ssh root@<ip>`（WAN eth0 から DHCP で取得）
-
-## 6. 検証
+## 5. テスト実行
 
 ```bash
-# Check aris-core is running (PID 1)
-ps aux | grep aris-core
-
-# Check evernight is running
-ps aux | grep evernight
-
-# Check device registration with entelecheia
-tail -f /var/log/evernight.log
+cargo test -p aris-render
+cargo test -p aris-js
+cargo test -p aris-wasm
 ```

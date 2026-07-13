@@ -1,11 +1,10 @@
-# Quick Start — From Source to SD Card
+# Quick Start — Build ARIS
 
 ## Prerequisites
 
-- Linux x86_64 or ARM64 host
 - Rust 1.85+ (via `rustup`)
 - `just` command runner (`cargo install just`)
-- SD card reader + microSD (≥ 8 GB)
+- For winit backend: system dependencies for `winit` (see below)
 
 ## 1. Clone
 
@@ -14,46 +13,71 @@ git clone https://github.com/celestia-island/aris
 cd aris
 ```
 
-## 2. Setup cross-compilation
+## 2. Build the Browser Engine
+
+```bash
+# Build the render pipeline (no window)
+cargo build -p aris-render --release
+
+# Build with desktop window support
+cargo build -p aris-render --release --features winit-backend
+
+# Build the WASM host (for tairitsu components)
+cargo build -p aris-wasm --release
+```
+
+## 3. Run Examples
+
+```bash
+# Render an HTML string to pixels (headless)
+cargo run -p aris-render --bin render_test
+
+# Render a lagrange documentation page
+cargo run -p aris-render --bin render_lagrange -- path/to/page.html
+
+# Open a desktop browser window
+cargo run -p aris-render --bin render_window --features winit-backend
+
+# Render a WASM component (tairitsu UI)
+cargo run -p aris-wasm --bin render_wasm -- path/to/component.wasm
+```
+
+## 4. Platform-Specific Setup
+
+### Linux
+
+```bash
+# Ubuntu/Debian
+sudo apt install libx11-dev libxkbcommon-dev libwayland-dev
+
+# Build with winit
+cargo build -p aris-render --release --features winit-backend
+```
+
+### macOS
+
+No extra dependencies needed.
+
+### Windows
+
+No extra dependencies needed for winit.
+
+## 5. Cross-Compile for Embedded (aarch64)
 
 ```bash
 just setup-cross
+cargo build -p aris-render --release --target aarch64-unknown-linux-musl
 ```
 
-This installs Rust targets (`aarch64-unknown-linux-musl` etc.) and prints GCC toolchain instructions for your distro.
-
-## 3. Build firmware
+## 6. Run Tests
 
 ```bash
-just build-board nanopi-r3s
+cargo test -p aris-render
+cargo test -p aris-js
+cargo test -p aris-wasm
 ```
 
-Produces `output/nanopi-r3s/image.img`.
+## Next Steps
 
-## 4. Flash to SD card
-
-```bash
-just flash-sd /dev/sdX
-```
-
-Replace `/dev/sdX` with your SD card device (check with `lsblk`).
-
-## 5. Boot
-
-Insert the SD card into the NanoPi R3S, connect 5V USB-C power.
-
-- **Serial console**: Connect USB-TTL to the 3-pin debug header (GND/TX/RX), 1500000 baud, 8N1
-- **SSH**: After boot, `ssh root@<ip>` (DHCP from WAN eth0)
-
-## 6. Verify
-
-```bash
-# Check aris-core is running (PID 1)
-ps aux | grep aris-core
-
-# Check evernight is running
-ps aux | grep evernight
-
-# Check device registration with entelecheia
-tail -f /var/log/evernight.log
-```
+- [Architecture Overview](../architecture/overview.md) — understand the rendering pipeline
+- [Deployment Guide](../guides/deployment.md) — deploy on embedded hardware

@@ -1,0 +1,11 @@
+[package]
+name = "aris-js"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Boa JS engine integration for aris HMI"
+
+[dependencies]
+tracing.workspace = true
+boa_engine = "=0.21.1"

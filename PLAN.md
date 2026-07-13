@@ -1,15 +1,47 @@
 # aris — 项目状态与计划 (PLAN)
 
-> 本文件于 **2026-07-04** 更新，记录项目当前状态、近期进展与后续计划。
-> 原有详细计划已保留于文末「既有详细计划（存档）」。
+> 本文件于 **2026-07-13** 更新，记录项目当前状态、近期进展与后续计划。
+> 定位已于 2026-07-10 变更为「基于 servo 的浏览器引擎」——详见第 6 节。
+> 原有工业网关发行版计划已保留于文末「既有详细计划（存档）」。
+
+## 0. 浏览器功能状态（2026-07-13）
+
+aris_browser 现在是一个功能完整的桌面浏览器：
+
+### 已实现
+
+| 功能 | 状态 |
+|------|------|
+| HTML/CSS 渲染 (html5ever + stylo + taffy + parley + Vello CPU) | ✅ |
+| SVG 图片渲染 (usvg) + data: URI | ✅ |
+| 多标签页 (Ctrl+T/W/Tab，标签栏 UI) | ✅ |
+| 导航 (URL/链接/表单/历史/后退前进) | ✅ |
+| HTTP(S) + file:// 网络 (子资源/缓存/cookies) | ✅ |
+| 浏览器外壳 (Lucide 图标/地址栏/favicon/状态栏/关闭) | ✅ |
+| 鼠标+键盘交互 (悬停/点击/滚动/文本输入) | ✅ |
+| 右键菜单、Ctrl+F 查找、Ctrl+=缩放 | ✅ |
+| JS: `<script>` + onclick + addEventListener + DOM 操作 | ✅ |
+| JS: console.log + window.location + setTimeout/setInterval | ✅ |
+| 剪贴板 (Ctrl+C/V)、暗色模式检测、可拖拽滚动条 | ✅ |
+| 历史持久化 (重启恢复)、真实 favicon 抓取 | ✅ |
+| 下载管理 (Content-Disposition → ~/Downloads/) | ✅ |
+
+### 远期目标（需要架构级工作）
+
+| 功能 | 难度 | 说明 |
+|------|------|------|
+| Canvas 2D API | 中 | 需要 Boa 绑定 + 离屏 RGBA 缓冲区 + 合成 |
+| WebGL | 极难 | 需要 GPU 管线；aris 用 CPU 光栅化 (vello_cpu)，没有 OpenGL 上下文 |
+| WebRTC | 极难 | 需要 P2P 信令 + 媒体编解码 + SDP/ICE |
+| 内联 `<svg>` 元素渲染 | 中 | blitz-dom 的 svg feature 只处理 `<img src=*.svg>`，内联 SVG 需要自定义 paint |
 
 ## 1. 项目概述
 
 - **名称**：`aris`
-- **简介**：兼容 Linux 标准的发行版，附带为 evernight 与 shittim-chest 定制的桌面环境，对标工业 HMI 与上位机。
+- **简介**：基于 servo 构建的浏览器引擎——可嵌入、可独立运行。底层设施已部分替换 servo 官方组件（SpiderMonkey → Boa、WebRender → Vello CPU）。可运行于 kei 内核或标准 Linux。
 - **远程仓库**：本地仓库（无 origin）
-- **技术栈**：Rust / just
-- **类别**：firmware
+- **技术栈**：Rust / just / html5ever / stylo / taffy / parley / vello
+- **类别**：browser-engine
 
 ## 2. 当前状态
 
@@ -168,7 +200,7 @@ celestia-island/
 | 文字排版 | parley | 纯 Rust，文字 shaping/breaking |
 | 光栅化 | vello_cpu | 纯 Rust CPU 光栅化，`render_to_buffer` 直接写像素 buffer |
 | 渲染集成 | blitz-dom + blitz-renderer-vello | 已组装好 parse→style→layout→paint 管线，无 JS |
-| JS 引擎 | boa_engine | 纯 Rust，替换 SpiderMonkey；entelecheia 已有集成经验 |
+| JS 引擎 | boa_engine 0.20 | 纯 Rust，替换 SpiderMonkey；entelecheia 已有集成经验 |
 | WASM 运行时 | wasmtime | tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 接入 |
 | 显示后端 | /dev/fb0 mmap | vello_cpu 输出 RGBA → memcpy 到 fb0，无需 DRM/Wayland |
 
@@ -298,6 +330,7 @@ tairitsu WASM 组件（Wasmtime 执行）
 4. **不用 Vue/echarts**：UI 框架用 tairitsu（WASM Component Model）+ hikari 组件库
 5. **WASI 直接接入**：tairitsu 的 WASM 组件通过 Wasmtime 执行，WASI 成为应用层和内核的原生接口
 6. **完整 ABI 兼容层**：aris 实现 gcompat 级别的 Linux 兼容，支持任意 arm64 Linux 二进制
+7. **Boa 0.20 + 独立工具链**：aris 顶层工具链锁定 rustc 1.85（与 kei 内核一致），但 Boa 0.21 要求 rustc 1.88，其正则后端 regress 0.10.5 使用了 2024 edition 才稳定的 let-chains。因此 aris-js 作为独立 workspace（`[workspace]` 空表隔离），并通过本地 `rust-toolchain.toml` 锁定 `stable`（≥1.88）工具链。Boa 0.20 与 0.21 的公共 API（`Context::default`/`Source`/`eval`/`JsValue::to_string`）完全一致，升级仅受 MSRV 阻塞。
 
 ---
 

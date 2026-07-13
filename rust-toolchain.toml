@@ -1,5 +1,10 @@
 [toolchain]
-channel = "1.85"
+# 1.91+ required by wasmtime ^43 (tairitsu-ssr dependency) and Boa 0.21.
+# 1.85 was the original pin; bumped to enable the full browser stack
+# (tairitsu/wasmtime WASI components + Boa JS engine) in aris-render.
+# Use "stable" (currently 1.91.x) so it resolves from the locally installed
+# toolchain without needing a dated channel download.
+channel = "stable"
 
 targets = [
     "aarch64-unknown-linux-musl",

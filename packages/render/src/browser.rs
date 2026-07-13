@@ -1,0 +1,889 @@
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Browser shell services — networking, navigation, and history.
+//!
+//! This module wires the three `blitz_traits` providers that turn a static
+//! HTML renderer into a working browser:
+//!
+//! - [`HttpNetProvider`] — fetches `<img>`, `<link rel=stylesheet>`, `@font-face`
+//!   and other subresources over HTTP(S) or `file://`. Without it, blitz-dom's
+//!   mutator issues `fetch` calls that go nowhere.
+//! - [`BrowserNavigationProvider`] — receives link clicks and form submits from
+//!   blitz-dom and triggers a top-level page load via [`BrowserState`].
+//! - [`BrowserShellProvider`] — bridges `request_redraw`, window title, IME, and
+//!   clipboard requests from blitz-dom back into the render loop.
+//!
+//! [`BrowserState`] is shared (`Arc`) between all three providers and the winit
+//! event loop. Page loads produced by providers or the address bar are delivered
+//! to the render loop through a `crossbeam`-style channel so the loop can swap
+//! the active `HtmlDocument` on the main thread.
+
+#![cfg(feature = "winit")]
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use bytes::Bytes;
+use tracing::{debug, warn};
+use url::Url;
+
+use blitz_traits::navigation::{NavigationOptions, NavigationProvider};
+use blitz_traits::net::{NetHandler, NetProvider, Request};
+use blitz_traits::shell::ShellProvider;
+
+/// A request from a provider to the render loop to load a new document.
+#[derive(Debug, Clone)]
+pub struct LoadRequest {
+    /// The HTML (or other text) to render.
+    pub html: String,
+    /// The canonical URL of the document — used as the base URL so relative
+    /// links/resources resolve correctly, and shown in the address bar.
+    pub url: Url,
+}
+
+/// Shared browser state: navigation history, the current URL, and a channel for
+/// providers/threads to ask the render loop to load a new page.
+///
+/// The render loop holds one half of the channel (it polls
+/// [`pending_loads`](Self::pending_loads) each frame); providers and fetch
+/// threads push [`LoadRequest`]s through the other half.
+pub struct BrowserState {
+    /// Current document URL (last successfully loaded). Set by the render loop.
+    current_url: Mutex<Option<Url>>,
+    /// Full navigation history (URLs only).
+    history: Mutex<Vec<Url>>,
+    /// Index into `history` of the current entry.
+    history_idx: Mutex<usize>,
+    /// Outstanding page-load requests delivered from providers/threads.
+    /// MPSC-style: pushers `lock().push()`, the loop `lock().drain()`.
+    pending_loads: Mutex<Vec<LoadRequest>>,
+    /// Set by [`BrowserShellProvider::request_redraw`] to wake the loop.
+    pub redraw_requested: AtomicBool,
+    /// True while a navigation is in flight (set on load_url, cleared on commit).
+    pub navigating: AtomicBool,
+    /// Latest window-title string pushed by the shell provider.
+    pending_title: Mutex<Option<String>>,
+    /// In-memory clipboard buffer for text selection copy/paste. Backed by the
+    /// OS clipboard when possible; falls back to this buffer.
+    clipboard: Mutex<Option<String>>,
+    /// Latest IME state pushed by the shell provider.
+    pending_ime: Mutex<Option<(bool, f32, f32, f32, f32)>>,
+}
+
+impl BrowserState {
+    pub fn new() -> Self {
+        Self {
+            current_url: Mutex::new(None),
+            history: Mutex::new(Vec::new()),
+            history_idx: Mutex::new(0),
+            pending_loads: Mutex::new(Vec::new()),
+            redraw_requested: AtomicBool::new(false),
+            navigating: AtomicBool::new(false),
+            pending_title: Mutex::new(None),
+            clipboard: Mutex::new(None),
+            pending_ime: Mutex::new(None),
+        }
+    }
+
+    /// Path to the session file: `~/.aris/session.json`.
+    fn session_path() -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+        let dir = std::path::Path::new(&home).join(".aris");
+        let _ = std::fs::create_dir_all(&dir);
+        Some(dir.join("session.json"))
+    }
+
+    /// Save the current session (history URLs) to `~/.aris/session.json`.
+    pub fn save_session(&self) {
+        let Some(path) = Self::session_path() else {
+            return;
+        };
+        let history = self.history.lock().unwrap();
+        let urls: Vec<String> = history.iter().map(|u| u.to_string()).collect();
+        let idx = *self.history_idx.lock().unwrap();
+        let session = serde_json::json!({
+            "history": urls,
+            "history_idx": idx,
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&session) {
+            let _ = std::fs::write(&path, json);
+            debug!("saved session: {} urls to {}", urls.len(), path.display());
+        }
+    }
+
+    /// Load the saved session and restore history. Returns the URLs to load
+    /// (the active entry is loaded by the caller).
+    pub fn load_session(&self) -> Vec<Url> {
+        let Some(path) = Self::session_path() else {
+            return Vec::new();
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Vec::new();
+        };
+        let mut restored = Vec::new();
+        if let Some(urls) = json.get("history").and_then(|v| v.as_array()) {
+            for u in urls {
+                if let Some(s) = u.as_str()
+                    && let Ok(url) = Url::parse(s)
+                {
+                    restored.push(url);
+                }
+            }
+        }
+        let idx = json
+            .get("history_idx")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        if !restored.is_empty() {
+            *self.history.lock().unwrap() = restored.clone();
+            *self.history_idx.lock().unwrap() = idx.min(restored.len() - 1);
+            let current = restored.get(idx).cloned();
+            *self.current_url.lock().unwrap() = current;
+        }
+        debug!("loaded session: {} urls", restored.len());
+        restored
+    }
+
+    /// The URL of the currently displayed document, if any.
+    pub fn current_url(&self) -> Option<Url> {
+        self.current_url.lock().unwrap().clone()
+    }
+
+    /// Drain any page-load requests queued by providers/threads. Called by the
+    /// render loop each frame.
+    pub fn drain_loads(&self) -> Vec<LoadRequest> {
+        std::mem::take(&mut *self.pending_loads.lock().unwrap())
+    }
+
+    /// Take and clear the latest pending window title, if any.
+    pub fn take_title(&self) -> Option<String> {
+        self.pending_title.lock().unwrap().take()
+    }
+
+    /// Take and clear the latest pending IME area request.
+    pub fn take_ime(&self) -> Option<(bool, f32, f32, f32, f32)> {
+        self.pending_ime.lock().unwrap().take()
+    }
+
+    /// Record that a document was loaded at `url` (called by the render loop
+    /// after it swaps in the new `HtmlDocument`).
+    ///
+    /// For a *forward* navigation (new entry) this truncates any forward-history
+    /// and appends. For a *history* navigation (back/forward/reload), where
+    /// `go_back`/`go_forward` already moved the index and the URL matches the
+    /// entry at that index, we only update `current_url` without truncating —
+    /// otherwise we'd wipe the forward history we just stepped back from.
+    pub fn commit_load(&self, url: Url) {
+        // Navigation completed — clear the loading indicator.
+        self.navigating.store(false, Ordering::Relaxed);
+        let mut history = self.history.lock().unwrap();
+        let mut idx = self.history_idx.lock().unwrap();
+        // History navigation: the index was moved by go_back/go_forward and the
+        // URL matches the entry there. Don't truncate — just record current_url.
+        if history.get(*idx).is_some_and(|entry| *entry == url) {
+            *self.current_url.lock().unwrap() = Some(url);
+            return;
+        }
+        // Forward navigation: drop any forward entries and append.
+        history.truncate(*idx + 1);
+        history.push(url.clone());
+        *idx = history.len() - 1;
+        *self.current_url.lock().unwrap() = Some(url);
+    }
+
+    /// Can we go back?
+    pub fn can_go_back(&self) -> bool {
+        let idx = *self.history_idx.lock().unwrap();
+        idx > 0 && !self.history.lock().unwrap().is_empty()
+    }
+
+    /// Can we go forward?
+    pub fn can_go_forward(&self) -> bool {
+        let idx = *self.history_idx.lock().unwrap();
+        let len = self.history.lock().unwrap().len();
+        idx + 1 < len
+    }
+
+    /// Navigate back in history. Returns `true` if a load was queued.
+    ///
+    /// Takes `self: &Arc<Self>` so the load can hand a clone to a fetch thread.
+    pub fn go_back(self: &Arc<Self>) -> bool {
+        let history = self.history.lock().unwrap();
+        let mut idx = self.history_idx.lock().unwrap();
+        if *idx == 0 || history.is_empty() {
+            return false;
+        }
+        *idx -= 1;
+        let url = history[*idx].clone();
+        drop(history);
+        drop(idx);
+        self.load_url(&url);
+        true
+    }
+
+    /// Navigate forward in history. Returns `true` if a load was queued.
+    pub fn go_forward(self: &Arc<Self>) -> bool {
+        let history = self.history.lock().unwrap();
+        let mut idx = self.history_idx.lock().unwrap();
+        if *idx + 1 >= history.len() {
+            return false;
+        }
+        *idx += 1;
+        let url = history[*idx].clone();
+        drop(history);
+        drop(idx);
+        self.load_url(&url);
+        true
+    }
+
+    /// Reload the current URL. Returns `true` if a load was queued.
+    pub fn reload(self: &Arc<Self>) -> bool {
+        let Some(url) = self.current_url() else {
+            return false;
+        };
+        self.load_url(&url);
+        true
+    }
+
+    /// Begin loading `input`, interpreting it as a URL, file path, or search
+    /// query. Called from the address bar (Enter) and external callers.
+    pub fn navigate_input(self: &Arc<Self>, input: &str) {
+        let url = normalize_input_to_url(input);
+        self.load_url(&url);
+    }
+
+    /// Fetch a URL (possibly off-thread) and queue a [`LoadRequest`] for the
+    /// render loop when the bytes arrive. History is committed by the render
+    /// loop in [`commit_load`](Self::commit_load); for back/forward/reload the
+    /// caller has already moved the history index.
+    fn load_url(self: &Arc<Self>, url: &Url) {
+        let scheme = url.scheme();
+        // Mark navigation in flight for the loading indicator.
+        self.navigating.store(true, Ordering::Relaxed);
+        match scheme {
+            "http" | "https" => {
+                let url = url.clone();
+                let state = Arc::clone(self);
+                // Spawn a fetch thread so we never block the render loop.
+                thread::spawn(move || match fetch_text(&url) {
+                    Ok(html) => state.queue_load(html, url),
+                    Err(e) => {
+                        warn!("fetch {}: {}", url, e);
+                        let err_html = error_page(url.as_ref(), &e);
+                        state.queue_load(err_html, url);
+                    }
+                });
+            }
+            "file" => {
+                let path = url
+                    .to_file_path()
+                    .unwrap_or_else(|_| PathBuf::from(url.path()));
+                let url = url.clone();
+                match std::fs::read_to_string(&path) {
+                    Ok(html) => self.queue_load(html, url),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        warn!("file {}: {}", path.display(), msg);
+                        let err_html = error_page(&path.display().to_string(), &msg);
+                        self.queue_load(err_html, url);
+                    }
+                }
+            }
+            "about" => {
+                let html = about_page(url.as_str());
+                self.queue_load(html, url.clone());
+            }
+            "data" => {
+                // Best-effort: strip the data: prefix and treat the payload as HTML.
+                let body = url.as_str().trim_start_matches("data:");
+                let html = body
+                    .split_once(',')
+                    .map(|(_mime, data)| data.to_string())
+                    .unwrap_or_default();
+                self.queue_load(html, url.clone());
+            }
+            _ => {
+                warn!("unsupported scheme '{}': {}", scheme, url);
+                let err_html = error_page(url.as_ref(), &format!("unsupported scheme '{scheme}'"));
+                self.queue_load(err_html, url.clone());
+            }
+        }
+    }
+
+    /// Push a completed page load onto the channel for the render loop.
+    fn queue_load(&self, html: String, url: Url) {
+        self.pending_loads
+            .lock()
+            .unwrap()
+            .push(LoadRequest { html, url });
+        self.redraw_requested.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Default for BrowserState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// [`BrowserState`] is always held inside an `Arc<BrowserState>` shared between
+// the render loop and the providers. The `go_back` / `go_forward` / `reload` /
+// `navigate_input` / `load_url` methods therefore take `self: &Arc<Self>` so a
+// clone can be handed to a spawned fetch thread.
+
+/// HTTP + `file://` networking for blitz-dom subresources.
+///
+/// Each `fetch` spawns a thread that performs a blocking GET and delivers the
+/// body to the handler. This keeps the render loop non-blocking without pulling
+/// an async runtime into the renderer. Responses are cached in-memory keyed by
+/// URL so that repeated subresource requests (reload, duplicate images) resolve
+/// instantly, and cookies are persisted across requests via the shared client's
+/// cookie store.
+pub struct HttpNetProvider {
+    /// Shared client so connection pooling + cookie storage kick in.
+    client: reqwest::blocking::Client,
+    /// In-memory response cache: URL -> body bytes. Held in an Arc so the
+    /// spawned fetch threads can populate it.
+    cache: Arc<Mutex<Vec<(String, Bytes)>>>,
+}
+
+impl HttpNetProvider {
+    pub fn new() -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("aris/0.1 (like Gecko)")
+            .cookie_store(true)
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
+        Self {
+            client,
+            cache: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Cap the in-memory cache so it can't grow without bound.
+    const CACHE_MAX: usize = 128;
+
+    fn cache_get(cache: &Mutex<Vec<(String, Bytes)>>, url: &str) -> Option<Bytes> {
+        cache
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(u, _)| u == url)
+            .map(|(_, b)| b.clone())
+    }
+
+    fn cache_put(cache: &Mutex<Vec<(String, Bytes)>>, url: String, bytes: Bytes) {
+        let mut c = cache.lock().unwrap();
+        if c.iter().any(|(u, _)| u == &url) {
+            return;
+        }
+        if c.len() >= Self::CACHE_MAX {
+            c.remove(0);
+        }
+        c.push((url, bytes));
+    }
+}
+
+impl Default for HttpNetProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NetProvider for HttpNetProvider {
+    fn fetch(&self, _doc_id: usize, request: Request, handler: Box<dyn NetHandler>) {
+        let url = request.url.clone();
+        // Cache hit: deliver immediately without a network round-trip.
+        if let Some(cached) = Self::cache_get(&self.cache, url.as_str()) {
+            debug!("net cache hit: {}", url);
+            handler.bytes(url.to_string(), cached);
+            return;
+        }
+        let client = self.client.clone();
+        let cache = Arc::clone(&self.cache);
+        // `handler` is `Send + Sync`, so we can move it into a thread.
+        thread::spawn(move || {
+            let bytes_result = load_url_bytes(&client, &url);
+            match bytes_result {
+                Ok(bytes) => {
+                    Self::cache_put(&cache, url.to_string(), bytes.clone());
+                    handler.bytes(url.to_string(), bytes);
+                }
+                Err(e) => {
+                    debug!("net fetch {}: {}", url, e);
+                    // blitz-dom has no error callback; we simply don't call
+                    // `handler.bytes`, which leaves the resource unloaded.
+                }
+            }
+        });
+    }
+}
+
+/// Fetch the body of a URL as `Bytes`. Handles `http(s)` and `file://`.
+fn load_url_bytes(client: &reqwest::blocking::Client, url: &Url) -> Result<Bytes, String> {
+    match url.scheme() {
+        "http" | "https" => {
+            let resp = client.get(url.as_str()).send().map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            let bytes = resp.bytes().map_err(|e| e.to_string())?;
+            Ok(bytes)
+        }
+        "file" => {
+            let path = url
+                .to_file_path()
+                .map_err(|_| "invalid file path".to_string())?;
+            let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+            Ok(Bytes::from(data))
+        }
+        "data" => {
+            // data:[<mediatype>][;base64],<data>
+            let body = url.as_str().trim_start_matches("data:");
+            let (meta, data) = body.split_once(',').unwrap_or(("", body));
+            if meta.contains("base64") {
+                let bytes = data_uri_base64_decode(data);
+                bytes.map_err(|e| format!("base64 decode: {}", e))
+            } else {
+                // URL-decoded raw data.
+                Ok(Bytes::from(
+                    url::form_urlencoded::parse(data.as_bytes())
+                        .flat_map(|(k, _)| k.as_bytes().to_vec())
+                        .collect::<Vec<u8>>(),
+                ))
+            }
+        }
+        _ => Err(format!("unsupported scheme: {}", url.scheme())),
+    }
+}
+
+/// Decode a base64 string (data: URI payload) into bytes.
+fn data_uri_base64_decode(input: &str) -> Result<Bytes, String> {
+    // Simple base64 decoder (avoids pulling a base64 crate).
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut buf = Vec::with_capacity(input.len() * 3 / 4);
+    let mut bits: u32 = 0;
+    let mut count = 0;
+    for ch in input.bytes() {
+        if ch == b'=' || ch == b'\n' || ch == b'\r' {
+            continue;
+        }
+        let val = TABLE
+            .iter()
+            .position(|&c| c == ch)
+            .ok_or("invalid base64 char")? as u32;
+        bits = (bits << 6) | val;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            buf.push((bits >> count) as u8);
+        }
+    }
+    Ok(Bytes::from(buf))
+}
+
+/// Fetch a URL as UTF-8 text (for top-level document loads). If the response is
+/// a downloadable file (Content-Disposition: attachment, or a binary
+/// Content-Type), save it to ~/Downloads/ and return a "download started" page.
+fn fetch_text(url: &Url) -> Result<String, String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("aris/0.1 (like Gecko)")
+        .cookie_store(true)
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    match url.scheme() {
+        "http" | "https" => {
+            let resp = client.get(url.as_str()).send().map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            // Check if this is a downloadable resource.
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
+            let content_disposition = resp
+                .headers()
+                .get("content-disposition")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_lowercase();
+            if should_download(&content_type, &content_disposition) {
+                let filename = parse_filename(&content_disposition, url);
+                let bytes = resp.bytes().map_err(|e| e.to_string())?;
+                let saved_path = save_download(&filename, &bytes);
+                return Ok(download_page(&filename, saved_path.as_deref(), bytes.len()));
+            }
+            let text = resp.text().map_err(|e| e.to_string())?;
+            Ok(text)
+        }
+        "file" => {
+            let path = url
+                .to_file_path()
+                .map_err(|_| "invalid file path".to_string())?;
+            std::fs::read_to_string(&path).map_err(|e| e.to_string())
+        }
+        _ => Err(format!("unsupported scheme: {}", url.scheme())),
+    }
+}
+
+/// Navigation provider: link clicks and form submits arrive here.
+pub struct BrowserNavigationProvider {
+    state: Arc<BrowserState>,
+}
+
+impl BrowserNavigationProvider {
+    pub fn new(state: Arc<BrowserState>) -> Self {
+        Self { state }
+    }
+}
+
+impl NavigationProvider for BrowserNavigationProvider {
+    fn navigate_to(&self, options: NavigationOptions) {
+        debug!("navigate_to: {}", options.url);
+        // Link clicks / form submits always push a new history entry.
+        self.state.load_url(&options.url);
+    }
+}
+
+/// Shell provider: bridges blitz-dom shell requests back to the render loop.
+pub struct BrowserShellProvider {
+    state: Arc<BrowserState>,
+}
+
+impl BrowserShellProvider {
+    pub fn new(state: Arc<BrowserState>) -> Self {
+        Self { state }
+    }
+}
+
+impl ShellProvider for BrowserShellProvider {
+    fn request_redraw(&self) {
+        self.state.redraw_requested.store(true, Ordering::Relaxed);
+    }
+
+    fn set_window_title(&self, title: String) {
+        *self.state.pending_title.lock().unwrap() = Some(title);
+        self.state.redraw_requested.store(true, Ordering::Relaxed);
+    }
+
+    fn set_ime_enabled(&self, is_enabled: bool) {
+        // Record (enabled, 0,0,0,0); the loop forwards to the winit window.
+        self.state
+            .pending_ime
+            .lock()
+            .unwrap()
+            .replace((is_enabled, 0.0, 0.0, 0.0, 0.0));
+    }
+
+    fn set_ime_cursor_area(&self, x: f32, y: f32, width: f32, height: f32) {
+        // Assume enabled when an area is set.
+        self.state
+            .pending_ime
+            .lock()
+            .unwrap()
+            .replace((true, x, y, width, height));
+    }
+
+    fn set_clipboard_text(&self, text: String) -> Result<(), blitz_traits::shell::ClipboardError> {
+        // Try the OS clipboard first; fall back to the in-memory buffer.
+        if let Err(e) = os_clipboard_set(&text) {
+            debug!("os clipboard set failed ({}), buffering", e);
+        }
+        *self.state.clipboard.lock().unwrap() = Some(text);
+        Ok(())
+    }
+
+    fn get_clipboard_text(&self) -> Result<String, blitz_traits::shell::ClipboardError> {
+        // Prefer the OS clipboard; fall back to the buffer.
+        match os_clipboard_get() {
+            Ok(s) => Ok(s),
+            Err(_) => Ok(self
+                .state
+                .clipboard
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_default()),
+        }
+    }
+}
+
+/// Set the OS clipboard text. Returns Err with a message if unavailable.
+#[cfg(target_os = "windows")]
+fn os_clipboard_set(text: &str) -> Result<(), String> {
+    use std::process::Command;
+    // clip.exe reads stdin and puts it on the clipboard.
+    let mut child = Command::new("clip")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    use std::io::Write;
+    if let Some(stdin) = child.stdin.as_mut() {
+        // clip.exe expects the system codepage; for non-ASCII this is lossy.
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    let _ = child.wait();
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn os_clipboard_set(_text: &str) -> Result<(), String> {
+    Err("clipboard not supported on this platform".to_string())
+}
+
+/// Get the OS clipboard text.
+#[cfg(target_os = "windows")]
+fn os_clipboard_get() -> Result<String, String> {
+    use std::process::Command;
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn os_clipboard_get() -> Result<String, String> {
+    Err("clipboard not supported on this platform".to_string())
+}
+
+// ── URL normalization ───────────────────────────────────────
+
+/// Turn arbitrary user input (from the address bar or CLI) into a `Url`.
+///
+/// - `http://` / `https://` / `file://` / `about:` / `data:` → as-is.
+/// - A bare path that exists on disk → `file://`.
+/// - Otherwise → treat as a web host if it contains a dot (add `https://`),
+///   or a search query (Google).
+pub fn normalize_input_to_url(input: &str) -> Url {
+    let trimmed = input.trim();
+
+    // Explicit scheme.
+    if let Ok(url) = Url::parse(trimmed)
+        && matches!(
+            url.scheme(),
+            "http" | "https" | "file" | "about" | "data" | "ftp"
+        )
+    {
+        return url;
+    }
+
+    // Existing local file path.
+    let p = Path::new(trimmed);
+    if p.exists()
+        && let Ok(url) = Url::from_file_path(canonicalize_path(p))
+    {
+        return url;
+    }
+
+    // Looks like a host (contains a dot, no spaces) → https://.
+    let looks_like_host = !trimmed.contains(' ')
+        && trimmed.contains('.')
+        && !trimmed.starts_with('/')
+        && !trimmed.contains(char::is_whitespace);
+    if looks_like_host && let Ok(url) = Url::parse(&format!("https://{}", trimmed)) {
+        return url;
+    }
+
+    // Fallback: a web search.
+    let q = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", trimmed)
+        .finish();
+    Url::parse(&format!("https://www.google.com/search?{}", q))
+        .unwrap_or_else(|_| Url::parse("about:blank").unwrap())
+}
+
+/// Resolve `.`/`..` in a path for a stable `file://` URL.
+fn canonicalize_path(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+// ── Download helpers ───────────────────────────────────────
+
+/// Decide if a response should be downloaded rather than rendered, based on
+/// Content-Type and Content-Disposition headers.
+fn should_download(content_type: &str, content_disposition: &str) -> bool {
+    // Content-Disposition: attachment → always download.
+    if content_disposition.contains("attachment") {
+        return true;
+    }
+    // Non-text/non-image content types that browsers download.
+    let renderable_prefixes = [
+        "text/html",
+        "text/plain",
+        "text/css",
+        "text/javascript",
+        "application/javascript",
+        "application/xhtml",
+        "application/json",
+        "application/xml",
+        "image/",
+        "application/octet-stream",
+    ];
+    // If Content-Type starts with a known renderable type, don't download
+    // (unless Content-Disposition said attachment, handled above).
+    for prefix in &renderable_prefixes {
+        if content_type.starts_with(prefix) {
+            return false;
+        }
+    }
+    // Unknown/binary content type → download.
+    !content_type.is_empty()
+}
+
+/// Parse a filename from Content-Disposition, falling back to the URL path.
+fn parse_filename(content_disposition: &str, url: &Url) -> String {
+    // Try filename="..." or filename=... from Content-Disposition.
+    if let Some(pos) = content_disposition.find("filename") {
+        let after = &content_disposition[pos..];
+        if let Some(eq) = after.find('=') {
+            let val = after[eq + 1..].trim();
+            let val = val.trim_matches('"').trim();
+            if !val.is_empty() {
+                return sanitize_filename(val);
+            }
+        }
+    }
+    // Fall back to the last path segment of the URL.
+    let path_segment = url
+        .path_segments()
+        .and_then(|mut p| p.next_back())
+        .unwrap_or("download");
+    sanitize_filename(path_segment)
+}
+
+/// Sanitize a filename: remove path separators and dangerous characters.
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect::<String>()
+        .trim()
+        .to_string()
+        .or_if_empty("download")
+}
+
+/// Save downloaded bytes to ~/Downloads/<filename>. Returns the full path.
+fn save_download(filename: &str, bytes: &[u8]) -> Option<String> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let downloads = std::path::Path::new(&home).join("Downloads");
+    let _ = std::fs::create_dir_all(&downloads);
+    // Avoid overwriting: append a counter if the file exists.
+    let mut path = downloads.join(filename);
+    let mut counter = 1;
+    while path.exists() {
+        let stem = path.file_stem()?.to_string_lossy().to_string();
+        let ext = path.extension().map(|e| e.to_string_lossy().to_string());
+        let new_name = match &ext {
+            Some(e) => format!("{} ({}).{}", stem, counter, e),
+            None => format!("{} ({})", stem, counter),
+        };
+        path = downloads.join(new_name);
+        counter += 1;
+    }
+    match std::fs::write(&path, bytes) {
+        Ok(_) => {
+            debug!(
+                "downloaded {} ({} bytes) to {}",
+                filename,
+                bytes.len(),
+                path.display()
+            );
+            Some(path.display().to_string())
+        }
+        Err(e) => {
+            warn!("download save error: {}", e);
+            None
+        }
+    }
+}
+
+/// A page shown after a download completes, confirming the filename + size.
+fn download_page(filename: &str, saved_path: Option<&str>, size: usize) -> String {
+    let path_display = saved_path.unwrap_or("(save failed)");
+    let size_kb = size / 1024;
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Download complete</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#1a1b26;color:#a9b1d6;padding:48px;text-align:center;}}\
+         h1{{color:#9ece6a;}}.file{{color:#7dcfff;font-size:18px;margin:16px 0;}}\
+         .path{{color:#565f89;font-size:13px;}}code{{background:#24283b;padding:2px 6px;border-radius:4px;}}</style></head>\
+         <body><h1>Download complete</h1>\
+         <div class=\"file\">📦 {} ({} KB)</div>\
+         <div class=\"path\">Saved to: <code>{}</code></div></body></html>",
+        escape_html(filename),
+        size_kb,
+        escape_html(path_display)
+    )
+}
+
+// Small helper to keep the closure-based filename fallback readable.
+trait OrEmpty {
+    fn or_if_empty(self, default: &str) -> String;
+}
+impl OrEmpty for String {
+    fn or_if_empty(self, default: &str) -> String {
+        if self.is_empty() {
+            default.to_string()
+        } else {
+            self
+        }
+    }
+}
+
+// ── Built-in pages ──────────────────────────────────────────
+
+/// Escape a string for safe interpolation into HTML text content.
+pub fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Render an `about:` or `data:` URL to inline HTML (synchronously, no fetch).
+pub fn about_or_data_html(url: &Url) -> String {
+    match url.scheme() {
+        "data" => {
+            let body = url.as_str().trim_start_matches("data:");
+            body.split_once(',')
+                .map(|(_mime, data)| data.to_string())
+                .unwrap_or_default()
+        }
+        _ => about_page(url.as_str()),
+    }
+}
+
+fn error_page(url: &str, err: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Load error</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#1a1b26;color:#a9b1d6;padding:48px;}}\
+         h1{{color:#f7768e;}}code{{background:#24283b;padding:2px 6px;border-radius:4px;color:#7dcfff;}}</style></head>\
+         <body><h1>Unable to load page</h1>\
+         <p>aris could not load <code>{}</code>.</p>\
+         <p><code>{}</code></p>\
+         <p>Check the URL or your network connection and try again.</p></body></html>",
+        escape_html(url),
+        escape_html(err)
+    )
+}
+
+fn about_page(url: &str) -> String {
+    if url == "about:blank" {
+        return "<!DOCTYPE html><html><head><title>about:blank</title></head><body></body></html>"
+            .to_string();
+    }
+    format!(
+        "<!DOCTYPE html><html><head><title>aris — about</title>\
+         <style>body{{font-family:system-ui,sans-serif;background:#1a1b26;color:#a9b1d6;padding:48px;}}\
+         h1{{color:#7aa2f7;}}code{{background:#24283b;padding:2px 6px;border-radius:4px;color:#7dcfff;}}</style></head>\
+         <body><h1>{}</h1><p>This is the aris browser engine.</p></body></html>",
+        escape_html(url)
+    )
+}

@@ -1,11 +1,9 @@
-# Быстрый старт — От исходного кода до SD-карты
+# Быстрый старт — Сборка ARIS
 
 ## Предварительные требования
 
-- Хост Linux x86_64 или ARM64
 - Rust 1.85+ (через `rustup`)
-- Командный раннер `just` (`cargo install just`)
-- Картридер SD + microSD (≥ 8 ГБ)
+- `just` (`cargo install just`)
 
 ## 1. Клонирование
 
@@ -14,46 +12,37 @@ git clone https://github.com/celestia-island/aris
 cd aris
 ```
 
-## 2. Настройка кросс-компиляции
+## 2. Сборка движка
 
 ```bash
-just setup-cross
+cargo build -p aris-render --release
+cargo build -p aris-render --release --features winit-backend
+cargo build -p aris-wasm --release
 ```
 
-Это устанавливает целевые платформы Rust (`aarch64-unknown-linux-musl` и т. д.) и выводит инструкции по цепочке инструментов GCC для вашего дистрибутива.
-
-## 3. Сборка прошивки
+## 3. Запуск примеров
 
 ```bash
-just build-board nanopi-r3s
+cargo run -p aris-render --bin render_test
+cargo run -p aris-render --bin render_lagrange -- страница.html
+cargo run -p aris-render --bin render_window --features winit-backend
+cargo run -p aris-wasm --bin render_wasm -- компонент.wasm
 ```
 
-Создаёт `output/nanopi-r3s/image.img`.
+## 4. Настройка платформы
 
-## 4. Запись на SD-карту
+### Linux
 
 ```bash
-just flash-sd /dev/sdX
+sudo apt install libx11-dev libxkbcommon-dev libwayland-dev
 ```
 
-Замените `/dev/sdX` на ваше устройство SD-карты (проверьте через `lsblk`).
+macOS / Windows: дополнительных зависимостей нет.
 
-## 5. Загрузка
-
-Вставьте SD-карту в NanoPi R3S, подключите питание USB-C 5V.
-
-- **Последовательная консоль**: Подключите USB-TTL к 3-контактному отладочному разъёму (GND/TX/RX), 1500000 бод, 8N1
-- **SSH**: После загрузки `ssh root@<ip>` (DHCP от WAN eth0)
-
-## 6. Проверка
+## 5. Тесты
 
 ```bash
-# Check aris-core is running (PID 1)
-ps aux | grep aris-core
-
-# Check evernight is running
-ps aux | grep evernight
-
-# Check device registration with entelecheia
-tail -f /var/log/evernight.log
+cargo test -p aris-render
+cargo test -p aris-js
+cargo test -p aris-wasm
 ```

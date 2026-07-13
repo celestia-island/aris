@@ -1,11 +1,9 @@
-# 快速开始 — 从源码到 SD 卡
+# 快速开始 — 构建 ARIS
 
 ## 前置条件
 
-- Linux x86_64 或 ARM64 主机
 - Rust 1.85+（通过 `rustup`）
 - `just` 命令运行器（`cargo install just`）
-- SD 卡读卡器 + microSD（≥ 8 GB）
 
 ## 1. 克隆
 
@@ -14,46 +12,52 @@ git clone https://github.com/celestia-island/aris
 cd aris
 ```
 
-## 2. 设置交叉编译
+## 2. 构建浏览器引擎
 
 ```bash
-just setup-cross
+# 构建渲染管线（无窗口）
+cargo build -p aris-render --release
+
+# 构建桌面窗口支持
+cargo build -p aris-render --release --features winit-backend
+
+# 构建 WASM host（用于 tairitsu 组件）
+cargo build -p aris-wasm --release
 ```
 
-此命令会安装 Rust 目标（`aarch64-unknown-linux-musl` 等），并打印适用于您发行版的 GCC 工具链说明。
-
-## 3. 构建固件
+## 3. 运行示例
 
 ```bash
-just build-board nanopi-r3s
+# 将 HTML 渲染为像素（无头模式）
+cargo run -p aris-render --bin render_test
+
+# 渲染 lagrange 文档页面
+cargo run -p aris-render --bin render_lagrange -- path/to/page.html
+
+# 打开桌面浏览器窗口
+cargo run -p aris-render --bin render_window --features winit-backend
+
+# 渲染 WASM 组件（tairitsu UI）
+cargo run -p aris-wasm --bin render_wasm -- path/to/component.wasm
 ```
 
-生成 `output/nanopi-r3s/image.img`。
+## 4. 平台特定设置
 
-## 4. 烧录到 SD 卡
+### Linux
 
 ```bash
-just flash-sd /dev/sdX
+sudo apt install libx11-dev libxkbcommon-dev libwayland-dev
+cargo build -p aris-render --release --features winit-backend
 ```
 
-将 `/dev/sdX` 替换为您的 SD 卡设备（用 `lsblk` 查看）。
+### macOS / Windows
 
-## 5. 启动
+无需额外依赖。
 
-将 SD 卡插入 NanoPi R3S，连接 5V USB-C 电源。
-
-- **串口控制台**：将 USB-TTL 连接到 3 针调试排针（GND/TX/RX），1500000 波特率，8N1
-- **SSH**：启动后，`ssh root@<ip>`（从 WAN eth0 通过 DHCP 获取）
-
-## 6. 验证
+## 5. 运行测试
 
 ```bash
-# Check aris-core is running (PID 1)
-ps aux | grep aris-core
-
-# Check evernight is running
-ps aux | grep evernight
-
-# Check device registration with entelecheia
-tail -f /var/log/evernight.log
+cargo test -p aris-render
+cargo test -p aris-js
+cargo test -p aris-wasm
 ```

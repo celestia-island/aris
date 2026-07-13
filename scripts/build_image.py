@@ -70,7 +70,7 @@ def create_ext4_image(
 
 def compile_boot_scr(board: str, output_dir: Path) -> Path | None:
     """Compile boot.cmd → boot.scr using mkimage inside Docker (lightweight)."""
-    boot_cmd = PROJECT_ROOT / "board" / board / "boot.cmd"
+    boot_cmd = PROJECT_ROOT / "configs" / "board" / board / "boot.cmd"
     if not boot_cmd.exists():
         return None
 

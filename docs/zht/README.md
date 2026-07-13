@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>相容 Linux 標準的發行版，附帶為 evernight 與 shittim-chest 客製化的桌面環境 —— 面向 HMI 與上位機</strong></p>
+<p align="center"><strong>基於 servo 構建的瀏覽器引擎——可嵌入、可獨立運行。底層設施已部分替換 servo 官方組件，改用純 Rust 替代方案。</strong></p>
 
 <div align="center">
 
@@ -27,58 +27,79 @@
 
 ## 簡介
 
-ARIS 是一套相容 Linux 標準的發行版，附帶為 evernight 與 shittim-chest 客製化的桌面環境。它對標的是工業 HMI 面板與上位機——操作員面前的機器，而非邊緣閘道。當整條 Celestia 技術棧向下觸及實體裝置時，ARIS 是操作員真正坐鎮其前的那套作業系統：一套熟悉的、相容 LSB 的 Linux，開機即進入專為監控與操控 evernight broker 和 shittim-chest 工作階段而打造的桌面。
+ARIS 是一個**源自 servo 的瀏覽器引擎**。既可以作為函式庫嵌入任何 Rust 應用，也可以作為獨立桌面瀏覽器運行。渲染管線由純 Rust crate 組裝——html5ever、stylo、taffy、parley、vello——servo 原有的 SpiderMonkey / WebRender / SWGL 依賴已被 Boa（JS 引擎）、Vello CPU（光柵化）和 Wasmtime（WASM 執行時）替代。
 
 ```mermaid
 flowchart TB
-    Ent["Entelecheia（雲/邊緣 AI 平台）"] --> Evn["evernight（協定代理）"]
-    Evn --> Aris["aris（作業系統核心 + 裝置韌體）"]
-    Aris --> HW["實體裝置（PLC / 感測器 / 閥門）"]
+    subgraph ARIS["ARIS 瀏覽器引擎"]
+        HTML["html5ever\nHTML 解析"]
+        CSS["stylo\nCSS 級聯"]
+        LAYOUT["taffy\n佈局"]
+        TEXT["parley\n文字排版"]
+        RAST["vello_cpu\n光柵化"]
+        JS["boa_engine\nJavaScript"]
+        WASM["wasmtime\nWASM 執行時"]
+    end
+    EMBED["嵌入 Rust 應用"] --> ARIS
+    ARIS --> STANDALONE["獨立桌面瀏覽器"]
+    ARIS --> FB["framebuffer / winit\n像素輸出"]
 ```
 
-## USB-C 零設定佈建
+## 為何不直接 fork Servo？
 
-當透過 USB-C 連接到任意主機時，閘道將自身呈現為一個複合 USB 裝置：
+Servo 捆綁了 SpiderMonkey（C++）、WebRender（C++/SWGL）以及龐大的組件依賴圖。ARIS 取 servo 最精華的部分——純 Rust 實現的 HTML/CSS 前端（html5ever、stylo、cssparser、selectors）——並用純 Rust 方案重建 JavaScript、光柵化和 WASM 層。最終產物是一個更小、更簡潔、完全自包含的 Rust 程式碼庫。
 
-- **大容量儲存** — 一個虛擬 USB 磁碟機，包含針對各作業系統的 evernight 客戶端自動安裝程式
-  （Windows `.bat` + 自動執行、Linux `.sh`、macOS `.command`、Android 說明）
-- **CDC-NCM** — 一個虛擬乙太網路介面卡，使主機獲得直連到閘道控制台的 IP 連結
-  `http://10.0.99.1:8080`
-
-**插入 USB-C → 主機識別為 USB 磁碟機 → 開啟安裝程式 → 完成。** 無需網路設定，
-無需下載驅動，無需手動配對。
-
-## 支援的架構
-
-| 架構 | 狀態 | 目標開發板 |
-|-------------|--------|---------------|
-| ARMv8+ (aarch64) | 活躍 | NanoPi R3S (RK3566) |
-| ARMv7+ (armv7) | 計畫中 | Raspberry Pi 3/4 |
-| RISC-V 64 (riscv64) | 計畫中 | VisionFive 2 |
-| x86_64 | 計畫中 | 工業電腦 |
+| Servo 組件 | ARIS 替代方案 | 理由 |
+|-----------|-------------|------|
+| SpiderMonkey (C++) | boa_engine | 純 Rust，無需 C++ 構建 |
+| WebRender + SWGL (C++) | vello_cpu | 純 Rust CPU 光柵化 |
+| components/script | Boa 橋接層 | 無 SpiderMonkey 耦合 |
+| — | wasmtime | WASM Component Model, WASI |
 
 ## 快速開始
 
 ```bash
-just setup-cross   # Install cross-compilation toolchains
-just build         # Build firmware image for default board
-just build-board nanopi-r3s
-just flash-sd      # Write image to SD card
+# 構建獨立瀏覽器
+cargo build -p aris-render --release
+
+# 將網頁渲染到幀緩衝
+cargo run -p aris-render --bin render_lagrange -- example.html
+
+# 在桌面視窗中運行（winit 後端）
+cargo run -p aris-render --bin render_window --features winit-backend
 ```
+
+詳見[構建指南](./build/quickstart.md)。
 
 ## 架構
 
-ARIS 遵循兩階段策略：
+```
+┌──────────────────────────────────────────────────────┐
+│  tairitsu (VDOM) / hikari (UI 組件)                  │
+│  WASM Component Model → WIT 介面                     │
+├──────────────────────────────────────────────────────┤
+│  ARIS 渲染管線                                        │
+│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
+│  Boa JS 引擎（頁面腳本）                               │
+│  Wasmtime（WASM 組件, WASI）                          │
+├──────────────────────────────────────────────────────┤
+│  顯示後端: /dev/fb0 · winit+softbuffer                │
+├──────────────────────────────────────────────────────┤
+│  kei 核心（syscall ABI）或 Linux                       │
+└──────────────────────────────────────────────────────┘
+```
 
-- **第一階段**（目前）：Linux 核心 + Buildroot 風格的精簡根檔案系統，
-  以常駐程序方式執行 evernight。務實可行，即刻交付。
-- **第二階段**（未來）：[Asterinas](https://github.com/asterinas/asterinas)
-  框架核心（Rust 作業系統）替換 Linux 核心。實現從晶片到頂層的完整安全堆疊。
+詳見[架構概覽](./architecture/overview.md)。
 
-請參閱[文件](./)以取得架構詳情、硬體參考和建置指南。
+## 生態
+
+- **[kei](https://github.com/celestia-island/kei)** — Rust 作業系統核心（syscall ABI、驅動）
+- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI 框架
+- **[hikari](https://github.com/celestia-island/hikari)** — UI 組件庫
+- **[shirabe](https://github.com/celestia-island/shirabe)** — 瀏覽器自動化，定義渲染 FFI 合約
+- **[evernight](https://github.com/celestia-island/evernight)** — 工業協議代理
+- **[entelecheia](https://github.com/celestia-island/entelecheia)** — AI agent 平台
 
 ## 授權條款
 
-Business Source License 1.1 (BUSL-1.1). Commercial use requires an
-authorization license. Non-commercial use follows the SySL-1.0 protocol.
-Converts to SySL-1.0 or Apache-2.0 on 2030-01-01. See [LICENSE](../../LICENSE).
+Business Source License 1.1 (BUSL-1.1)。2030-01-01 起轉換為 SySL-1.0 或 Apache-2.0。詳見 [LICENSE](../../LICENSE)。
