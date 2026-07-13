@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>Браузерный движок на базе servo — встраиваемый или автономный. Официальная инфраструктура servo частично заменена на 100% Rust альтернативы.</strong></p>
+<p align="center"><strong>Чисто-Rust браузерный движок, производный от servo.</strong></p>
 
 <div align="center">
 
@@ -90,13 +90,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 ```
 
 Подробнее в [обзоре архитектуры](./architecture/overview.md).
-
-## Экосистема
-
-- **[kei](https://github.com/celestia-island/kei)** — Ядро ОС на Rust
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — UI фреймворк на WASM
-- **[hikari](https://github.com/celestia-island/hikari)** — Библиотека UI компонентов
-- **[shirabe](https://github.com/celestia-island/shirabe)** — Автоматизация браузера, контракт FFI рендеринга
 
 ## Лицензия
 

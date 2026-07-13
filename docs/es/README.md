@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>Un motor de navegador construido sobre servo — integrable o autónomo. La infraestructura oficial de servo se reemplaza parcialmente con alternativas 100% Rust.</strong></p>
+<p align="center"><strong>Un motor de navegador en Rust puro derivado de servo.</strong></p>
 
 <div align="center">
 
@@ -90,13 +90,6 @@ Consulte la [guía de compilación](./build/quickstart.md) para más detalles.
 ```
 
 Consulte la [visión general de arquitectura](./architecture/overview.md).
-
-## Ecosistema
-
-- **[kei](https://github.com/celestia-island/kei)** — Núcleo de SO en Rust
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — Framework UI WASM
-- **[hikari](https://github.com/celestia-island/hikari)** — Biblioteca de componentes UI
-- **[shirabe](https://github.com/celestia-island/shirabe)** — Automatización de navegador, contrato FFI de renderizado
 
 ## Licencia
 

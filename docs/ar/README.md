@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>محرك متصفح مبني على servo — قابل للتضمين أو التشغيل المستقل. تم استبدال البنية التحتية الرسمية لـ servo جزئيًا ببدائل Rust خالصة.</strong></p>
+<p align="center"><strong>محرك متصفح بـ Rust خالص مشتق من servo.</strong></p>
 
 <div align="center">
 
@@ -90,13 +90,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 ```
 
 انظر [نظرة عامة على البنية](./architecture/overview.md).
-
-## النظام البيئي
-
-- **[kei](https://github.com/celestia-island/kei)** — نواة نظام تشغيل بـ Rust
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — إطار عمل UI بتقنية WASM
-- **[hikari](https://github.com/celestia-island/hikari)** — مكتبة مكونات UI
-- **[shirabe](https://github.com/celestia-island/shirabe)** — أتمتة المتصفح، عقد FFI للتصيير
 
 ## الترخيص
 

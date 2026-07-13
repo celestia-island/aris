@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>A browser engine built on servo — embed it, run it standalone. Under the hood, servo's infrastructure is selectively replaced with pure-Rust alternatives.</strong></p>
+<p align="center"><strong>A pure-Rust browser engine derived from servo.</strong></p>
 
 <div align="center">
 
@@ -130,13 +130,6 @@ See the [build guide](./docs/en/build/quickstart.md) for detailed instructions.
 ```
 
 See the [architecture overview](./docs/en/architecture/overview.md) for details.
-
-## Ecosystem
-
-- **[kei](https://github.com/celestia-island/kei)** — Rust OS kernel (syscall ABI, drivers)
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI framework
-- **[hikari](https://github.com/celestia-island/hikari)** — UI component library
-- **[shirabe](https://github.com/celestia-island/shirabe)** — browser automation, defines render FFI contract
 
 ## License
 
