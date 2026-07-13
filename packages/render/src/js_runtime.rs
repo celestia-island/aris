@@ -6777,9 +6777,8 @@ fn make_element_handle(
                     }
                 }
             }
-            let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = new_arr.insert_property(0u32, pd(JsValue::from(text_node)));
-            let _ = new_arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(1u32)));
+            let new_arr = JsArray::new(ctx);
+            let _ = new_arr.push(JsValue::from(text_node), ctx);
             let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
         }
         Ok(JsValue::undefined())
