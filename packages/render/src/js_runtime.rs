@@ -2834,15 +2834,40 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = node_proto.insert_property(boa_engine::js_string!("ATTRIBUTE_NODE"), pd(JsValue::from(2u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("TEXT_NODE"), pd(JsValue::from(3u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("CDATA_SECTION_NODE"), pd(JsValue::from(4u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("ENTITY_REFERENCE_NODE"), pd(JsValue::from(5u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("ENTITY_NODE"), pd(JsValue::from(6u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("PROCESSING_INSTRUCTION_NODE"), pd(JsValue::from(7u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("COMMENT_NODE"), pd(JsValue::from(8u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_NODE"), pd(JsValue::from(9u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_TYPE_NODE"), pd(JsValue::from(10u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_FRAGMENT_NODE"), pd(JsValue::from(11u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("NOTATION_NODE"), pd(JsValue::from(12u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_CONTAINED_BY"), pd(JsValue::from(0x10u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_CONTAINS"), pd(JsValue::from(0x08u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_PRECEDING"), pd(JsValue::from(0x02u32)));
         let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_FOLLOWING"), pd(JsValue::from(0x04u32)));
+
+        // Also add constants to the Node constructor itself (Node.ELEMENT_NODE).
+        if let Ok(node_ctor_val) = ctx.global_object().get(boa_engine::js_string!("Node"), ctx) {
+            if let Some(node_ctor) = node_ctor_val.as_object() {
+                for (name, val) in &[
+                    ("ELEMENT_NODE", 1u32), ("ATTRIBUTE_NODE", 2u32), ("TEXT_NODE", 3u32),
+                    ("CDATA_SECTION_NODE", 4u32), ("ENTITY_REFERENCE_NODE", 5u32),
+                    ("ENTITY_NODE", 6u32), ("PROCESSING_INSTRUCTION_NODE", 7u32),
+                    ("COMMENT_NODE", 8u32), ("DOCUMENT_NODE", 9u32),
+                    ("DOCUMENT_TYPE_NODE", 10u32), ("DOCUMENT_FRAGMENT_NODE", 11u32),
+                    ("NOTATION_NODE", 12u32),
+                    ("DOCUMENT_POSITION_DISCONNECTED", 0x01u32),
+                    ("DOCUMENT_POSITION_PRECEDING", 0x02u32),
+                    ("DOCUMENT_POSITION_FOLLOWING", 0x04u32),
+                    ("DOCUMENT_POSITION_CONTAINS", 0x08u32),
+                    ("DOCUMENT_POSITION_CONTAINED_BY", 0x10u32),
+                    ("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 0x20u32),
+                ] {
+                    let _ = node_ctor.insert_property(boa_engine::js_string!(*name), pd(JsValue::from(*val)));
+                }
+            }
+        }
     }
 
     // Link all HTMLxxxElement.prototype to HTMLElement.prototype
