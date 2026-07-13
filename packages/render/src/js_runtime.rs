@@ -1898,9 +1898,119 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), has_feature).build(),
         )),
     );
-    let create_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
-        // Return a minimal document object.
+    let create_doc = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        // Create a usable XML document (like new Document() but with namespace support).
         let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+        let _ = d.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(9u32)));
+        let _ = d.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document"))));
+        let _ = d.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
+        let _ = d.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::null()));
+        let _ = d.insert_property(boa_engine::js_string!("contentType"), pd2(JsValue::from(boa_engine::js_string!("application/xml"))));
+        let _ = d.insert_property(boa_engine::js_string!("URL"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("documentURI"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::null()));
+        let _ = d.insert_property(boa_engine::js_string!("defaultView"), pd2(JsValue::null()));
+        // createElement (no uppercase for XML)
+        let doc_ref = d.clone();
+        let ce_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref, ctx| {
+            let tag = arg_to_string(args, 0, ctx);
+            let el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = el.insert_property(boa_engine::js_string!("tagName"), pd3(JsValue::from(boa_engine::js_string!(tag.clone()))));
+            let _ = el.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!(tag.clone()))));
+            let _ = el.insert_property(boa_engine::js_string!("localName"), pd3(JsValue::from(boa_engine::js_string!(tag))));
+            let _ = el.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(1u32)));
+            let _ = el.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::null()));
+            let _ = el.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref.clone())));
+            let _ = el.insert_property(boa_engine::js_string!("namespaceURI"), pd3(JsValue::null()));
+            let _ = el.insert_property(boa_engine::js_string!("prefix"), pd3(JsValue::null()));
+            add_dom_methods(&el, ctx);
+            Ok(el.into())
+        }, doc_ref);
+        let _ = d.insert_property(boa_engine::js_string!("createElement"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ce_fn).build())));
+        // createTextNode
+        let doc_ref2 = d.clone();
+        let ct_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref2, ctx| {
+            let text = arg_string(args, 0);
+            let tn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = tn.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(3u32)));
+            let _ = tn.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = tn.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = tn.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = tn.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(text))));
+            let _ = tn.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#text"))));
+            let _ = tn.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref2.clone())));
+            Ok(tn.into())
+        }, doc_ref2);
+        let _ = d.insert_property(boa_engine::js_string!("createTextNode"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ct_fn).build())));
+        // createComment
+        let doc_ref3 = d.clone();
+        let cc_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref3, ctx| {
+            let text = arg_string(args, 0);
+            let cn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = cn.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(8u32)));
+            let _ = cn.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = cn.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = cn.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(text))));
+            let _ = cn.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#comment"))));
+            let _ = cn.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref3.clone())));
+            Ok(cn.into())
+        }, doc_ref3);
+        let _ = d.insert_property(boa_engine::js_string!("createComment"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cc_fn).build())));
+        // createProcessingInstruction
+        let doc_ref4 = d.clone();
+        let cpi_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref4, ctx| {
+            let target = arg_string(args, 0);
+            let target2 = target.clone();
+            let data = arg_string(args, 1);
+            let pi = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = pi.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(7u32)));
+            let _ = pi.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = pi.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = pi.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(data))));
+            let _ = pi.insert_property(boa_engine::js_string!("target"), pd3(JsValue::from(boa_engine::js_string!(target))));
+            let _ = pi.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!(target2))));
+            let _ = pi.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref4.clone())));
+            Ok(pi.into())
+        }, doc_ref4);
+        let _ = d.insert_property(boa_engine::js_string!("createProcessingInstruction"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cpi_fn).build())));
+        // createDocumentFragment
+        let df_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+            let df = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = df.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(11u32)));
+            let _ = df.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#document-fragment"))));
+            let _ = df.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::null()));
+            add_dom_methods(&df, ctx);
+            Ok(df.into())
+        });
+        let _ = d.insert_property(boa_engine::js_string!("createDocumentFragment"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_fn).build())));
+        // createRange
+        let doc_ref5 = d.clone();
+        let cr_fn = NativeFunction::from_copy_closure_with_captures(move |_t, _a, doc_ref5, ctx| {
+            let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let r = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = r.insert_property(boa_engine::js_string!("startContainer"), pd3(JsValue::from(doc_ref5.clone())));
+            let _ = r.insert_property(boa_engine::js_string!("endContainer"), pd3(JsValue::from(doc_ref5.clone())));
+            let _ = r.insert_property(boa_engine::js_string!("startOffset"), pd3(JsValue::from(0u32)));
+            let _ = r.insert_property(boa_engine::js_string!("endOffset"), pd3(JsValue::from(0u32)));
+            let _ = r.insert_property(boa_engine::js_string!("collapsed"), pd3(JsValue::from(true)));
+            let _ = r.insert_property(boa_engine::js_string!("commonAncestorContainer"), pd3(JsValue::from(doc_ref5.clone())));
+            Ok(r.into())
+        }, doc_ref5);
+        let _ = d.insert_property(boa_engine::js_string!("createRange"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cr_fn).build())));
+        // Add DOM methods (appendChild etc.) so xmlDoc.appendChild works.
+        add_dom_methods(&d, ctx);
+        // Handle doctype argument (3rd arg) — set as doctype property.
+        if let Some(dt) = args.get(2) {
+            if !dt.is_null() && !dt.is_undefined() {
+                let _ = d.insert_property(boa_engine::js_string!("doctype"), pd2(dt.clone()));
+            }
+        }
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
