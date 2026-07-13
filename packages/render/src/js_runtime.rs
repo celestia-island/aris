@@ -45,6 +45,7 @@ fn alloc_canvas(width: u32, height: u32) -> u32 {
 
 use blitz_dom::{BaseDocument, local_name};
 use boa_engine::{Context, JsObject, JsResult, JsValue, NativeFunction, Source};
+use boa_engine::object::builtins::JsArray;
 use boa_gc::{Finalize, Gc, GcRefCell, Trace};
 
 /// A persistent JS runtime bound to one document.
@@ -3704,18 +3705,35 @@ fn node_index_in_parent(node: &JsObject, ctx: &mut Context) -> u32 {
 /// Supports: tag, .class, #id, [attr], [attr=val], tag.class, tag#id, tag[attr],
 /// div:not(.cls), tag.cls#id[attr=val], comma-separated selector lists.
 /// Get the next sibling of a child in parent's _children.
-fn get_next_sibling(parent: &boa_engine::object::JsObject, child: &boa_engine::object::JsObject, ctx: &mut Context) -> Option<boa_engine::object::JsObject> {
+/// Get or create a JsArray for parent's _children.
+fn get_or_create_children(parent: &JsObject, ctx: &mut Context) -> JsArray {
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(true).enumerable(true).configurable(true).build()
+    };
+    let children = parent.get(boa_engine::js_string!("_children"), ctx).ok()
+        .and_then(|v| v.as_object());
+    match children {
+        Some(obj) => JsArray::from_object(obj).unwrap_or_else(|_| JsArray::new(ctx)),
+        None => {
+            let arr = JsArray::new(ctx);
+            let _ = parent.insert_property(boa_engine::js_string!("_children"), pd(arr.clone().into()));
+            arr
+        }
+    }
+}
+
+fn get_next_sibling(parent: &JsObject, child: &JsObject, ctx: &mut Context) -> Option<JsObject> {
     let children = parent.get(boa_engine::js_string!("_children"), ctx).ok()
         .and_then(|v| v.as_object())?;
-    let len = children.get(boa_engine::js_string!("length"), ctx).ok()
-        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    let arr = JsArray::from_object(children).ok()?;
+    let len = arr.length(ctx).ok()? as u32;
     for i in 0..len {
-        if let Ok(v) = children.get(i as u32, ctx) {
+        if let Ok(v) = arr.at(i, ctx) {
             if let Some(o) = v.as_object() {
-                if boa_engine::object::JsObject::equals(&o, child) {
-                    // Return next sibling.
+                if JsObject::equals(&o, child) {
                     if i + 1 < len {
-                        if let Ok(next) = children.get(i + 1, ctx) {
+                        if let Ok(next) = arr.at(i + 1, ctx) {
                             return next.as_object();
                         }
                     }
@@ -3727,104 +3745,67 @@ fn get_next_sibling(parent: &boa_engine::object::JsObject, child: &boa_engine::o
     None
 }
 
-/// Remove a child from parent's _children array (JS-level DOM tracking).
-fn remove_from_children(parent: &boa_engine::object::JsObject, child: &boa_engine::object::JsObject, ctx: &mut Context) {
-    let children = parent.get(boa_engine::js_string!("_children"), ctx).ok()
-        .and_then(|v| v.as_object());
-    if let Some(arr) = children {
-        let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
-            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let mut found: Option<u32> = None;
-        for i in 0..len {
-            if let Ok(v) = arr.get(i as u32, ctx) {
-                if let Some(o) = v.as_object() {
-                    if boa_engine::object::JsObject::equals(&o, child) {
-                        found = Some(i);
-                        break;
-                    }
+fn remove_from_children(parent: &JsObject, child: &JsObject, ctx: &mut Context) {
+    let arr = get_or_create_children(parent, ctx);
+    let len = arr.length(ctx).ok().unwrap_or(0) as u32;
+    let mut found: Option<u32> = None;
+    for i in 0..len {
+        if let Ok(v) = arr.at(i, ctx) {
+            if let Some(o) = v.as_object() {
+                if JsObject::equals(&o, child) {
+                    found = Some(i);
+                    break;
                 }
             }
         }
-        // Update ranges BEFORE removing (disabled for now - causes hang).
-        // if let Some(idx) = found {
-        //     update_ranges_for_node_removal(child, parent, idx, ctx);
-        // }
-        if let Some(idx) = found {
-            // Use Array.splice for O(1) removal instead of shift loop.
-            let splice_fn = arr.get(boa_engine::js_string!("splice"), ctx).ok()
-                .and_then(|v| v.as_object());
-            if let Some(sf) = splice_fn {
-                if sf.is_callable() {
-                    let _ = sf.call(&JsValue::from(arr.clone()), &[JsValue::from(idx), JsValue::from(1u32)], ctx);
-                }
-            } else {
-                // Fallback: shift elements down.
-                for i in idx..len.saturating_sub(1) {
-                    let next_val = arr.get(i + 1, ctx).unwrap_or(JsValue::undefined());
-                    let _ = arr.insert_property(i, boa_engine::property::PropertyDescriptor::builder()
-                        .value(next_val).writable(true).enumerable(true).configurable(true).build());
-                }
-                let _ = arr.insert_property(len - 1, boa_engine::property::PropertyDescriptor::builder()
-                    .value(JsValue::undefined()).writable(true).enumerable(true).configurable(true).build());
-                let _ = arr.insert_property(boa_engine::js_string!("length"),
-                    boa_engine::property::PropertyDescriptor::builder()
-                        .value(JsValue::from(len - 1)).writable(true).enumerable(true).configurable(true).build());
+    }
+    if let Some(idx) = found {
+        let splice_fn = arr.get(boa_engine::js_string!("splice"), ctx).ok()
+            .and_then(|v| v.as_object());
+        if let Some(sf) = splice_fn {
+            if sf.is_callable() {
+                let arr_obj: &JsObject = &*arr;
+                let _ = sf.call(&JsValue::from(arr_obj.clone()), &[JsValue::from(idx as i32), JsValue::from(1i32)], ctx);
             }
         }
     }
 }
 
-/// Insert a child into parent's _children array at a specific position.
-/// If `before` is Some, insert before that node; otherwise append.
-fn insert_into_children(parent: &boa_engine::object::JsObject, child: &boa_engine::object::JsObject, before: Option<boa_engine::object::JsObject>, ctx: &mut Context) {
+fn insert_into_children(parent: &JsObject, child: &JsObject, before: Option<JsObject>, ctx: &mut Context) {
     let pd = |val: JsValue| {
         boa_engine::property::PropertyDescriptor::builder()
             .value(val).writable(true).enumerable(true).configurable(true).build()
     };
-    let children = parent.get(boa_engine::js_string!("_children"), ctx).ok()
-        .and_then(|v| v.as_object());
-    let arr = match children {
-        Some(a) => a,
-        None => {
-            let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = a.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
-            let _ = parent.insert_property(boa_engine::js_string!("_children"), pd(a.clone().into()));
-            a
-        }
-    };
-    let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
-        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-    // For appendChild (before=None), just add to end — O(1).
+    let arr = get_or_create_children(parent, ctx);
+    let len = arr.length(ctx).ok().unwrap_or(0) as u32;
     if before.is_none() {
-        let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
-        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+        let _ = arr.push(JsValue::from(child.clone()), ctx);
     } else {
-        // For insertBefore: find ref_node position, shift elements, insert.
         let ref_node = before.unwrap();
         let mut ref_idx = len;
         for i in 0..len {
-            if let Ok(v) = arr.get(i as u32, ctx) {
+            if let Ok(v) = arr.at(i, ctx) {
                 if let Some(o) = v.as_object() {
-                    if boa_engine::object::JsObject::equals(&o, &ref_node) {
+                    if JsObject::equals(&o, &ref_node) {
                         ref_idx = i;
                         break;
                     }
                 }
             }
         }
-        // Shift elements up from ref_idx using insert_property.
-        if ref_idx < len {
-            for i in (ref_idx..len).rev() {
-                let val = arr.get(i, ctx).unwrap_or(JsValue::undefined());
-                let _ = arr.insert_property(i + 1, pd(val));
+        let splice_fn = arr.get(boa_engine::js_string!("splice"), ctx).ok()
+            .and_then(|v| v.as_object());
+        if let Some(sf) = splice_fn {
+            if sf.is_callable() {
+                let arr_obj2: &JsObject = &*arr;
+                let _ = sf.call(&JsValue::from(arr_obj2.clone()), &[JsValue::from(ref_idx as i32), JsValue::from(0i32), JsValue::from(child.clone())], ctx);
+            } else {
+                let _ = arr.push(JsValue::from(child.clone()), ctx);
             }
-            let _ = arr.insert_property(ref_idx, pd(JsValue::from(child.clone())));
         } else {
-            let _ = arr.insert_property(len, pd(JsValue::from(child.clone())));
+            let _ = arr.push(JsValue::from(child.clone()), ctx);
         }
-        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
     }
-    // Set child's parentNode.
     let _ = child.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent.clone())));
     let _ = child.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::from(parent.clone())));
 }
