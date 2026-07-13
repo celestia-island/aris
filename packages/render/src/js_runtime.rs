@@ -2703,9 +2703,24 @@ fn install_dom_globals(ctx: &mut Context) {
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_ni).build())),
         );
 
-        // document.adoptNode(node) — returns the node (simplified: no-op).
-        let adopt_node = NativeFunction::from_copy_closure(|_t, args, _ctx| {
-            Ok(args.first().cloned().unwrap_or(JsValue::null()))
+        // document.adoptNode(node) — removes from parent, sets ownerDocument, returns node.
+        let adopt_node = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let node = args.first().cloned().unwrap_or(JsValue::null());
+            if let Some(node_obj) = node.as_object() {
+                let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+                // Remove from parent.
+                let parent = node_obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                    .and_then(|v| v.as_object());
+                if let Some(parent_obj) = parent {
+                    remove_from_children(&parent_obj, &node_obj, ctx);
+                }
+                let _ = node_obj.insert_property(boa_engine::js_string!("parentNode"), pd2(JsValue::null()));
+                let _ = node_obj.insert_property(boa_engine::js_string!("parentElement"), pd2(JsValue::null()));
+                // Set ownerDocument to this document.
+                let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
+                let _ = node_obj.insert_property(boa_engine::js_string!("ownerDocument"), pd2(doc_val));
+            }
+            Ok(node)
         });
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("adoptNode"),
