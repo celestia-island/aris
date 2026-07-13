@@ -2230,18 +2230,46 @@ fn install_dom_globals(ctx: &mut Context) {
                 pd(JsValue::from(boa_engine::js_string!(text.clone()))),
             );
             let _ = obj.insert_property(
-                boa_engine::js_string!("nodeValue"),
-                pd(JsValue::from(boa_engine::js_string!(text))),
-            );
-            let _ = obj.insert_property(
                 boa_engine::js_string!("length"),
                 pd(JsValue::from(text_len)),
             );
+            // Store in _data (internal) for CharacterData method compatibility.
             let _ = obj.insert_property(
-                boa_engine::js_string!("nodeName"),
-                pd(JsValue::from(boa_engine::js_string!("#comment"))),
+                boa_engine::js_string!("_data"),
+                pd(JsValue::from(boa_engine::js_string!(text.clone()))),
             );
-            // CharacterData methods
+            // data and nodeValue as accessors (same as Text nodes).
+            let cd_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let cd_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let cd_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cd_get).build();
+            let cd_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cd_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("data"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(cd_get_fn.clone()).set(cd_set_fn.clone())
+                    .enumerable(true).configurable(true).build(),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(cd_get_fn).set(cd_set_fn)
+                    .enumerable(true).configurable(true).build(),
+            );
             for (mname, mfn) in build_character_data_methods() {
                 let _ = obj.insert_property(
                     boa_engine::js_string!(mname),
@@ -2249,6 +2277,20 @@ fn install_dom_globals(ctx: &mut Context) {
                         boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), mfn).build(),
                     )),
                 );
+            }
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeName"),
+                pd(JsValue::from(boa_engine::js_string!("#comment"))),
+            );
+            // Set Comment.prototype for instanceof + Node constant inheritance.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("Comment"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
             }
             Ok(obj.into())
         });
