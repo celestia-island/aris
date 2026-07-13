@@ -169,6 +169,8 @@ impl JsRuntime {
         self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
+        install_dom_globals(&mut self.ctx);
+        install_event_api(&mut self.ctx);
         install_window(&mut self.ctx, url.to_string());
 
         // Populate document.documentElement / body / head with real element
@@ -750,6 +752,17 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         boa_engine::js_string!("nodeType"),
         pd(JsValue::from(s.node_type)),
     );
+    // prefix and namespaceURI for elements (null for HTML elements without colons).
+    let _ = obj.insert_property(
+        boa_engine::js_string!("prefix"),
+        pd(JsValue::null()),
+    );
+    let ns = if s.node_type == 1 {
+        JsValue::from(boa_engine::js_string!("http://www.w3.org/1999/xhtml"))
+    } else {
+        JsValue::null()
+    };
+    let _ = obj.insert_property(boa_engine::js_string!("namespaceURI"), pd(ns));
     let _ = obj.insert_property(
         boa_engine::js_string!("length"),
         pd(JsValue::from(s.text_content.chars().count() as u32)),
@@ -759,6 +772,32 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
     for (k, v) in &s.attrs {
         let _ = obj.insert_property(boa_engine::js_string!(k.clone()), pd(s_str(v)));
     }
+
+    // Build NamedNodeMap (element.attributes): an array-like of Attr objects
+    // with .name, .value, .prefix, .namespaceURI, plus .length and getNamedItem().
+    let attrs_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    for (i, (k, v)) in s.attrs.iter().enumerate() {
+        let attr_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = attr_obj.insert_property(boa_engine::js_string!("name"), pd(s_str(k)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("value"), pd(s_str(v)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("nodeName"), pd(s_str(k)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("nodeValue"), pd(s_str(v)));
+        let _ = attr_obj.insert_property(
+            boa_engine::js_string!("prefix"),
+            pd(JsValue::null()),
+        );
+        let _ = attr_obj.insert_property(
+            boa_engine::js_string!("namespaceURI"),
+            pd(JsValue::null()),
+        );
+        let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(s_str(k)));
+        let _ = attrs_arr.insert_property(i as u32, pd(JsValue::from(attr_obj)));
+    }
+    let _ = attrs_arr.insert_property(
+        boa_engine::js_string!("length"),
+        pd(JsValue::from(s.attrs.len() as u32)),
+    );
+    let _ = obj.insert_property(boa_engine::js_string!("attributes"), pd(attrs_arr.into()));
 
     // Build childNodes array with real child handles.
     let child_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -847,6 +886,10 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
 
     let clone = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
 
+    // Copy the prototype from src so instanceof works on the clone.
+    let proto = src.prototype();
+    let _ = clone.set_prototype(proto);
+
     // Copy all own properties from src to clone.
     let keys = src.own_property_keys(ctx).map_err(|e| {
         boa_engine::JsNativeError::typ().with_message(format!("own_property_keys: {:?}", e))
@@ -857,7 +900,6 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         if key_str.contains("_arisId")
             || key_str.contains("_pending")
             || key_str.contains("_childIndex")
-            || key_str.contains("length")
         {
             continue;
         }
@@ -886,6 +928,13 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         // Functions are shared (not cloned).
         if val.as_object().is_some_and(|o| o.is_callable()) {
             let _ = clone.insert_property(key, pd(val));
+            continue;
+        }
+        // Always clone the attributes NamedNodeMap (even in shallow clone).
+        if key_str.contains("attributes") && val.as_object().is_some() && !val.is_null() {
+            let obj = val.as_object();
+            let attr_clone = clone_node_js(obj.as_ref(), true, ctx)?;
+            let _ = clone.insert_property(key, pd(attr_clone));
             continue;
         }
         // Deep clone objects (like firstChild/lastChild).
@@ -1745,6 +1794,7 @@ fn install_dom_globals(ctx: &mut Context) {
         // document.createTextNode
         let create_text = NativeFunction::from_copy_closure(|_t, args, ctx| {
             let text = arg_string(args, 0);
+            let text_len = text.encode_utf16().count() as u32;
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ =
                 obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32))); // TEXT_NODE
@@ -1760,7 +1810,7 @@ fn install_dom_globals(ctx: &mut Context) {
                 boa_engine::js_string!("nodeValue"),
                 pd(JsValue::from(boa_engine::js_string!(text))),
             );
-            let _ = obj.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+            let _ = obj.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(text_len)));
             let _ = obj.insert_property(
                 boa_engine::js_string!("nodeName"),
                 pd(JsValue::from(boa_engine::js_string!("#text"))),
@@ -1814,12 +1864,33 @@ fn install_dom_globals(ctx: &mut Context) {
                 obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(8u32))); // COMMENT_NODE
             let _ = obj.insert_property(
                 boa_engine::js_string!("data"),
+                pd(JsValue::from(boa_engine::js_string!(text.clone()))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(text.clone()))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
                 pd(JsValue::from(boa_engine::js_string!(text))),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("length"),
+                pd(JsValue::from(0u32)),
             );
             let _ = obj.insert_property(
                 boa_engine::js_string!("nodeName"),
                 pd(JsValue::from(boa_engine::js_string!("#comment"))),
             );
+            // CharacterData methods
+            for (mname, mfn) in build_character_data_methods() {
+                let _ = obj.insert_property(
+                    boa_engine::js_string!(mname),
+                    pd(JsValue::from(
+                        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), mfn).build(),
+                    )),
+                );
+            }
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2033,153 +2104,64 @@ fn install_dom_globals(ctx: &mut Context) {
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
         let v = arg_string(args, 0);
-        if let Some(o) = this.as_object() {
-            let old = o
-                .get(boa_engine::js_string!("data"), ctx)
-                .unwrap_or(JsValue::undefined());
-            let old_str = old
-                .as_string()
-                .map(|s| s.to_std_string_escaped())
-                .unwrap_or_default();
-            let new = format!("{}{}", old_str, v);
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            let _ = o.insert_property(
-                boa_engine::js_string!("data"),
-                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
-            );
-            let _ = o.insert_property(
-                boa_engine::js_string!("textContent"),
-                pd(JsValue::from(boa_engine::js_string!(new))),
-            );
-        }
+        let mut units = read_data_utf16(&this, ctx);
+        units.extend(v.encode_utf16());
+        write_data_utf16(&this, &units, ctx);
         Ok(JsValue::undefined())
     });
     let delete_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
-        if let Some(o) = this.as_object() {
-            let old = o
-                .get(boa_engine::js_string!("data"), ctx)
-                .unwrap_or(JsValue::undefined());
-            let old_str = old
-                .as_string()
-                .map(|s| s.to_std_string_escaped())
-                .unwrap_or_default();
-            let mut chars: Vec<char> = old_str.chars().collect();
-            let end = (offset + count).min(chars.len());
-            chars.drain(offset..end);
-            let new: String = chars.into_iter().collect();
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            let _ = o.insert_property(
-                boa_engine::js_string!("data"),
-                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
-            );
-            let _ = o.insert_property(
-                boa_engine::js_string!("textContent"),
-                pd(JsValue::from(boa_engine::js_string!(new))),
-            );
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let mut units = read_data_utf16(&this, ctx);
+        let len = units.len() as u32;
+        if offset > len {
+            return throw_index_size(ctx);
         }
+        let end = (offset.saturating_add(count)).min(len) as usize;
+        units.drain(offset as usize..end);
+        write_data_utf16(&this, &units, ctx);
         Ok(JsValue::undefined())
     });
     let insert_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
         let data = arg_string(args, 1);
-        if let Some(o) = this.as_object() {
-            let old = o
-                .get(boa_engine::js_string!("data"), ctx)
-                .unwrap_or(JsValue::undefined());
-            let old_str = old
-                .as_string()
-                .map(|s| s.to_std_string_escaped())
-                .unwrap_or_default();
-            let off = offset.min(old_str.len());
-            let new = format!("{}{}{}", &old_str[..off], data, &old_str[off..]);
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            let _ = o.insert_property(
-                boa_engine::js_string!("data"),
-                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
-            );
-            let _ = o.insert_property(
-                boa_engine::js_string!("textContent"),
-                pd(JsValue::from(boa_engine::js_string!(new))),
-            );
+        let mut units = read_data_utf16(&this, ctx);
+        let len = units.len() as u32;
+        if offset > len {
+            return throw_index_size(ctx);
         }
+        let insert_units: Vec<u16> = data.encode_utf16().collect();
+        let pos = offset as usize;
+        units.splice(pos..pos, insert_units);
+        write_data_utf16(&this, &units, ctx);
         Ok(JsValue::undefined())
     });
     let replace_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
         let data = arg_string(args, 2);
-        if let Some(o) = this.as_object() {
-            let old = o
-                .get(boa_engine::js_string!("data"), ctx)
-                .unwrap_or(JsValue::undefined());
-            let old_str = old
-                .as_string()
-                .map(|s| s.to_std_string_escaped())
-                .unwrap_or_default();
-            let mut chars: Vec<char> = old_str.chars().collect();
-            let end = (offset + count).min(chars.len());
-            let data_chars: Vec<char> = data.chars().collect();
-            chars.splice(offset..end, data_chars);
-            let new: String = chars.into_iter().collect();
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            let _ = o.insert_property(
-                boa_engine::js_string!("data"),
-                pd(JsValue::from(boa_engine::js_string!(new.clone()))),
-            );
-            let _ = o.insert_property(
-                boa_engine::js_string!("textContent"),
-                pd(JsValue::from(boa_engine::js_string!(new))),
-            );
+        let mut units = read_data_utf16(&this, ctx);
+        let len = units.len() as u32;
+        if offset > len {
+            return throw_index_size(ctx);
         }
+        let end = (offset.saturating_add(count)).min(len) as usize;
+        let replace_units: Vec<u16> = data.encode_utf16().collect();
+        units.splice(offset as usize..end, replace_units);
+        write_data_utf16(&this, &units, ctx);
         Ok(JsValue::undefined())
     });
     let substring_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as usize;
-        if let Some(o) = this.as_object() {
-            let old = o
-                .get(boa_engine::js_string!("data"), ctx)
-                .unwrap_or(JsValue::undefined());
-            let old_str = old
-                .as_string()
-                .map(|s| s.to_std_string_escaped())
-                .unwrap_or_default();
-            let chars: Vec<char> = old_str.chars().collect();
-            let end = (offset + count).min(chars.len());
-            let sub: String = chars[offset.min(chars.len())..end].iter().collect();
-            return Ok(JsValue::from(boa_engine::js_string!(sub)));
+        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let units = read_data_utf16(&this, ctx);
+        let len = units.len() as u32;
+        if offset > len {
+            return throw_index_size(ctx);
         }
-        Ok(JsValue::from(boa_engine::js_string!("")))
+        let end = (offset.saturating_add(count)).min(len) as usize;
+        let sub = &units[offset as usize..end];
+        Ok(JsValue::from(boa_engine::JsString::from(sub)))
     });
     vec![
         ("appendData", append),
@@ -2188,6 +2170,42 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         ("replaceData", replace_d),
         ("substringData", substring_d),
     ]
+}
+
+/// Read the "data" property of a CharacterData node as UTF-16 code units.
+fn read_data_utf16(this: &boa_engine::JsValue, ctx: &mut Context) -> Vec<u16> {
+    this.as_object()
+        .and_then(|o| o.get(boa_engine::js_string!("data"), ctx).ok())
+        .and_then(|v| v.as_string().map(|s| s.iter().collect::<Vec<u16>>()))
+        .unwrap_or_default()
+}
+
+/// Write UTF-16 code units to "data" and update textContent/length.
+fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context) {
+    if let Some(o) = this.as_object() {
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let js_str = boa_engine::JsString::from(units);
+        let _ = o.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(js_str.clone())));
+        let _ = o.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(js_str)));
+        let _ = o.insert_property(
+            boa_engine::js_string!("length"),
+            pd(JsValue::from(units.len() as u32)),
+        );
+    }
+}
+
+/// Throw an IndexSizeError DOMException-like error.
+fn throw_index_size(ctx: &mut Context) -> JsResult<JsValue> {
+    Err(boa_engine::JsNativeError::typ()
+        .with_message("IndexSizeError: The index is not in the allowed range.")
+        .into())
 }
 
 /// forward to tracing.
@@ -2302,6 +2320,41 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     "http://www.w3.org/1999/xhtml"
                 ))),
             );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("prefix"),
+                pd(JsValue::null()),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("nodeType"),
+                pd(JsValue::from(1u32)),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("textContent"),
+                pd(JsValue::from(boa_engine::js_string!(""))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("innerHTML"),
+                pd(JsValue::from(boa_engine::js_string!(""))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("outerHTML"),
+                pd(JsValue::from(boa_engine::js_string!(""))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("id"),
+                pd(JsValue::from(boa_engine::js_string!(""))),
+            );
+            let _ = handle.insert_property(
+                boa_engine::js_string!("className"),
+                pd(JsValue::from(boa_engine::js_string!(""))),
+            );
+            // Empty attributes NamedNodeMap.
+            let attrs_map = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = attrs_map.insert_property(
+                boa_engine::js_string!("length"),
+                pd(JsValue::from(0u32)),
+            );
+            let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
             // Set the prototype chain so instanceof works.
             set_element_prototype(&handle, &tag, ctx);
             Ok(handle.into())
@@ -2868,7 +2921,7 @@ fn make_element_handle(
 
     // setAttribute
     let set_attr = NativeFunction::from_copy_closure_with_captures(
-        |this, args, b, _ctx| {
+        |this, args, b, ctx| {
             let name = arg_string(args, 0);
             let value = arg_string(args, 1);
             if let Some(nid) = read_handle_id(this) {
@@ -2878,31 +2931,71 @@ fn make_element_handle(
                     value: value.clone(),
                 });
             }
-            // Update JS-visible id/className if applicable.
-            if name == "id" {
-                let _ = this.as_object().map(|o| {
-                    o.insert_property(
+            // Update the attributes NamedNodeMap and JS-visible properties.
+            if let Some(o) = this.as_object() {
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                // Update id/className shortcuts.
+                if name == "id" {
+                    let _ = o.insert_property(
                         boa_engine::js_string!("id"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(boa_engine::js_string!(value.clone())))
-                            .writable(true)
-                            .enumerable(true)
-                            .configurable(true)
-                            .build(),
-                    )
-                });
-            } else if name == "class" {
-                let _ = this.as_object().map(|o| {
-                    o.insert_property(
+                        pd(JsValue::from(boa_engine::js_string!(value.clone()))),
+                    );
+                } else if name == "class" {
+                    let _ = o.insert_property(
                         boa_engine::js_string!("className"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(boa_engine::js_string!(value)))
-                            .writable(true)
-                            .enumerable(true)
-                            .configurable(true)
-                            .build(),
-                    )
-                });
+                        pd(JsValue::from(boa_engine::js_string!(value.clone()))),
+                    );
+                }
+                // Also set the attribute as a direct property.
+                let _ = o.insert_property(
+                    boa_engine::js_string!(name.clone()),
+                    pd(JsValue::from(boa_engine::js_string!(value.clone()))),
+                );
+                // Update the attributes NamedNodeMap: find or create the Attr.
+                if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(attrs) = attrs_val.as_object() {
+                        // Build the Attr object.
+                        let attr_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("value"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("prefix"), pd(JsValue::null()));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("namespaceURI"), pd(JsValue::null()));
+                        // Find if this attr already exists, else append.
+                        let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        let mut found_idx: Option<u32> = None;
+                        for i in 0..len {
+                            if let Ok(av) = attrs.get(i as u32, ctx) {
+                                if let Some(ao) = av.as_object() {
+                                    if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                        if an.as_string().map(|s| s.to_std_string_escaped()).as_deref() == Some(&name) {
+                                            found_idx = Some(i);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let idx = found_idx.unwrap_or(len);
+                        let _ = attrs.insert_property(idx, pd(attr_obj.into()));
+                        if found_idx.is_none() {
+                            let _ = attrs.insert_property(
+                                boa_engine::js_string!("length"),
+                                pd(JsValue::from(len + 1)),
+                            );
+                        }
+                    }
+                }
             }
             Ok(JsValue::undefined())
         },
