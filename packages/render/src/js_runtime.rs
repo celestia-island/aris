@@ -2957,31 +2957,6 @@ fn install_dom_globals(ctx: &mut Context) {
         }
     }
 
-    // Add DOM mutation methods to Node.prototype so Node.prototype.insertBefore etc. work.
-    // These are simple stubs that delegate to the object's own methods.
-    if let Some(node_proto) = get_proto("Node", ctx) {
-        let pd_fn = |val: JsValue| {
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(val).writable(true).enumerable(true).configurable(true).build()
-        };
-        // insertBefore on prototype: delegates to this.insertBefore
-        for method_name in &["insertBefore", "replaceChild", "removeChild", "appendChild", "cloneNode", "contains", "hasChildNodes", "isEqualNode", "isSameNode", "compareDocumentPosition", "getRootNode", "normalize", "lookupNamespaceURI", "lookupPrefix", "isDefaultNamespace"] {
-            let m_fn = NativeFunction::from_copy_closure(move |this, args, _ctx| {
-                // This is a prototype method that delegates to the object's own method.
-                // We check `this.as_object()` to avoid calling on primitives.
-                // The actual method is on the object's own properties (set by make_element_handle etc).
-                // We DON'T call obj.get(method_name) because that would recurse back here.
-                // Instead, return undefined — tests that use Node.prototype.method directly
-                // only need the method to exist, not necessarily work.
-                Ok(JsValue::undefined())
-            });
-            let _ = node_proto.insert_property(
-                boa_engine::js_string!(*method_name),
-                pd_fn(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), m_fn).build())),
-            );
-        }
-    }
-
     // Add NodeFilter constants to the NodeFilter constructor.
     let pd_const = |val: JsValue| {
         boa_engine::property::PropertyDescriptor::builder()
