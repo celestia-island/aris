@@ -968,6 +968,8 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         if key_str.contains("_arisId")
             || key_str.contains("_pending")
             || key_str.contains("_childIndex")
+            || key_str.contains("_children")  // Prevent deep clone recursion
+            || key_str.contains("_data")       // Internal CharacterData store
         {
             continue;
         }
@@ -4182,37 +4184,34 @@ fn make_element_handle(
                     pending_id: child_pending,
                 });
             }
-            // JS-level children tracking: maintain _children array.
-            // DISABLED: causes stack overflow in some WPT tests.
-            /*
+            // JS-level children tracking: append-only.
             if let Some(parent_obj) = this.as_object() {
                 if let Some(child_obj) = child.as_object() {
-                    // Ensure _children exists.
-                    let children = parent_obj.get(boa_engine::js_string!("_children"), ctx).ok()
+                    let pd = |val: JsValue| {
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(val).writable(true).enumerable(true).configurable(true).build()
+                    };
+                    let arr_opt = parent_obj.get(boa_engine::js_string!("_children"), ctx).ok()
                         .and_then(|v| v.as_object());
-                    let arr = match children {
+                    let arr = match arr_opt {
                         Some(a) => a,
                         None => {
                             let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                            let _ = a.insert_property(boa_engine::js_string!("length"), boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(0u32)).writable(true).enumerable(true).configurable(true).build());
-                            let _ = parent_obj.insert_property(boa_engine::js_string!("_children"), boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(a.clone())).writable(true).enumerable(false).configurable(true).build());
+                            let _ = a.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+                            let _ = parent_obj.insert_property(boa_engine::js_string!("_children"), pd(a.clone().into()));
                             a
                         }
                     };
                     let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
                         .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-                    let pd = |val: JsValue| {
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(val).writable(true).enumerable(true).configurable(true).build()
-                    };
-                    let _ = arr.insert_property(len, pd(JsValue::from(child_obj.clone())));
-                    let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
-                    // Set child's parentNode.
+                    if len < 500 {
+                        let _ = arr.insert_property(len, pd(JsValue::from(child_obj.clone())));
+                        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+                    }
                     let _ = child_obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent_obj.clone())));
                     let _ = child_obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::from(parent_obj.clone())));
                 }
             }
-            */
             Ok(child)
         },
         Gc::clone(&bridge),
@@ -4271,9 +4270,9 @@ fn make_element_handle(
         if boa_engine::object::JsObject::equals(&this_obj, &target_obj) {
             return Ok(JsValue::from(true));
         }
-        // Walk up target's parentNode chain.
+        // Walk up target's parentNode chain (limited to prevent stack overflow).
         let mut current = target_obj;
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let parent = current.get(boa_engine::js_string!("parentNode"), ctx).ok();
             match parent.and_then(|v| v.as_object()) {
                 Some(p) => {
@@ -4368,7 +4367,7 @@ fn make_element_handle(
     // getRootNode() — returns this (simplified; no composed tree walking).
     let get_root_node = NativeFunction::from_copy_closure(|this, _args, ctx| {
         let mut current = this.as_object();
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let parent = current.as_ref().and_then(|o| {
                 o.get(boa_engine::js_string!("parentNode"), ctx).ok()
                     .and_then(|v| v.as_object())
@@ -4827,13 +4826,24 @@ fn make_element_handle(
 
     let obj = init.build();
 
-    // innerHTML as plain data property (will be empty unless _children is populated).
-    // The accessor version caused stack overflow; using data property for now.
+    // innerHTML as plain data property (accessor causes stack overflow).
+    // innerHTML as accessor: getter serializes _children, setter is no-op.
+    let ih_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        let html = if let Some(o) = this.as_object() {
+            serialize_children(&o, ctx)
+        } else {
+            String::new()
+        };
+        Ok(JsValue::from(boa_engine::js_string!(html)))
+    });
+    let ih_set = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    let ih_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ih_get).build();
+    let ih_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ih_set).build();
     let _ = obj.insert_property(
         boa_engine::js_string!("innerHTML"),
         boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!("")))
-            .writable(true)
+            .get(ih_get_fn)
+            .set(ih_set_fn)
             .enumerable(true)
             .configurable(true)
             .build(),

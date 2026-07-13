@@ -24,9 +24,9 @@ use std::path::{Path, PathBuf};
 fn main() {
     aris_render::init_logging();
 
-    // Run in a thread with a large stack (some WPT tests cause deep recursion).
+    // Run in a thread with a very large stack (some WPT tests cause deep recursion).
     let child = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024) // 64 MB
+        .stack_size(256 * 1024 * 1024) // 256 MB
         .spawn(run_tests)
         .unwrap();
     child.join().unwrap();
