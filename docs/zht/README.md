@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>基於 servo 構建的瀏覽器引擎——可嵌入、可獨立運行。底層設施已部分替換 servo 官方組件，改用純 Rust 替代方案。</strong></p>
+<p align="center"><strong>由 servo 派生的純 Rust 瀏覽器引擎。</strong></p>
 
 <div align="center">
 
@@ -90,13 +90,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 ```
 
 詳見[架構概覽](./architecture/overview.md)。
-
-## 生態
-
-- **[kei](https://github.com/celestia-island/kei)** — Rust 作業系統核心（syscall ABI、驅動）
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI 框架
-- **[hikari](https://github.com/celestia-island/hikari)** — UI 組件庫
-- **[shirabe](https://github.com/celestia-island/shirabe)** — 瀏覽器自動化，定義渲染 FFI 合約
 
 ## 授權條款
 

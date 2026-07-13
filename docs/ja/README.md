@@ -2,7 +2,7 @@
 
 <h1 align="center">ARIS</h1>
 
-<p align="center"><strong>servo ベースのブラウザエンジン — 組み込みにもスタンドアロンにも。サーボの公式インフラを部分的に純 Rust 代替で置き換え。</strong></p>
+<p align="center"><strong>servo から派生した純 Rust のブラウザエンジン。</strong></p>
 
 <div align="center">
 
@@ -90,13 +90,6 @@ cargo run -p aris-render --bin render_window --features winit-backend
 ```
 
 詳細は[アーキテクチャ概要](./architecture/overview.md)を参照。
-
-## エコシステム
-
-- **[kei](https://github.com/celestia-island/kei)** — Rust OS カーネル
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI フレームワーク
-- **[hikari](https://github.com/celestia-island/hikari)** — UI コンポーネントライブラリ
-- **[shirabe](https://github.com/celestia-island/shirabe)** — ブラウザ自動化、レンダリング FFI 契約
 
 ## ライセンス
 
