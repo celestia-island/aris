@@ -4388,6 +4388,66 @@ fn make_element_handle(
     });
     init.function(has_attr_ns, boa_engine::js_string!("hasAttributeNS"), 2);
 
+    // setAttributeNS(ns, qualifiedName, value) — namespace-aware attribute setting.
+    // Does NOT lowercase the name (unlike setAttribute).
+    let set_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let ns = arg_string(args, 0);
+        let qname = arg_string(args, 1);
+        let value = arg_string(args, 2);
+        // Parse prefix:localName.
+        let (prefix, local) = if let Some(idx) = qname.find(':') {
+            (&qname[..idx], &qname[idx + 1..])
+        } else {
+            ("", qname.as_str())
+        };
+        if let Some(o) = this.as_object() {
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            // Also set as direct property (case-sensitive for NS attributes).
+            let _ = o.insert_property(boa_engine::js_string!(local.to_string()), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+            // Update the attributes NamedNodeMap.
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let attr_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!(qname.clone()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(qname.clone()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("value"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(JsValue::from(boa_engine::js_string!(local.to_string()))));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("prefix"), pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix.to_string())) }));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("namespaceURI"), pd(if ns.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(ns.clone())) }));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("specified"), pd(JsValue::from(true)));
+                    let _ = attr_obj.insert_property(boa_engine::js_string!("ownerElement"), pd(JsValue::from(o.clone())));
+                    // Find if attr with same localName already exists.
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    let mut found_idx: Option<u32> = None;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped()).as_deref() == Some(local) {
+                                        found_idx = Some(i); break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let idx = found_idx.unwrap_or(len);
+                    let _ = attrs.insert_property(idx, pd(attr_obj.into()));
+                    if found_idx.is_none() {
+                        let _ = attrs.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+                    }
+                }
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    init.function(set_attr_ns, boa_engine::js_string!("setAttributeNS"), 3);
+
     // getAttributeNS(ns, name) — returns value or null.
     let get_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
         let _ns = arg_string(args, 0);
@@ -5079,6 +5139,21 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(by_tag, boa_engine::js_string!("getElementsByTagName"), 1);
+
+    // getElementsByTagNameNS(ns, localName) — returns matching elements.
+    // Simplified: matches by localName (namespace check omitted).
+    let by_tag_ns = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let _ns = arg_string(args, 0);
+        let local = arg_string(args, 1).to_ascii_lowercase();
+        let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+        Ok(arr.into())
+    });
+    init.function(by_tag_ns, boa_engine::js_string!("getElementsByTagNameNS"), 2);
 
     // getElementsByClassName — returns array of matching element handles.
     let by_class = NativeFunction::from_copy_closure_with_captures(

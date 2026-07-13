@@ -444,11 +444,14 @@ function step_func(fn, this_obj) {
 }
 
 function generate_tests(func, args) {
-    // Each entry in args is an array of arguments to func.
+    // Each entry in args is [name, ...rest]. The first element is the test name,
+    // the rest are passed to func.
     for (var i = 0; i < args.length; i++) {
         __tests++;
         try {
-            func.apply(null, args[i]);
+            var entry = args[i];
+            var rest = Array.prototype.slice.call(entry, 1);
+            func.apply(null, rest);
             __pass++;
         } catch(e) {
             __fail++;
