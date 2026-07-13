@@ -2267,6 +2267,79 @@ fn install_dom_globals(ctx: &mut Context) {
             )),
         );
 
+        // document.createEvent(type) — returns a new Event-like object.
+        let create_event = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let event_type = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            let _ = obj.insert_property(boa_engine::js_string!("type"), pd(JsValue::from(boa_engine::js_string!(""))));
+            let _ = obj.insert_property(boa_engine::js_string!("bubbles"), pd(JsValue::from(false)));
+            let _ = obj.insert_property(boa_engine::js_string!("cancelable"), pd(JsValue::from(false)));
+            let _ = obj.insert_property(boa_engine::js_string!("composed"), pd(JsValue::from(false)));
+            let _ = obj.insert_property(boa_engine::js_string!("defaultPrevented"), pd(JsValue::from(false)));
+            let _ = obj.insert_property(boa_engine::js_string!("returnValue"), pd(JsValue::from(true)));
+            let _ = obj.insert_property(boa_engine::js_string!("isTrusted"), pd(JsValue::from(false)));
+            let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("currentTarget"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("srcElement"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("timeStamp"), pd(JsValue::from(0u32)));
+            let _ = obj.insert_property(boa_engine::js_string!("eventPhase"), pd(JsValue::from(0u32)));
+            let _ = obj.insert_property(boa_engine::js_string!("cancelBubble"), pd(JsValue::from(false)));
+            // initEvent(type, bubbles, cancelable)
+            let init_ev = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let pd = |val: JsValue| {
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(val).writable(true).enumerable(true).configurable(true).build()
+                    };
+                    let t = arg_string(args, 0);
+                    let b = args.get(1).and_then(|v| v.as_boolean()).unwrap_or(false);
+                    let c = args.get(2).and_then(|v| v.as_boolean()).unwrap_or(false);
+                    let _ = o.insert_property(boa_engine::js_string!("type"), pd(JsValue::from(boa_engine::js_string!(t))));
+                    let _ = o.insert_property(boa_engine::js_string!("bubbles"), pd(JsValue::from(b)));
+                    let _ = o.insert_property(boa_engine::js_string!("cancelable"), pd(JsValue::from(c)));
+                    let _ = o.insert_property(boa_engine::js_string!("defaultPrevented"), pd(JsValue::from(false)));
+                    let _ = o.insert_property(boa_engine::js_string!("returnValue"), pd(JsValue::from(true)));
+                    let _ = o.insert_property(boa_engine::js_string!("isTrusted"), pd(JsValue::from(false)));
+                    let _ = o.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
+                    let _ = o.insert_property(boa_engine::js_string!("srcElement"), pd(JsValue::null()));
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = obj.insert_property(boa_engine::js_string!("initEvent"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), init_ev).build())));
+            // preventDefault, stopPropagation, stopImmediatePropagation
+            let pd_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let _ = o.insert_property(boa_engine::js_string!("defaultPrevented"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(true)).writable(true).enumerable(true).configurable(true).build());
+                    let _ = o.insert_property(boa_engine::js_string!("returnValue"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(false)).writable(true).enumerable(true).configurable(true).build());
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = obj.insert_property(boa_engine::js_string!("preventDefault"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pd_fn).build())));
+            let stop_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let _ = obj.insert_property(boa_engine::js_string!("stopPropagation"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn.clone()).build())));
+            let _ = obj.insert_property(boa_engine::js_string!("stopImmediatePropagation"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn).build())));
+            let _ = event_type; // suppress unused warning
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createEvent"),
+            pd(JsValue::from(
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_event).build(),
+            )),
+        );
+
         // document.documentElement, document.body, document.head — these are
         // populated lazily by the bridge's node_props snapshots. We install
         // getters that look up the bridge for html/body/head nodes.
