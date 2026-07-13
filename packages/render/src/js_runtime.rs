@@ -3396,7 +3396,12 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             // Validate the tag name per the Name production.
             // First char must be a letter, '_', or ':'. Rest must be letter, digit,
             // '_', ':', '-', '.', or combining char.
+            // Validate per HTML spec: first char must be a letter, _, or :.
+            // No empty string. The rest can be almost anything except <, >, /.
             if tag.is_empty() || !is_valid_name_first(&tag) {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("InvalidCharacterError: The string contains an invalid character")
+                    .into());
                 return Err(boa_engine::JsNativeError::typ()
                     .with_message("InvalidCharacterError: The string contains an invalid character")
                     .into());
