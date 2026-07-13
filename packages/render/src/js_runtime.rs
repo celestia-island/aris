@@ -1944,6 +1944,58 @@ fn install_dom_globals(ctx: &mut Context) {
                     boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), set_text).build(),
                 )),
             );
+            // splitText(offset) — splits the text node at the given offset,
+            // returns a new Text node with the second half.
+            let split_text = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                let units = read_data_utf16(&this, ctx);
+                let len = units.len() as u32;
+                if offset > len {
+                    return throw_index_size(ctx);
+                }
+                let first: Vec<u16> = units[..offset as usize].to_vec();
+                let second: Vec<u16> = units[offset as usize..].to_vec();
+                write_data_utf16(&this, &first, ctx);
+                // Create a new Text node with the second half.
+                let new_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val).writable(true).enumerable(true).configurable(true).build()
+                };
+                let _ = new_obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+                let js_str = boa_engine::JsString::from(&second[..]);
+                let _ = new_obj.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(js_str.clone())));
+                let _ = new_obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(js_str)));
+                let _ = new_obj.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(second.len() as u32)));
+                let _ = new_obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+                // Add CharacterData methods
+                for (mname, mfn) in build_character_data_methods() {
+                    let _ = new_obj.insert_property(
+                        boa_engine::js_string!(mname),
+                        pd(JsValue::from(
+                            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), mfn).build(),
+                        )),
+                    );
+                }
+                Ok(new_obj.into())
+            });
+            let _ = obj.insert_property(
+                boa_engine::js_string!("splitText"),
+                pd(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), split_text).build(),
+                )),
+            );
+            // wholeText — returns the concatenation of all adjacent text nodes (simplified: just data).
+            let whole_text = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let _ = obj.insert_property(
+                boa_engine::js_string!("wholeText"),
+                pd(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), whole_text).build(),
+                )),
+            );
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
