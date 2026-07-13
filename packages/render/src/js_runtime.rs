@@ -4659,6 +4659,18 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
             set_element_prototype(&handle, local, ctx);
+            // For non-HTML namespace, override prototype to Element.prototype (not HTMLxxxElement).
+            if !is_html {
+                if let Ok(elem_ctor) = ctx.global_object().get(boa_engine::js_string!("Element"), ctx) {
+                    if let Some(ec) = elem_ctor.as_object() {
+                        if let Ok(proto_val) = ec.get(boa_engine::js_string!("prototype"), ctx) {
+                            if let Some(proto) = proto_val.as_object() {
+                                let _ = handle.set_prototype(Some(proto));
+                            }
+                        }
+                    }
+                }
+            }
             Ok(handle.into())
         },
         Gc::clone(&bridge),
