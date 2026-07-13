@@ -1,5 +1,5 @@
 {
-  "pass_rate": 40,
+  "pass_rate": 41,
   "results": [
     {
       "fail": 0,
@@ -192,10 +192,10 @@
       "tests": 8
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "events\\Event-dispatch-bubble-canceled.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -297,10 +297,10 @@
       "tests": 1
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "events\\Event-dispatch-propagation-stopped.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -500,9 +500,9 @@
       "tests": 6
     },
     {
-      "fail": 4,
+      "fail": 2,
       "file": "events\\EventListenerOptions-capture.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 4
     },
@@ -928,9 +928,9 @@
       "tests": 12
     },
     {
-      "fail": 87,
+      "fail": 74,
       "file": "events\\passive-by-default.html",
-      "pass": 13,
+      "pass": 26,
       "status": "fail",
       "tests": 100
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1504,
+  "total_fail": 1487,
   "total_files": 552,
-  "total_pass": 1033,
+  "total_pass": 1050,
   "total_skip": 31,
   "total_tests": 2537
 }
