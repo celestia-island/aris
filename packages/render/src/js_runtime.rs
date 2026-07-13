@@ -1936,6 +1936,45 @@ fn install_dom_globals(ctx: &mut Context) {
         let html_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
         let _ = html_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HTML"))));
         let _ = d.insert_property(boa_engine::js_string!("documentElement"), pd(html_el.into()));
+        // createElement on this document (sets ownerDocument = this doc).
+        let doc_for_ce = d.clone();
+        let ce_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_for_ce, ctx| {
+            let tag = arg_to_string(args, 0, ctx);
+            let upper: String = tag.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect();
+            let lower: String = tag.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
+            let el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = el.insert_property(boa_engine::js_string!("tagName"), pd2(JsValue::from(boa_engine::js_string!(upper.clone()))));
+            let _ = el.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!(upper))));
+            let _ = el.insert_property(boa_engine::js_string!("localName"), pd2(JsValue::from(boa_engine::js_string!(lower))));
+            let _ = el.insert_property(boa_engine::js_string!("namespaceURI"), pd2(JsValue::from(boa_engine::js_string!("http://www.w3.org/1999/xhtml"))));
+            let _ = el.insert_property(boa_engine::js_string!("prefix"), pd2(JsValue::null()));
+            let _ = el.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(1u32)));
+            let _ = el.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
+            let _ = el.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::from(doc_for_ce.clone())));
+            let am = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = am.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(0u32)));
+            let _ = el.insert_property(boa_engine::js_string!("attributes"), pd2(am.into()));
+            Ok(el.into())
+        }, doc_for_ce);
+        let _ = d.insert_property(boa_engine::js_string!("createElement"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ce_fn).build())));
+        // createTextNode
+        let doc_for_ct = d.clone();
+        let ct_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_for_ct, ctx| {
+            let text = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(3u32)));
+            let _ = obj.insert_property(boa_engine::js_string!("_data"), pd2(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("data"), pd2(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::from(boa_engine::js_string!(text))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#text"))));
+            let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::from(doc_for_ct.clone())));
+            Ok(obj.into())
+        }, doc_for_ct);
+        let _ = d.insert_property(boa_engine::js_string!("createTextNode"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ct_fn).build())));
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
