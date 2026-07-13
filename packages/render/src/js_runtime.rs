@@ -2649,6 +2649,24 @@ fn install_dom_globals(ctx: &mut Context) {
     ) {
         let _ = elem_proto.set_prototype(Some(node_proto.clone()));
         let _ = html_proto.set_prototype(Some(elem_proto.clone()));
+        // Add Node constants to Node.prototype so element.ELEMENT_NODE works.
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(false).enumerable(false).configurable(false).build()
+        };
+        let _ = node_proto.insert_property(boa_engine::js_string!("ELEMENT_NODE"), pd(JsValue::from(1u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("ATTRIBUTE_NODE"), pd(JsValue::from(2u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("TEXT_NODE"), pd(JsValue::from(3u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("CDATA_SECTION_NODE"), pd(JsValue::from(4u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("PROCESSING_INSTRUCTION_NODE"), pd(JsValue::from(7u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("COMMENT_NODE"), pd(JsValue::from(8u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_NODE"), pd(JsValue::from(9u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_TYPE_NODE"), pd(JsValue::from(10u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_FRAGMENT_NODE"), pd(JsValue::from(11u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_CONTAINED_BY"), pd(JsValue::from(0x10u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_CONTAINS"), pd(JsValue::from(0x08u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_PRECEDING"), pd(JsValue::from(0x02u32)));
+        let _ = node_proto.insert_property(boa_engine::js_string!("DOCUMENT_POSITION_FOLLOWING"), pd(JsValue::from(0x04u32)));
     }
 
     // Link all HTMLxxxElement.prototype to HTMLElement.prototype
@@ -3516,9 +3534,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("prefix"),
                 pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix.to_string())) }));
             let _ = handle.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
+            let _ = handle.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
             let _ = handle.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
             let _ = handle.insert_property(boa_engine::js_string!("id"), pd(JsValue::from(boa_engine::js_string!(""))));
             let _ = handle.insert_property(boa_engine::js_string!("className"), pd(JsValue::from(boa_engine::js_string!(""))));
+            // ownerDocument = the global document.
+            let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
+            let _ = handle.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
             let attrs_map = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
