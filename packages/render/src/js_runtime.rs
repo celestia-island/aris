@@ -3551,6 +3551,147 @@ fn update_ranges_for_data_change(node: &JsObject, offset: u32, count: u32, data_
     }
 }
 
+/// Update Range boundary points after a node is removed from its parent.
+/// Per DOM spec "insert" and "remove" steps.
+fn update_ranges_for_node_removal(removed_node: &JsObject, old_parent: &JsObject, old_index: u32, ctx: &mut Context) {
+    let global = ctx.global_object();
+    let ranges_val = match global.get(boa_engine::js_string!("__active_ranges"), ctx) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let ranges_arr = match ranges_val.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+    let len = ranges_arr.get(boa_engine::js_string!("length"), ctx).ok()
+        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(true).enumerable(true).configurable(true).build()
+    };
+    for i in 0..len {
+        if let Ok(range_val) = ranges_arr.get(i as u32, ctx) {
+            if let Some(range) = range_val.as_object() {
+                for (container_key, offset_key) in &[
+                    (boa_engine::js_string!("startContainer"), boa_engine::js_string!("startOffset")),
+                    (boa_engine::js_string!("endContainer"), boa_engine::js_string!("endOffset")),
+                ] {
+                    let cont = range.get(container_key.clone(), ctx).ok();
+                    if let Some(cont_obj) = cont.and_then(|v| v.as_object()) {
+                        // Check if container is removed_node or a descendant of it.
+                        let is_removed_or_descendant = boa_engine::object::JsObject::equals(&cont_obj, removed_node)
+                            || is_descendant_of(&cont_obj, removed_node, ctx);
+                        if is_removed_or_descendant {
+                            // Set boundary to (old_parent, old_index).
+                            let _ = range.insert_property(container_key.clone(), pd(JsValue::from(old_parent.clone())));
+                            let _ = range.insert_property(offset_key.clone(), pd(JsValue::from(old_index)));
+                        } else if boa_engine::object::JsObject::equals(&cont_obj, old_parent) {
+                            // If container is old_parent and offset > old_index, subtract 1.
+                            let cur_offset = range.get(offset_key.clone(), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            if cur_offset > old_index {
+                                let _ = range.insert_property(offset_key.clone(), pd(JsValue::from(cur_offset - 1)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Update Range boundary points after a node is inserted into a parent.
+fn update_ranges_for_node_insertion(inserted_node: &JsObject, ctx: &mut Context) {
+    let parent = match inserted_node.get(boa_engine::js_string!("parentNode"), ctx).ok()
+        .and_then(|v| v.as_object()) {
+        Some(p) => p,
+        None => return,
+    };
+    let new_index = node_index_in_parent(inserted_node, ctx);
+
+    let global = ctx.global_object();
+    let ranges_val = match global.get(boa_engine::js_string!("__active_ranges"), ctx) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let ranges_arr = match ranges_val.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+    let len = ranges_arr.get(boa_engine::js_string!("length"), ctx).ok()
+        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(true).enumerable(true).configurable(true).build()
+    };
+    for i in 0..len {
+        if let Ok(range_val) = ranges_arr.get(i as u32, ctx) {
+            if let Some(range) = range_val.as_object() {
+                for (container_key, offset_key) in &[
+                    (boa_engine::js_string!("startContainer"), boa_engine::js_string!("startOffset")),
+                    (boa_engine::js_string!("endContainer"), boa_engine::js_string!("endOffset")),
+                ] {
+                    let cont = range.get(container_key.clone(), ctx).ok();
+                    if let Some(cont_obj) = cont.and_then(|v| v.as_object()) {
+                        if boa_engine::object::JsObject::equals(&cont_obj, &parent) {
+                            let cur_offset = range.get(offset_key.clone(), ctx).ok()
+                                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                            if cur_offset > new_index {
+                                let _ = range.insert_property(offset_key.clone(), pd(JsValue::from(cur_offset + 1)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Check if `node` is a descendant of `ancestor` by walking up parentNode chain.
+fn is_descendant_of(node: &JsObject, ancestor: &JsObject, ctx: &mut Context) -> bool {
+    let mut current = node.get(boa_engine::js_string!("parentNode"), ctx).ok()
+        .and_then(|v| v.as_object());
+    for _ in 0..100 {
+        match current {
+            Some(p) => {
+                if boa_engine::object::JsObject::equals(&p, ancestor) {
+                    return true;
+                }
+                current = p.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                    .and_then(|v| v.as_object());
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Get the index of a node in its parent's _children array.
+fn node_index_in_parent(node: &JsObject, ctx: &mut Context) -> u32 {
+    let parent = match node.get(boa_engine::js_string!("parentNode"), ctx).ok()
+        .and_then(|v| v.as_object()) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let children = match parent.get(boa_engine::js_string!("_children"), ctx).ok()
+        .and_then(|v| v.as_object()) {
+        Some(c) => c,
+        None => return 0,
+    };
+    let len = children.get(boa_engine::js_string!("length"), ctx).ok()
+        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+    for i in 0..len {
+        if let Ok(child) = children.get(i as u32, ctx) {
+            if let Some(child_obj) = child.as_object() {
+                if boa_engine::object::JsObject::equals(&child_obj, node) {
+                    return i;
+                }
+            }
+        }
+    }
+    0
+}
+
 /// Check if a JS element object matches a simple CSS selector.
 /// Supports: tag, .class, #id, [attr], [attr=val], tag.class, tag#id, tag[attr],
 /// div:not(.cls), tag.cls#id[attr=val], comma-separated selector lists.
@@ -3596,7 +3737,9 @@ fn remove_from_children(parent: &boa_engine::object::JsObject, child: &boa_engin
                 }
             }
         }
+        // Update ranges BEFORE removing.
         if let Some(idx) = found {
+            update_ranges_for_node_removal(child, parent, idx, ctx);
             // Shift elements down.
             for i in idx..len.saturating_sub(1) {
                 let next_val = arr.get(i + 1, ctx).unwrap_or(JsValue::undefined());
@@ -3661,6 +3804,8 @@ fn insert_into_children(parent: &boa_engine::object::JsObject, child: &boa_engin
     // Set child's parentNode.
     let _ = child.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent.clone())));
     let _ = child.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::from(parent.clone())));
+    // Update Range boundary points for node insertion.
+    update_ranges_for_node_insertion(child, ctx);
 }
 
 /// Add DOM mutation methods + child tracking to any JS object.
