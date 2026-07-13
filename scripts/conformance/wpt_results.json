@@ -1880,17 +1880,17 @@
       "tests": 0
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Element-childElement-null.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "nodes\\Element-childElementCount-dynamic-add.html",
-      "pass": 1,
-      "status": "pass",
+      "pass": 0,
+      "status": "fail",
       "tests": 1
     },
     {
@@ -1901,10 +1901,10 @@
       "tests": 1
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Element-childElementCount-nochild.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -2077,10 +2077,10 @@
       "tests": 2
     },
     {
-      "fail": 1,
+      "fail": 0,
       "file": "nodes\\Element-siblingElement-null.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 1,
+      "status": "pass",
       "tests": 1
     },
     {
@@ -2556,9 +2556,9 @@
       "tests": 0
     },
     {
-      "fail": 5,
+      "fail": 2,
       "file": "nodes\\Text-splitText.html",
-      "pass": 1,
+      "pass": 4,
       "status": "fail",
       "tests": 6
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1533,
+  "total_fail": 1528,
   "total_files": 552,
-  "total_pass": 834,
+  "total_pass": 839,
   "total_skip": 31,
   "total_tests": 2367
 }
