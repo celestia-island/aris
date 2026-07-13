@@ -2914,7 +2914,7 @@ fn collect_text_content(o: &boa_engine::object::JsObject, ctx: &mut Context, dep
     let nt = o.get(boa_engine::js_string!("nodeType"), ctx).ok()
         .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
     // Text, comment, PI nodes: return their data.
-    if nt == 3 || nt == 8 || nt == 7 {
+    if nt == 3 {
         // Read from _data or data.
         if let Ok(v) = o.get(boa_engine::js_string!("_data"), ctx) {
             if let Some(s) = v.as_string() { return s.to_std_string_escaped(); }
