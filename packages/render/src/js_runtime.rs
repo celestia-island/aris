@@ -2317,6 +2317,39 @@ fn install_dom_globals(ctx: &mut Context) {
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_cdata).build())),
         );
 
+        // document.createAttribute(name)
+        let create_attr = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let name = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("name"), pd2(JsValue::from(boa_engine::js_string!(name.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!(name.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("localName"), pd2(JsValue::from(boa_engine::js_string!(name))));
+            let _ = obj.insert_property(boa_engine::js_string!("value"), pd2(JsValue::from(boa_engine::js_string!(""))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::from(boa_engine::js_string!(""))));
+            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::from(boa_engine::js_string!(""))));
+            let _ = obj.insert_property(boa_engine::js_string!("prefix"), pd2(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("namespaceURI"), pd2(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("specified"), pd2(JsValue::from(true)));
+            let _ = obj.insert_property(boa_engine::js_string!("ownerElement"), pd2(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(2u32)));
+            // Set Attr.prototype as the prototype.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("Attr"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createAttribute"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_attr).build())),
+        );
+
         // document.createTreeWalker(root, whatToShow, filter)
         let create_tw = NativeFunction::from_copy_closure(|_t, args, ctx| {
             let root = args.first().cloned().unwrap_or(JsValue::null());
@@ -2728,6 +2761,9 @@ fn install_dom_globals(ctx: &mut Context) {
         ("TreeWalker", 0),
         ("NodeIterator", 0),
         ("NodeFilter", 0),
+        // Attr
+        ("Attr", 2),
+        ("NamedNodeMap", 0),
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
