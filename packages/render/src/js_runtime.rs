@@ -3980,27 +3980,40 @@ fn collect_text_content(o: &boa_engine::object::JsObject, ctx: &mut Context, dep
     if depth > 50 { return String::new(); }
     let nt = o.get(boa_engine::js_string!("nodeType"), ctx).ok()
         .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-    // Text, comment, PI nodes: return their data.
+    // Text nodes: return their data.
     if nt == 3 {
-        // Read from _data or data.
         if let Ok(v) = o.get(boa_engine::js_string!("_data"), ctx) {
-            if let Some(s) = v.as_string() { return s.to_std_string_escaped(); }
-        }
-        if let Ok(v) = o.get(boa_engine::js_string!("data"), ctx) {
             if let Some(s) = v.as_string() { return s.to_std_string_escaped(); }
         }
         return String::new();
     }
     // Element/Document/DocumentFragment: concatenate children's text.
+    let children_html = serialize_children(o, ctx);
+    // serialize_children returns HTML serialization; for text content we need raw text.
+    // Use the same JsArray iteration but collect text only.
     let mut result = String::new();
     if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
         if let Some(ca) = cv.as_object() {
-            let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
-                .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-            for i in 0..len {
-                if let Ok(child) = ca.get(i as u32, ctx) {
-                    if let Some(child_obj) = child.as_object() {
-                        result.push_str(&collect_text_content(&child_obj, ctx, depth + 1));
+            let ca_clone = ca.clone();
+            if let Ok(arr) = JsArray::from_object(ca) {
+                if let Ok(len) = arr.length(ctx) {
+                    for i in 0..len as u32 {
+                        if let Ok(child) = arr.at(i, ctx) {
+                            if let Some(child_obj) = child.as_object() {
+                                result.push_str(&collect_text_content(&child_obj, ctx, depth + 1));
+                            }
+                        }
+                    }
+                }
+            } else {
+                let ca_ref = &ca_clone;
+                let len = ca_ref.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                for i in 0..len {
+                    if let Ok(child) = ca_ref.get(i as u32, ctx) {
+                        if let Some(child_obj) = child.as_object() {
+                            result.push_str(&collect_text_content(&child_obj, ctx, depth + 1));
+                        }
                     }
                 }
             }
