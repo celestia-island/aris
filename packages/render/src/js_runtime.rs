@@ -3202,18 +3202,19 @@ fn install_dom_globals(ctx: &mut Context) {
         });
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
-        // Create a .prototype object on the constructor so instanceof works.
+        // Use the .prototype already created by register_global_callable.
+        // Just add constructor back-reference if not present.
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
             if let Some(ctor_obj) = ctor_val.as_object() {
-                // Create a prototype object that inherits from Object.prototype.
-                let proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                let _ = proto.insert_property(
-                    boa_engine::js_string!("constructor"),
-                    pd(ctor_obj.clone().into()),
-                );
-                let _ =
-                    ctor_obj.insert_property(boa_engine::js_string!("prototype"), pd(proto.into()));
+                if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), &mut *ctx) {
+                    if let Some(proto) = proto_val.as_object() {
+                        let _ = proto.insert_property(
+                            boa_engine::js_string!("constructor"),
+                            pd(ctor_obj.clone().into()),
+                        );
+                    }
+                }
             }
         }
     }
