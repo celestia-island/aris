@@ -1,5 +1,5 @@
 {
-  "pass_rate": 39,
+  "pass_rate": 41,
   "results": [
     {
       "fail": 0,
@@ -1380,23 +1380,23 @@
       "tests": 14
     },
     {
-      "fail": 14,
+      "fail": 7,
       "file": "nodes\\CharacterData-data.html",
-      "pass": 2,
+      "pass": 9,
       "status": "fail",
       "tests": 16
     },
     {
-      "fail": 10,
+      "fail": 8,
       "file": "nodes\\CharacterData-deleteData.html",
-      "pass": 8,
+      "pass": 10,
       "status": "fail",
       "tests": 18
     },
     {
-      "fail": 8,
+      "fail": 6,
       "file": "nodes\\CharacterData-insertData.html",
-      "pass": 10,
+      "pass": 12,
       "status": "fail",
       "tests": 18
     },
@@ -1408,44 +1408,44 @@
       "tests": 0
     },
     {
-      "fail": 8,
+      "fail": 6,
       "file": "nodes\\CharacterData-replaceData.html",
-      "pass": 26,
+      "pass": 28,
       "status": "fail",
       "tests": 34
     },
     {
-      "fail": 16,
+      "fail": 14,
       "file": "nodes\\CharacterData-substringData.html",
-      "pass": 12,
+      "pass": 14,
       "status": "fail",
       "tests": 28
     },
     {
-      "fail": 8,
+      "fail": 6,
       "file": "nodes\\CharacterData-surrogates.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 8
     },
     {
-      "fail": 42,
+      "fail": 35,
       "file": "nodes\\ChildNode-after.html",
-      "pass": 3,
+      "pass": 10,
       "status": "fail",
       "tests": 45
     },
     {
-      "fail": 42,
+      "fail": 35,
       "file": "nodes\\ChildNode-before.html",
-      "pass": 3,
+      "pass": 10,
       "status": "fail",
       "tests": 45
     },
     {
-      "fail": 31,
+      "fail": 25,
       "file": "nodes\\ChildNode-replaceWith.html",
-      "pass": 2,
+      "pass": 8,
       "status": "fail",
       "tests": 33
     },
@@ -2343,9 +2343,9 @@
       "tests": 6
     },
     {
-      "fail": 7,
+      "fail": 6,
       "file": "nodes\\Node-nodeValue.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 7
     },
@@ -2357,9 +2357,9 @@
       "tests": 4
     },
     {
-      "fail": 11,
+      "fail": 8,
       "file": "nodes\\Node-parentElement.html",
-      "pass": 1,
+      "pass": 4,
       "status": "fail",
       "tests": 12
     },
@@ -2372,9 +2372,9 @@
       "tests": 0
     },
     {
-      "fail": 4,
+      "fail": 3,
       "file": "nodes\\Node-parentNode.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 5
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1444,
+  "total_fail": 1402,
   "total_files": 552,
-  "total_pass": 941,
+  "total_pass": 983,
   "total_skip": 31,
   "total_tests": 2385
 }
