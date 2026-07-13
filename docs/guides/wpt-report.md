@@ -1,8 +1,8 @@
 # aris W3C Web-Platform-Tests Report
 
-> **Tests: 2537** | **Pass: 1055** | **Fail: 1482** | **Pass rate: 41%**
+> **Tests: 2537** | **Pass: 1115** | **Fail: 1425** | **Pass rate: 43%**
 
-## Progress: 3.5% → 41.6% (12x improvement)
+## Progress: 3.5% → 43.9% (12.5x improvement)
 
 | Milestone | Tests Passed |
 |-----------|-------------|
@@ -13,6 +13,13 @@
 | createDocumentType + toggleAttribute | 969/2385 (40.6%) |
 | _children + innerHTML + firstChild | 983/2385 (41.2%) |
 | createEvent + initEvent | 1003/2392 (41.9%) |
-| setup() + EventTarget + passive events | **1055/2537 (41.6%)** |
+| setup() + EventTarget + passive events | 1055/2537 (41.6%) |
+| Fix duplicate dispatchEvent + passive tracking | **1115/2537 (43.9%)** |
 
-**63 test files pass 100%.**
+**62 test files pass 100%.**
+
+## Notable Improvements
+- passive-by-default: 0/100 → 80/100
+- Node-cloneNode: 0/135 → 122/135
+- DOMImplementation-createDocumentType: 1/82 → 80/82
+- CharacterData-replaceData: 0/34 → 30/34

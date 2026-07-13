@@ -1,5 +1,5 @@
 {
-  "pass_rate": 41,
+  "pass_rate": 43,
   "results": [
     {
       "fail": 0,
@@ -178,7 +178,7 @@
       "tests": 0
     },
     {
-      "fail": 2,
+      "fail": 3,
       "file": "events\\Event-defaultPrevented-after-dispatch.html",
       "pass": 0,
       "status": "fail",
@@ -192,10 +192,10 @@
       "tests": 8
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "events\\Event-dispatch-bubble-canceled.html",
-      "pass": 1,
-      "status": "pass",
+      "pass": 0,
+      "status": "fail",
       "tests": 1
     },
     {
@@ -269,9 +269,9 @@
       "tests": 1
     },
     {
-      "fail": 4,
+      "fail": 1,
       "file": "events\\Event-dispatch-on-disabled-elements.html",
-      "pass": 5,
+      "pass": 8,
       "status": "fail",
       "tests": 9
     },
@@ -297,10 +297,10 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "events\\Event-dispatch-propagation-stopped.html",
-      "pass": 1,
-      "status": "pass",
+      "pass": 0,
+      "status": "fail",
       "tests": 1
     },
     {
@@ -362,7 +362,7 @@
     {
       "fail": 3,
       "file": "events\\Event-initEvent.html",
-      "pass": 9,
+      "pass": 11,
       "status": "fail",
       "tests": 12
     },
@@ -430,10 +430,10 @@
       "tests": 1
     },
     {
-      "fail": 2,
+      "fail": 0,
       "file": "events\\Event-type-empty.html",
-      "pass": 0,
-      "status": "fail",
+      "pass": 2,
+      "status": "pass",
       "tests": 2
     },
     {
@@ -451,9 +451,9 @@
       "tests": 5
     },
     {
-      "fail": 5,
+      "fail": 4,
       "file": "events\\EventListener-handleEvent.html",
-      "pass": 1,
+      "pass": 2,
       "status": "fail",
       "tests": 6
     },
@@ -514,9 +514,9 @@
       "tests": 0
     },
     {
-      "fail": 2,
+      "fail": 1,
       "file": "events\\EventTarget-dispatchEvent-returnvalue.html",
-      "pass": 0,
+      "pass": 1,
       "status": "fail",
       "tests": 2
     },
@@ -928,9 +928,9 @@
       "tests": 12
     },
     {
-      "fail": 73,
+      "fail": 20,
       "file": "events\\passive-by-default.html",
-      "pass": 27,
+      "pass": 80,
       "status": "fail",
       "tests": 100
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1482,
+  "total_fail": 1425,
   "total_files": 552,
-  "total_pass": 1055,
+  "total_pass": 1115,
   "total_skip": 31,
   "total_tests": 2537
 }
