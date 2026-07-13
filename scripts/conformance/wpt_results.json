@@ -2399,9 +2399,9 @@
       "tests": 29
     },
     {
-      "fail": 72,
+      "fail": 69,
       "file": "nodes\\Node-textContent.html",
-      "pass": 9,
+      "pass": 12,
       "status": "fail",
       "tests": 81
     },
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4661,
+  "total_fail": 4658,
   "total_files": 552,
-  "total_pass": 2388,
+  "total_pass": 2391,
   "total_skip": 30,
   "total_tests": 7049
 }
