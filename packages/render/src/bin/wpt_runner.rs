@@ -299,7 +299,7 @@ var __tests = 0;
 var __active_ranges = [];
 // Ensure it's a proper array with mutable length
 __active_ranges.push = function(item) { this[this.length] = item; };
-__active_ranges.clear = function() { while(this.length > 0) this.pop(); };
+__active_ranges.clear = function() { this.length = 0; };
 
 function test(fn, name) {
     __tests++;
@@ -602,9 +602,11 @@ this.dispatchEvent = function(event) {
 };
 
 // Wrap document.createRange to track active ranges for mutation tracking.
+// Clear __active_ranges on each createRange call so only the current range is tracked.
 var __origCreateRange = document.createRange.bind(document);
 document.createRange = function() {
   var r = __origCreateRange();
+  __active_ranges.clear();
   __active_ranges.push(r);
   return r;
 };
@@ -616,6 +618,7 @@ document.implementation.createDocument = function() {
     var origCR = d.createRange.bind(d);
     d.createRange = function() {
       var r = origCR();
+      __active_ranges.clear();
       __active_ranges.push(r);
       return r;
     };
@@ -629,6 +632,7 @@ document.implementation.createHTMLDocument = function() {
     var origCR = d.createRange.bind(d);
     d.createRange = function() {
       var r = origCR();
+      __active_ranges.clear();
       __active_ranges.push(r);
       return r;
     };

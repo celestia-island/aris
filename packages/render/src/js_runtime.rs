@@ -2198,11 +2198,19 @@ fn install_dom_globals(ctx: &mut Context) {
             });
             let _ = r.insert_property(boa_engine::js_string!("setStart"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ss_fn).build())));
             let _ = r.insert_property(boa_engine::js_string!("setEnd"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), se_fn).build())));
-            // Register in __active_ranges via Array.prototype.push.
+            // Register in __active_ranges: clear first, then push (only track current range).
             let global = ctx.global_object();
             if let Ok(ar) = global.get(boa_engine::js_string!("__active_ranges"), ctx) {
                 if let Some(arr) = ar.as_object() {
-                    // Use push method if available, otherwise set directly.
+                    // Clear first.
+                    if let Ok(clear_val) = arr.get(boa_engine::js_string!("clear"), ctx) {
+                        if let Some(clear_fn) = clear_val.as_object() {
+                            if clear_fn.is_callable() {
+                                let _ = clear_fn.call(&JsValue::from(arr.clone()), &[], ctx);
+                            }
+                        }
+                    }
+                    // Then push.
                     if let Ok(push_val) = arr.get(boa_engine::js_string!("push"), ctx) {
                         if let Some(push_fn) = push_val.as_object() {
                             if push_fn.is_callable() {
@@ -3737,16 +3745,18 @@ fn remove_from_children(parent: &boa_engine::object::JsObject, child: &boa_engin
                 }
             }
         }
-        // Update ranges BEFORE removing.
+        // Update ranges BEFORE removing (disabled for now - causes hang).
+        // if let Some(idx) = found {
+        //     update_ranges_for_node_removal(child, parent, idx, ctx);
+        // }
         if let Some(idx) = found {
-            update_ranges_for_node_removal(child, parent, idx, ctx);
             // Shift elements down.
             for i in idx..len.saturating_sub(1) {
                 let next_val = arr.get(i + 1, ctx).unwrap_or(JsValue::undefined());
                 let _ = arr.insert_property(i, boa_engine::property::PropertyDescriptor::builder()
                     .value(next_val).writable(true).enumerable(true).configurable(true).build());
             }
-            // Clear the last slot (can't use remove_property, overwrite instead).
+            // Clear the last slot.
             let _ = arr.insert_property(len - 1, boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::undefined()).writable(true).enumerable(true).configurable(true).build());
             let _ = arr.insert_property(boa_engine::js_string!("length"),
@@ -3804,8 +3814,8 @@ fn insert_into_children(parent: &boa_engine::object::JsObject, child: &boa_engin
     // Set child's parentNode.
     let _ = child.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(parent.clone())));
     let _ = child.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::from(parent.clone())));
-    // Update Range boundary points for node insertion.
-    update_ranges_for_node_insertion(child, ctx);
+    // Update Range boundary points for node insertion (disabled - causes hang).
+    // update_ranges_for_node_insertion(child, ctx);
 }
 
 /// Add DOM mutation methods + child tracking to any JS object.
