@@ -1,5 +1,5 @@
 {
-  "pass_rate": 31,
+  "pass_rate": 32,
   "results": [
     {
       "fail": 0,
@@ -1760,9 +1760,9 @@
       "tests": 147
     },
     {
-      "fail": 595,
+      "fail": 538,
       "file": "nodes\\Document-createElementNS.html",
-      "pass": 1,
+      "pass": 58,
       "status": "fail",
       "tests": 596
     },
@@ -2083,9 +2083,9 @@
       "tests": 1
     },
     {
-      "fail": 4,
+      "fail": 3,
       "file": "nodes\\Element-tagName.html",
-      "pass": 2,
+      "pass": 3,
       "status": "fail",
       "tests": 6
     },
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4796,
+  "total_fail": 4738,
   "total_files": 552,
-  "total_pass": 2253,
+  "total_pass": 2311,
   "total_skip": 30,
   "total_tests": 7049
 }
