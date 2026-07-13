@@ -3216,18 +3216,200 @@ fn make_element_handle(
     });
     init.function(clone, boa_engine::js_string!("cloneNode"), 0);
 
-    // contains(node) — check if this node contains another.
-    let contains_fn =
-        NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+    // contains(node) — check if this node contains another by walking up
+    // the parentNode chain.
+    let contains_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let target = args.first().cloned().unwrap_or(JsValue::null());
+        let this_obj = match this.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::from(false)),
+        };
+        let target_obj = match target.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::from(false)),
+        };
+        // Same object → true.
+        if boa_engine::object::JsObject::equals(&this_obj, &target_obj) {
+            return Ok(JsValue::from(true));
+        }
+        // Walk up target's parentNode chain.
+        let mut current = target_obj;
+        for _ in 0..1000 {
+            let parent = current.get(boa_engine::js_string!("parentNode"), ctx).ok();
+            match parent.and_then(|v| v.as_object()) {
+                Some(p) => {
+                    if boa_engine::object::JsObject::equals(&p, &this_obj) {
+                        return Ok(JsValue::from(true));
+                    }
+                    current = p;
+                }
+                None => break,
+            }
+        }
+        Ok(JsValue::from(false))
+    });
     init.function(contains_fn, boa_engine::js_string!("contains"), 1);
 
-    // closest(selector) — returns null (no CSS selector engine on handles).
-    let closest_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
+    // replaceChild(newChild, oldChild) — returns oldChild (simplified).
+    let replace_child = NativeFunction::from_copy_closure(|_this, args, _ctx| {
+        Ok(args.get(1).cloned().unwrap_or(JsValue::null()))
+    });
+    init.function(replace_child, boa_engine::js_string!("replaceChild"), 2);
+
+    // hasChildNodes() — true if childNodes.length > 0.
+    let has_child_nodes = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(cn) = o.get(boa_engine::js_string!("childNodes"), ctx) {
+                if let Some(cn_obj) = cn.as_object() {
+                    let len = cn_obj.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0);
+                    return Ok(JsValue::from(len > 0.0));
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(has_child_nodes, boa_engine::js_string!("hasChildNodes"), 0);
+
+    // isEqualNode(other) — structural equality check (simplified: same tagName +
+    // same textContent + same number of children).
+    let is_equal_node = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let other = args.first().cloned().unwrap_or(JsValue::null());
+        let this_obj = match this.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::from(false)),
+        };
+        let other_obj = match other.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::from(false)),
+        };
+        // Same object → equal.
+        if boa_engine::object::JsObject::equals(&this_obj, &other_obj) {
+            return Ok(JsValue::from(true));
+        }
+        // Compare nodeName and textContent.
+        let tn1 = this_obj.get(boa_engine::js_string!("nodeName"), ctx).unwrap_or_default();
+        let tn2 = other_obj.get(boa_engine::js_string!("nodeName"), ctx).unwrap_or_default();
+        if tn1 != tn2 { return Ok(JsValue::from(false)); }
+        let tc1 = this_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
+        let tc2 = other_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
+        Ok(JsValue::from(tc1 == tc2))
+    });
+    init.function(is_equal_node, boa_engine::js_string!("isEqualNode"), 1);
+
+    // isSameNode(other) — reference equality.
+    let is_same_node = NativeFunction::from_copy_closure(|this, args, _ctx| {
+        let this_obj = this.as_object();
+        let other_obj = args.first().and_then(|v| v.as_object());
+        match (this_obj, other_obj) {
+            (Some(a), Some(b)) => Ok(JsValue::from(boa_engine::object::JsObject::equals(&a, &b))),
+            _ => Ok(JsValue::from(false)),
+        }
+    });
+    init.function(is_same_node, boa_engine::js_string!("isSameNode"), 1);
+
+    // compareDocumentPosition(other) — returns 0 if same, otherwise a bitmask.
+    let compare_pos = NativeFunction::from_copy_closure(|this, args, _ctx| {
+        let this_obj = this.as_object();
+        let other_obj = args.first().and_then(|v| v.as_object());
+        match (this_obj, other_obj) {
+            (Some(a), Some(b)) => {
+                if boa_engine::object::JsObject::equals(&a, &b) {
+                    Ok(JsValue::from(0u32))
+                } else {
+                    // Return DOCUMENT_POSITION_DISCONNECTED | DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
+                    Ok(JsValue::from(0x01u32 | 0x20u32))
+                }
+            }
+            _ => Ok(JsValue::from(0u32)),
+        }
+    });
+    init.function(compare_pos, boa_engine::js_string!("compareDocumentPosition"), 1);
+
+    // getRootNode() — returns this (simplified; no composed tree walking).
+    let get_root_node = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        let mut current = this.as_object();
+        for _ in 0..1000 {
+            let parent = current.as_ref().and_then(|o| {
+                o.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                    .and_then(|v| v.as_object())
+            });
+            match parent {
+                Some(p) => current = Some(p),
+                None => break,
+            }
+        }
+        match current {
+            Some(o) => Ok(JsValue::from(o)),
+            None => Ok(this.clone()),
+        }
+    });
+    init.function(get_root_node, boa_engine::js_string!("getRootNode"), 0);
+
+    // closest(selector) — walks up parentNode chain matching selector.
+    let closest_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let selector = arg_string(args, 0);
+        if selector.is_empty() { return Ok(JsValue::null()); }
+        let mut current = this.as_object();
+        for _ in 0..1000 {
+            let node = match current {
+                Some(o) => o,
+                None => break,
+            };
+            // Simple selector matching: tag name, .class, #id
+            let matches = if selector.starts_with('.') {
+                let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
+                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                    .unwrap_or_default();
+                cn.split_whitespace().any(|c| format!(".{}", c) == selector)
+            } else if selector.starts_with('#') {
+                let id = node.get(boa_engine::js_string!("id"), ctx).ok()
+                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                    .unwrap_or_default();
+                format!("#{}", id) == selector
+            } else {
+                let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
+                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                    .unwrap_or_default();
+                tn.eq_ignore_ascii_case(&selector)
+            };
+            if matches {
+                return Ok(JsValue::from(node));
+            }
+            // Move to parent.
+            current = node.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+        }
+        Ok(JsValue::null())
+    });
     init.function(closest_fn, boa_engine::js_string!("closest"), 1);
 
-    // matches(selector) — returns false.
-    let matches_fn =
-        NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+    // matches(selector) — check if this element matches a selector.
+    let matches_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let selector = arg_string(args, 0);
+        if selector.is_empty() { return Ok(JsValue::from(false)); }
+        let node = match this.as_object() {
+            Some(o) => o,
+            None => return Ok(JsValue::from(false)),
+        };
+        let matches = if selector.starts_with('.') {
+            let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            cn.split_whitespace().any(|c| format!(".{}", c) == selector)
+        } else if selector.starts_with('#') {
+            let id = node.get(boa_engine::js_string!("id"), ctx).ok()
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            format!("#{}", id) == selector
+        } else {
+            let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            tn.eq_ignore_ascii_case(&selector)
+        };
+        Ok(JsValue::from(matches))
+    });
     init.function(matches_fn, boa_engine::js_string!("matches"), 1);
 
     // getElementsByTagName — returns empty array.
