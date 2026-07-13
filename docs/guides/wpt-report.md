@@ -1,7 +1,7 @@
 # aris W3C Web-Platform-Tests Report
 
-> **Tests: 6962** | **Pass: 1913** | **Fail: 5049** | **Pass rate: 27%**
+> **Tests: 6962** | **Pass: 2023** | **Fail: 4939** | **Pass rate: 29%**
 
-## Progress: ~60 tests → 1913 tests passing
+## Progress: ~60 → 2023 tests passing (29.1%)
 
 **69 test files pass 100%.**
