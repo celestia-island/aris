@@ -3198,6 +3198,17 @@ fn install_dom_globals(ctx: &mut Context) {
                 }, doc_ref5);
                 let _ = obj.insert_property(boa_engine::js_string!("createRange"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cr_fn).build())));
             }
+            // Add empty childNodes/firstChild/lastChild for Document constructor.
+            let empty_arr = JsArray::new(ctx);
+            let pd_doc = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd_doc(empty_arr.into()));
+            let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("doctype"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("documentElement"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("location"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("head"), pd_doc(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("body"), pd_doc(JsValue::null()));
             Ok(obj.into())
         });
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
