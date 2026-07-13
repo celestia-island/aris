@@ -744,6 +744,18 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Like arg_string but converts any JsValue to string via JS String() semantics.
+/// undefined → "undefined", null → "null", numbers → their string form.
+fn arg_to_string(args: &[JsValue], idx: usize, ctx: &mut Context) -> String {
+    match args.get(idx) {
+        Some(v) => match v.to_string(ctx) {
+            Ok(s) => s.to_std_string_escaped(),
+            Err(_) => String::new(),
+        },
+        None => String::new(),
+    }
+}
+
 /// Populate a JS element handle with real properties from a node snapshot.
 fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
     let pd = |val: JsValue| {
@@ -2462,7 +2474,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     // createElement
     let create_el = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
-            let tag = arg_string(args, 0);
+            // Per spec, createElement converts the argument to string via String().
+            // createElement(undefined) → createElement("undefined")
+            // createElement(null) → createElement("null")
+            let tag = arg_to_string(args, 0, ctx);
             // Validate the tag name per the Name production.
             // First char must be a letter, '_', or ':'. Rest must be letter, digit,
             // '_', ':', '-', '.', or combining char.
@@ -2495,7 +2510,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .configurable(true)
                     .build()
             };
-            let upper = tag.to_uppercase();
+            // ASCII-only uppercase for tagName (per HTML spec for HTML documents).
+            let upper: String = tag.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect();
+            let lower: String = tag.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
             let _ = handle.insert_property(
                 boa_engine::js_string!("tagName"),
                 pd(JsValue::from(boa_engine::js_string!(upper.clone()))),
@@ -2506,7 +2523,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             );
             let _ = handle.insert_property(
                 boa_engine::js_string!("localName"),
-                pd(JsValue::from(boa_engine::js_string!(tag.to_lowercase()))),
+                pd(JsValue::from(boa_engine::js_string!(lower))),
             );
             let _ = handle.insert_property(
                 boa_engine::js_string!("namespaceURI"),
@@ -3306,12 +3323,192 @@ fn make_element_handle(
     });
     init.function(has_attr, boa_engine::js_string!("hasAttribute"), 1);
 
-    // removeAttribute
-    let remove_attr = NativeFunction::from_copy_closure(|this, args, _ctx| {
-        let _name = arg_string(args, 0);
+    // removeAttribute — removes from attributes NamedNodeMap (best-effort).
+    let remove_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            // Remove from attributes NamedNodeMap by decrementing length.
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    if len > 0 {
+                        let _ = attrs.insert_property(boa_engine::js_string!("length"),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(len - 1)).writable(true).enumerable(true).configurable(true).build());
+                    }
+                }
+            }
+        }
         Ok(JsValue::undefined())
     });
     init.function(remove_attr, boa_engine::js_string!("removeAttribute"), 1);
+
+    // toggleAttribute(name, force?) — toggles boolean attribute.
+    let toggle_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0);
+        // Validate name.
+        if name.is_empty() || !is_valid_name_first(&name) {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("InvalidCharacterError")
+                .into());
+        }
+        let lower = name.to_ascii_lowercase();
+        let force = args.get(1).and_then(|v| v.as_boolean());
+        if let Some(o) = this.as_object() {
+            // Check if attribute exists.
+            let exists = if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    let mut found = false;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&lower) {
+                                        found = true; break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    found
+                } else { false }
+            } else { false };
+            match force {
+                Some(true) => {
+                    // Set to empty string.
+                    let sfn = o.get(boa_engine::js_string!("setAttribute"), ctx).ok();
+                    if let Some(sv) = sfn { if let Some(sf) = sv.as_object() { let _ = sf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(lower)), JsValue::from(boa_engine::js_string!(""))], ctx); } }
+                    return Ok(JsValue::from(true));
+                }
+                Some(false) => {
+                    if exists {
+                        let rfn = o.get(boa_engine::js_string!("removeAttribute"), ctx).ok();
+                        if let Some(rv) = rfn { if let Some(rf) = rv.as_object() { let _ = rf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(name))], ctx); } }
+                    }
+                    return Ok(JsValue::from(false));
+                }
+                None => {
+                    if exists {
+                        let rfn = o.get(boa_engine::js_string!("removeAttribute"), ctx).ok();
+                        if let Some(rv) = rfn { if let Some(rf) = rv.as_object() { let _ = rf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(name))], ctx); } }
+                        return Ok(JsValue::from(false));
+                    } else {
+                        let sfn = o.get(boa_engine::js_string!("setAttribute"), ctx).ok();
+                        if let Some(sv) = sfn { if let Some(sf) = sv.as_object() { let _ = sf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(lower)), JsValue::from(boa_engine::js_string!(""))], ctx); } }
+                        return Ok(JsValue::from(true));
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(toggle_attr, boa_engine::js_string!("toggleAttribute"), 1);
+
+    // getAttributeNode(name) — returns the Attr object or null.
+    let get_attr_node = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        return Ok(av);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    init.function(get_attr_node, boa_engine::js_string!("getAttributeNode"), 1);
+
+    // hasAttributeNS(ns, name) — simplified: checks local name.
+    let has_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let _ns = arg_string(args, 0);
+        let name = arg_string(args, 1).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx)
+                                    .or_else(|_| ao.get(boa_engine::js_string!("name"), ctx)) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        return Ok(JsValue::from(true));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(has_attr_ns, boa_engine::js_string!("hasAttributeNS"), 2);
+
+    // getAttributeNS(ns, name) — returns value or null.
+    let get_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let _ns = arg_string(args, 0);
+        let name = arg_string(args, 1).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx)
+                                    .or_else(|_| ao.get(boa_engine::js_string!("name"), ctx)) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        if let Ok(val) = ao.get(boa_engine::js_string!("value"), ctx) {
+                                            return Ok(val);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    init.function(get_attr_ns, boa_engine::js_string!("getAttributeNS"), 2);
+
+    // removeAttributeNS — no-op stub.
+    let remove_attr_ns = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(remove_attr_ns, boa_engine::js_string!("removeAttributeNS"), 2);
+
+    // hasAttributes() — true if attributes.length > 0.
+    let has_attributes = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(av) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(ao) = av.as_object() {
+                    let len = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0);
+                    return Ok(JsValue::from(len > 0.0));
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(has_attributes, boa_engine::js_string!("hasAttributes"), 0);
 
     // addEventListener
     let add_listener = NativeFunction::from_copy_closure_with_captures(
