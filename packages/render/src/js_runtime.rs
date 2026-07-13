@@ -2296,6 +2296,32 @@ fn install_dom_globals(ctx: &mut Context) {
         // document.createEvent(type) — returns a new Event-like object.
         let create_event = NativeFunction::from_copy_closure(|_t, args, ctx| {
             let event_type = arg_string(args, 0);
+            // Whitelist of createEvent-compatible event types (from DOM spec).
+            let iface_name = match event_type.as_str() {
+                "BeforeUnloadEvent" => "BeforeUnloadEvent",
+                "CompositionEvent" => "CompositionEvent",
+                "CustomEvent" => "CustomEvent",
+                "DeviceMotionEvent" => "DeviceMotionEvent",
+                "DeviceOrientationEvent" => "DeviceOrientationEvent",
+                "DragEvent" => "DragEvent",
+                "Event" | "Events" | "HTMLEvents" | "SVGEvents" => "Event",
+                "FocusEvent" => "FocusEvent",
+                "HashChangeEvent" => "HashChangeEvent",
+                "KeyboardEvent" => "KeyboardEvent",
+                "MessageEvent" => "MessageEvent",
+                "MouseEvent" | "MouseEvents" => "MouseEvent",
+                "StorageEvent" => "StorageEvent",
+                "TextEvent" => "TextEvent",
+                "TouchEvent" => "TouchEvent",
+                "UIEvent" | "UIEvents" => "UIEvent",
+                "WheelEvent" => "WheelEvent",
+                _ => {
+                    // Unknown type → throw NOT_SUPPORTED_ERR.
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NOT_SUPPORTED_ERR: The provided event type is not supported")
+                        .into());
+                }
+            };
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let pd = |val: JsValue| {
                 boa_engine::property::PropertyDescriptor::builder()
@@ -2314,14 +2340,6 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(boa_engine::js_string!("timeStamp"), pd(JsValue::from(0u32)));
             let _ = obj.insert_property(boa_engine::js_string!("eventPhase"), pd(JsValue::from(0u32)));
             let _ = obj.insert_property(boa_engine::js_string!("cancelBubble"), pd(JsValue::from(false)));
-
-            // Resolve the event type alias to the interface name.
-            let iface_name = match event_type.as_str() {
-                "Events" | "HTMLEvents" | "SVGEvents" => "Event",
-                "MouseEvents" => "MouseEvent",
-                "UIEvents" => "UIEvent",
-                _ => &event_type,
-            };
 
             // Look up the constructor on the global object and set prototype.
             if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!(iface_name), ctx) {
