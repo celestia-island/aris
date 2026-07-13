@@ -5225,17 +5225,56 @@ fn make_element_handle(
             Some(o) => o,
             None => return Ok(JsValue::from(false)),
         };
-        // Same object → equal.
         if boa_engine::object::JsObject::equals(&this_obj, &other_obj) {
             return Ok(JsValue::from(true));
         }
-        // Compare nodeName and textContent.
+        // Compare nodeType.
+        let nt1 = this_obj.get(boa_engine::js_string!("nodeType"), ctx).unwrap_or_default();
+        let nt2 = other_obj.get(boa_engine::js_string!("nodeType"), ctx).unwrap_or_default();
+        if nt1 != nt2 { return Ok(JsValue::from(false)); }
+        // Compare nodeName.
         let tn1 = this_obj.get(boa_engine::js_string!("nodeName"), ctx).unwrap_or_default();
         let tn2 = other_obj.get(boa_engine::js_string!("nodeName"), ctx).unwrap_or_default();
         if tn1 != tn2 { return Ok(JsValue::from(false)); }
-        let tc1 = this_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
-        let tc2 = other_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
-        Ok(JsValue::from(tc1 == tc2))
+
+        let nt_val = nt1.as_number().unwrap_or(0.0) as u32;
+        match nt_val {
+            // DocumentType: compare name, publicId, systemId
+            10 => {
+                for prop in &["name", "publicId", "systemId"] {
+                    let v1 = this_obj.get(boa_engine::js_string!(*prop), ctx).unwrap_or_default();
+                    let v2 = other_obj.get(boa_engine::js_string!(*prop), ctx).unwrap_or_default();
+                    if v1 != v2 { return Ok(JsValue::from(false)); }
+                }
+                Ok(JsValue::from(true))
+            }
+            // Element: compare namespaceURI, prefix, localName, attributes
+            1 => {
+                for prop in &["namespaceURI", "prefix", "localName"] {
+                    let v1 = this_obj.get(boa_engine::js_string!(*prop), ctx).unwrap_or_default();
+                    let v2 = other_obj.get(boa_engine::js_string!(*prop), ctx).unwrap_or_default();
+                    if v1 != v2 { return Ok(JsValue::from(false)); }
+                }
+                // Compare attributes count (simplified).
+                let a1 = this_obj.get(boa_engine::js_string!("attributes"), ctx).ok()
+                    .and_then(|v| v.as_object())
+                    .and_then(|o| o.get(boa_engine::js_string!("length"), ctx).ok())
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                let a2 = other_obj.get(boa_engine::js_string!("attributes"), ctx).ok()
+                    .and_then(|v| v.as_object())
+                    .and_then(|o| o.get(boa_engine::js_string!("length"), ctx).ok())
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                if a1 != a2 { return Ok(JsValue::from(false)); }
+                Ok(JsValue::from(true))
+            }
+            // Text/Comment/PI: compare data/textContent
+            3 | 8 | 7 => {
+                let tc1 = this_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
+                let tc2 = other_obj.get(boa_engine::js_string!("textContent"), ctx).unwrap_or_default();
+                Ok(JsValue::from(tc1 == tc2))
+            }
+            _ => Ok(JsValue::from(true)),
+        }
     });
     init.function(is_equal_node, boa_engine::js_string!("isEqualNode"), 1);
 
