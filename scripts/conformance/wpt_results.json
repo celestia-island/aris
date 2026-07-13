@@ -1,5 +1,5 @@
 {
-  "pass_rate": 32,
+  "pass_rate": 33,
   "results": [
     {
       "fail": 0,
@@ -1760,9 +1760,9 @@
       "tests": 147
     },
     {
-      "fail": 538,
+      "fail": 461,
       "file": "nodes\\Document-createElementNS.html",
-      "pass": 58,
+      "pass": 135,
       "status": "fail",
       "tests": 596
     },
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 4738,
+  "total_fail": 4661,
   "total_files": 552,
-  "total_pass": 2311,
+  "total_pass": 2388,
   "total_skip": 30,
   "total_tests": 7049
 }
