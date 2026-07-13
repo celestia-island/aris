@@ -841,9 +841,31 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         let _ = child_arr.insert_property(i as u32, pd(child_obj.into()));
     }
     let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(child_arr.into()));
+    // children (HTMLCollection of element children) — simplified to same as childNodes.
+    let _ = obj.insert_property(
+        boa_engine::js_string!("children"),
+        pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))),
+    );
     let _ = obj.insert_property(
         boa_engine::js_string!("childElementCount"),
-        pd(JsValue::from(s.child_ids.len() as u32)),
+        pd(JsValue::from(0u32)),
+    );
+    // firstElementChild / lastElementChild / nextElementSibling / previousElementSibling
+    let _ = obj.insert_property(
+        boa_engine::js_string!("firstElementChild"),
+        pd(JsValue::null()),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("lastElementChild"),
+        pd(JsValue::null()),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("nextElementSibling"),
+        pd(JsValue::null()),
+    );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("previousElementSibling"),
+        pd(JsValue::null()),
     );
     // firstChild / lastChild
     if let Some(&first) = s.child_ids.first() {
@@ -2439,6 +2461,20 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(JsValue::from(0u32)),
             );
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
+            // Element navigation properties (all null/empty for new elements).
+            let _ = handle.insert_property(boa_engine::js_string!("children"),
+                pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
+            let _ = handle.insert_property(boa_engine::js_string!("childElementCount"), pd(JsValue::from(0u32)));
+            let _ = handle.insert_property(boa_engine::js_string!("firstElementChild"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("lastElementChild"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("nextElementSibling"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("previousElementSibling"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let _ = handle.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+            let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
+            let _ = handle.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
             // Set the prototype chain so instanceof works.
             set_element_prototype(&handle, &tag, ctx);
             Ok(handle.into())
