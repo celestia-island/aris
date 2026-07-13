@@ -2724,6 +2724,10 @@ fn install_dom_globals(ctx: &mut Context) {
         ("ErrorEvent", 0),
         ("ProgressEvent", 0),
         ("SecurityPolicyViolationEvent", 0),
+        // Traversal interfaces
+        ("TreeWalker", 0),
+        ("NodeIterator", 0),
+        ("NodeFilter", 0),
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
@@ -2804,9 +2808,30 @@ fn install_dom_globals(ctx: &mut Context) {
             }
         }
     }
-}
 
-/// Build CharacterData methods as a list of (name, NativeFunction).
+    // Add NodeFilter constants to the NodeFilter constructor.
+    let pd_const = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(false).enumerable(false).configurable(false).build()
+    };
+    if let Ok(nf_val) = ctx.global_object().get(boa_engine::js_string!("NodeFilter"), ctx) {
+        if let Some(nf) = nf_val.as_object() {
+            let _ = nf.insert_property(boa_engine::js_string!("FILTER_ACCEPT"), pd_const(JsValue::from(1u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("FILTER_REJECT"), pd_const(JsValue::from(2u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("FILTER_SKIP"), pd_const(JsValue::from(3u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_ALL"), pd_const(JsValue::from(0xFFFFFFFFu32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_ELEMENT"), pd_const(JsValue::from(0x1u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_ATTRIBUTE"), pd_const(JsValue::from(0x2u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_TEXT"), pd_const(JsValue::from(0x4u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_CDATA_SECTION"), pd_const(JsValue::from(0x8u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_PROCESSING_INSTRUCTION"), pd_const(JsValue::from(0x40u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_COMMENT"), pd_const(JsValue::from(0x80u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_DOCUMENT"), pd_const(JsValue::from(0x100u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_DOCUMENT_TYPE"), pd_const(JsValue::from(0x200u32)));
+            let _ = nf.insert_property(boa_engine::js_string!("SHOW_DOCUMENT_FRAGMENT"), pd_const(JsValue::from(0x400u32)));
+        }
+    }
+}
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
         let v = arg_string(args, 0);
