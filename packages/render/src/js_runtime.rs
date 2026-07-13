@@ -523,10 +523,10 @@ fn collect_query_index(
     let mut by_id = HashMap::new();
     for (id, node) in doc.tree().iter() {
         if let Some(el) = node.element_data() {
-            let tag = format!("{:?}", el.name.local)
-                .trim_start_matches("Atom('")
-                .trim_end_matches("' type=static)")
-                .to_string();
+            let dbg = format!("{:?}", el.name.local);
+            let tag = if let Some(rest) = dbg.strip_prefix("Atom('") {
+                if let Some(end) = rest.find('\'') { rest[..end].to_string() } else { String::new() }
+            } else { String::new() };
             by_tag.entry(tag).or_insert(id as u32);
             if let Some(cls) = node.attr(local_name!("class")) {
                 for c in cls.split_whitespace() {
@@ -3495,16 +3495,73 @@ fn make_element_handle(
     });
     init.function(matches_fn, boa_engine::js_string!("matches"), 1);
 
-    // getElementsByTagName — returns empty array.
-    let by_tag = NativeFunction::from_copy_closure(|_this, _args, ctx| {
-        Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
-    });
+    // getElementsByTagName — returns array of matching element handles.
+    let by_tag = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let tag = arg_string(args, 0).to_lowercase();
+            let bb = b.borrow();
+            let matching: Vec<u32> = bb.node_props.iter()
+                .filter(|(_, s)| {
+                    s.node_type == 1 && (tag == "*" || s.tag_name.to_lowercase() == tag)
+                })
+                .map(|(&id, _)| id)
+                .collect();
+            drop(bb);
+            let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            for (i, nid) in matching.iter().enumerate() {
+                let snap = b.borrow().node_props.get(nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                    set_element_prototype(&handle, &s.tag_name, ctx);
+                }
+                let _ = arr.insert_property(i as u32, pd(handle.into()));
+            }
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(matching.len() as u32)));
+            Ok(arr.into())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(by_tag, boa_engine::js_string!("getElementsByTagName"), 1);
 
-    // getElementsByClassName — returns empty array.
-    let by_class = NativeFunction::from_copy_closure(|_this, _args, ctx| {
-        Ok(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()).into())
-    });
+    // getElementsByClassName — returns array of matching element handles.
+    let by_class = NativeFunction::from_copy_closure_with_captures(
+        |_this, args, b, ctx| {
+            let cls = arg_string(args, 0);
+            let wanted: Vec<&str> = cls.split_whitespace().collect();
+            let bb = b.borrow();
+            let matching: Vec<u32> = bb.node_props.iter()
+                .filter(|(_, s)| {
+                    s.node_type == 1 && wanted.iter().all(|w| {
+                        s.class_name.split_whitespace().any(|c| c == *w)
+                    })
+                })
+                .map(|(&id, _)| id)
+                .collect();
+            drop(bb);
+            let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val).writable(true).enumerable(true).configurable(true).build()
+            };
+            for (i, nid) in matching.iter().enumerate() {
+                let snap = b.borrow().node_props.get(nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                    set_element_prototype(&handle, &s.tag_name, ctx);
+                }
+                let _ = arr.insert_property(i as u32, pd(handle.into()));
+            }
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(matching.len() as u32)));
+            Ok(arr.into())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(
         by_class,
         boa_engine::js_string!("getElementsByClassName"),
