@@ -2299,6 +2299,24 @@ fn install_dom_globals(ctx: &mut Context) {
             )),
         );
 
+        // document.createCDATASection(data)
+        let create_cdata = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let data = arg_string(args, 0);
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(4u32)));
+            let _ = obj.insert_property(boa_engine::js_string!("_data"), pd2(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("data"), pd2(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::from(boa_engine::js_string!(data.clone()))));
+            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::from(boa_engine::js_string!(data))));
+            let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#cdata-section"))));
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createCDATASection"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_cdata).build())),
+        );
+
         // document.adoptNode(node) — returns the node (simplified: no-op).
         let adopt_node = NativeFunction::from_copy_closure(|_t, args, _ctx| {
             Ok(args.first().cloned().unwrap_or(JsValue::null()))
