@@ -973,6 +973,13 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         {
             continue;
         }
+        // Skip accessor properties (firstChild, lastChild, innerHTML, data, nodeValue)
+        // to prevent infinite recursion during deep clone.
+        if key_str.contains("firstChild") || key_str.contains("lastChild")
+            || key_str.contains("innerHTML") || key_str.contains("outerHTML")
+        {
+            continue;
+        }
         // Get the value.
         let val = match src.get(key.clone(), ctx) {
             Ok(v) => v,
@@ -3180,8 +3187,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("lastElementChild"), pd(JsValue::null()));
             let _ = handle.insert_property(boa_engine::js_string!("nextElementSibling"), pd(JsValue::null()));
             let _ = handle.insert_property(boa_engine::js_string!("previousElementSibling"), pd(JsValue::null()));
-            let _ = handle.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
-            let _ = handle.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
+            // firstChild/lastChild/childNodes are set as accessors by make_element_handle.
             let _ = handle.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
             let _ = handle.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
             let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
@@ -4864,6 +4870,44 @@ fn make_element_handle(
             .configurable(true)
             .build(),
     );
+
+    // firstChild/lastChild as accessors: read from _children array.
+    let fc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                if let Some(ca) = cv.as_object() {
+                    return Ok(ca.get(0u32, ctx).unwrap_or(JsValue::null()));
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    let lc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                if let Some(ca) = cv.as_object() {
+                    let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    if len > 0 {
+                        return Ok(ca.get(len - 1, ctx).unwrap_or(JsValue::null()));
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    let fc_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
+    let lc_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lc_get).build();
+    for (name, getter) in &[("firstChild", fc_fn.clone()), ("lastChild", lc_fn.clone())] {
+        let _ = obj.insert_property(
+            boa_engine::js_string!(*name),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(getter.clone())
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+    }
 
     Ok(obj)
 }
