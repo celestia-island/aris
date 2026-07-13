@@ -2317,6 +2317,55 @@ fn install_dom_globals(ctx: &mut Context) {
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_cdata).build())),
         );
 
+        // document.createTreeWalker(root, whatToShow, filter)
+        let create_tw = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let root = args.first().cloned().unwrap_or(JsValue::null());
+            let what_to_show = args.get(1).cloned().unwrap_or(JsValue::from(0xFFFFFFFFu32));
+            let filter = args.get(2).cloned().unwrap_or(JsValue::null());
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(false).enumerable(true).configurable(false).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("root"), pd2(root.clone()));
+            let _ = obj.insert_property(boa_engine::js_string!("whatToShow"), pd2(what_to_show));
+            let _ = obj.insert_property(boa_engine::js_string!("filter"), pd2(filter));
+            let _ = obj.insert_property(boa_engine::js_string!("currentNode"),
+                boa_engine::property::PropertyDescriptor::builder().value(root).writable(true).enumerable(true).configurable(true).build());
+            // parentNode, firstChild, lastChild, previousSibling, nextSibling — stubs returning null.
+            let null_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::null()));
+            for mname in &["parentNode", "firstChild", "lastChild", "previousSibling", "nextSibling"] {
+                let _ = obj.insert_property(boa_engine::js_string!(*mname),
+                    pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_fn.clone()).build())));
+            }
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createTreeWalker"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_tw).build())),
+        );
+
+        // document.createNodeIterator(root, whatToShow, filter)
+        let create_ni = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let root = args.first().cloned().unwrap_or(JsValue::null());
+            let what_to_show = args.get(1).cloned().unwrap_or(JsValue::from(0xFFFFFFFFu32));
+            let filter = args.get(2).cloned().unwrap_or(JsValue::null());
+            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(false).enumerable(true).configurable(false).build() };
+            let _ = obj.insert_property(boa_engine::js_string!("root"), pd2(root.clone()));
+            let _ = obj.insert_property(boa_engine::js_string!("whatToShow"), pd2(what_to_show));
+            let _ = obj.insert_property(boa_engine::js_string!("filter"), pd2(filter));
+            let _ = obj.insert_property(boa_engine::js_string!("referenceNode"),
+                boa_engine::property::PropertyDescriptor::builder().value(root).writable(true).enumerable(true).configurable(true).build());
+            let null_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::null()));
+            for mname in &["nextNode", "previousNode", "detach"] {
+                let _ = obj.insert_property(boa_engine::js_string!(*mname),
+                    pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_fn.clone()).build())));
+            }
+            Ok(obj.into())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("createNodeIterator"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_ni).build())),
+        );
+
         // document.adoptNode(node) — returns the node (simplified: no-op).
         let adopt_node = NativeFunction::from_copy_closure(|_t, args, _ctx| {
             Ok(args.first().cloned().unwrap_or(JsValue::null()))
