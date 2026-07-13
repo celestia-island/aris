@@ -3083,9 +3083,9 @@ fn install_dom_globals(ctx: &mut Context) {
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
-        let ctor_fn = NativeFunction::from_copy_closure(move |_t, _a, ctx| {
-            // Use with_object_proto — the constructor's .prototype is set below.
-            let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let ctor_fn = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+            // Use `this` from Boa's OrdinaryCallConstruct (has correct prototype).
+            let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
             // For Document constructor, add document-level methods.
             if name == "Document" {
@@ -3188,8 +3188,6 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
         // Create a .prototype object on the constructor so instanceof works.
-        // JS `instanceof` checks: object.__proto__ === Constructor.prototype
-        // (walking up the prototype chain).
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
             if let Some(ctor_obj) = ctor_val.as_object() {
