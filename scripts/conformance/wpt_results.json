@@ -1,0 +1,3906 @@
+{
+  "pass_rate": 29,
+  "results": [
+    {
+      "fail": 0,
+      "file": "abort\\abort-signal-any-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "abort\\abort-signal-timeout.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "abort\\crashtests\\any-on-abort.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "abort\\crashtests\\timeout-close.html",
+      "pass": 0,
+      "reason": "requires XMLHttpRequest",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "abort\\reason-constructor.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 4,
+      "file": "attributes-are-nodes.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 2,
+      "file": "collections\\HTMLCollection-as-prototype.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "collections\\HTMLCollection-delete.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 7,
+      "file": "collections\\HTMLCollection-empty-name.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 7
+    },
+    {
+      "fail": 0,
+      "file": "collections\\HTMLCollection-iterator.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 8,
+      "file": "collections\\HTMLCollection-own-props.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 7,
+      "file": "collections\\HTMLCollection-supported-property-indices.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 7
+    },
+    {
+      "fail": 6,
+      "file": "collections\\HTMLCollection-supported-property-names.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 0,
+      "file": "collections\\childnodes-messagechannel-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "collections\\domstringmap-supported-property-names.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 3,
+      "file": "collections\\namednodemap-supported-property-names.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "crashtests\\adoptNode-reparenting.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "crashtests\\append-child-recurse.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "crashtests\\appendChild-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "crashtests\\normalize-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "eventPathRemoved.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 48,
+      "file": "events\\Body-FrameSet-Event-Handlers.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 48
+    },
+    {
+      "fail": 3,
+      "file": "events\\CustomEvent.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 8,
+      "file": "events\\Event-cancelBubble.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-constants.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "events\\Event-defaultPrevented-after-dispatch.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 8,
+      "file": "events\\Event-defaultPrevented.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-bubble-canceled.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "events\\Event-dispatch-bubbles-false.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 5,
+      "file": "events\\Event-dispatch-bubbles-true.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 33,
+      "file": "events\\Event-dispatch-click.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 33
+    },
+    {
+      "fail": 6,
+      "file": "events\\Event-dispatch-click.tentative.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-detached-click.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 12,
+      "file": "events\\Event-dispatch-detached-input-and-change.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 12
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-handlers-changed.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-multiple-cancelBubble.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-multiple-stopPropagation.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-omitted-capture.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 4,
+      "file": "events\\Event-dispatch-on-disabled-elements.html",
+      "pass": 5,
+      "status": "fail",
+      "tests": 9
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-order-at-target.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-order.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-other-document.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-propagation-stopped.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-dispatch-redispatch.html",
+      "pass": 3,
+      "status": "pass",
+      "tests": 3
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-reenter.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-dispatch-single-activation-behavior.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-target-moved.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-dispatch-target-removed.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-dispatch-throwing-multiple-globals.html",
+      "pass": 2,
+      "status": "pass",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-dispatch-throwing.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-init-while-dispatching.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 12,
+      "file": "events\\Event-initEvent.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 12
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-propagation.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "events\\Event-returnValue.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 7
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-stopImmediatePropagation.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-stopPropagation-cancel-bubbling.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-subclasses-constructors.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\Event-timestamp-cross-realm-getter.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 4,
+      "file": "events\\Event-timestamp-high-resolution.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-timestamp-high-resolution.https.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\Event-timestamp-safe-resolution.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "events\\Event-type-empty.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 2,
+      "file": "events\\Event-type.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-handleEvent-cross-realm.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-handleEvent.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-incumbent-global-1.sub.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-incumbent-global-2.sub.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-incumbent-global-subframe-1.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-incumbent-global-subframe-2.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventListener-incumbent-global-subsubframe.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "events\\EventListener-invoke-legacy.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 4,
+      "file": "events\\EventListenerOptions-capture.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventTarget-add-listener-platform-object.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "events\\EventTarget-dispatchEvent-returnvalue.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "events\\EventTarget-dispatchEvent.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "events\\EventTarget-this-of-listener.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 3,
+      "file": "events\\KeyEvent-initKeyEvent.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "events\\click-on-absolute-pseudo.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\event-disabled-dynamic.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\event-global-is-still-set-when-coercing-beforeunload-result.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\event-global-is-still-set-when-reporting-exception-onerror.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\event-global.html",
+      "pass": 0,
+      "reason": "requires XMLHttpRequest",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\event-handler-attribute-replace-preserves-passive.html",
+      "pass": 2,
+      "status": "pass",
+      "tests": 2
+    },
+    {
+      "fail": 1,
+      "file": "events\\event-src-element-nullable.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\focus-event-document-move.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\handler-count.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\keypress-dispatch-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "events\\label-default-action.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "events\\mouse-event-retarget.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\no-focus-events-at-clicking-editable-content-in-link.html",
+      "pass": 2,
+      "status": "pass",
+      "tests": 2
+    },
+    {
+      "fail": 1,
+      "file": "events\\non-cancelable-when-passive\\generic-events-stay-cancelable.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-mousewheel-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-mousewheel-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-mousewheel-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-mousewheel-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-mousewheel-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchmove-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchmove-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchmove-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchmove-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchmove-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchstart-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchstart-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchstart-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchstart-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-touchstart-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-wheel-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-wheel-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-wheel-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-wheel-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\non-passive-wheel-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-mousewheel-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-mousewheel-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-mousewheel-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-mousewheel-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-mousewheel-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchmove-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchmove-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchmove-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchmove-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchmove-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchstart-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchstart-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchstart-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchstart-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-touchstart-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-wheel-event-listener-on-body.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-wheel-event-listener-on-div.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-wheel-event-listener-on-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-wheel-event-listener-on-root.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\non-cancelable-when-passive\\passive-wheel-event-listener-on-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 12,
+      "file": "events\\non-cancelable-when-passive\\synthetic-events-cancelable.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 12
+    },
+    {
+      "fail": 100,
+      "file": "events\\passive-by-default.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 100
+    },
+    {
+      "fail": 0,
+      "file": "events\\pointer-event-document-move.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\preventDefault-during-activation-behavior.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "events\\remove-all-listeners.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "events\\replace-event-listener-null-browsing-context-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\resources\\empty-document.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\resources\\event-global-extra-frame.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\resources\\event-global-is-still-set-when-coercing-beforeunload-result-frame.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\resources\\large-dimension-document.sub.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\iframe-chains.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\input-text-scroll-event-when-using-arrow-keys.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\save-iframe-scroll-offset-when-display-none.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\save-iframe-scroll-offset-when-display-none.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scroll-cross-origin-iframes.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scroll-cross-origin-iframes.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scroll-event-fired-to-element.html",
+      "pass": 4,
+      "status": "pass",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scroll-event-fired-to-iframe.html",
+      "pass": 4,
+      "status": "pass",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollIntoView-in-onscroll-to-sticky.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-after-instant-scroll-in-microtask.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-after-sequence-of-scrolls.tentative.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-after-snap.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-for-mandatory-snap-point-after-load.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-for-programmatic-scroll.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-for-scroll-attr-change.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-for-scrollIntoView.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-to-document.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-to-element-with-overscroll-behavior.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fired-to-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fires-for-repeat-key-ending-after-scroll-container-end-is-reached.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fires-on-visual-viewport.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fires-to-iframe-inner-frame.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-fires-to-iframe-window.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-for-user-scroll.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-handler-content-attributes.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-not-fired-after-removing-scroller.tentative.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-event-not-fired-on-no-scroll.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-fires-to-text-input.html",
+      "pass": 5,
+      "status": "pass",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\scrollend-with-snap-on-fractional-offset.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-composed.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-no-scroll-after-prevent-default.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-basic.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-multiple-action-chains.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-target-display-change.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-target-elements.html",
+      "pass": 0,
+      "reason": "test caused a panic",
+      "status": "crash",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-target-move.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-target-removal.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\scrolling\\wheel-event-transactions-target-resize.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\shadow-relatedTarget.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\webkit-animation-end-event.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\webkit-animation-iteration-event.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\webkit-animation-start-event.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "events\\webkit-transition-end-event.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "events\\window-composed-path.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "events\\window-event-restored-after-throwing-onerror.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "historical-mutation-events.html",
+      "pass": 10,
+      "status": "pass",
+      "tests": 10
+    },
+    {
+      "fail": 8,
+      "file": "historical.html",
+      "pass": 72,
+      "status": "fail",
+      "tests": 80
+    },
+    {
+      "fail": 12,
+      "file": "interface-objects.html",
+      "pass": 11,
+      "status": "fail",
+      "tests": 23
+    },
+    {
+      "fail": 0,
+      "file": "lists\\DOMTokenList-Iterable.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "lists\\DOMTokenList-coverage-for-attributes.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "lists\\DOMTokenList-iteration.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "lists\\DOMTokenList-stringifier.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "lists\\DOMTokenList-value.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\CharacterData-appendChild.html",
+      "pass": 4,
+      "status": "fail",
+      "tests": 9
+    },
+    {
+      "fail": 6,
+      "file": "nodes\\CharacterData-appendData.html",
+      "pass": 8,
+      "status": "fail",
+      "tests": 14
+    },
+    {
+      "fail": 14,
+      "file": "nodes\\CharacterData-data.html",
+      "pass": 2,
+      "status": "fail",
+      "tests": 16
+    },
+    {
+      "fail": 6,
+      "file": "nodes\\CharacterData-deleteData.html",
+      "pass": 12,
+      "status": "fail",
+      "tests": 18
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\CharacterData-insertData.html",
+      "pass": 14,
+      "status": "fail",
+      "tests": 18
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\CharacterData-remove.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\CharacterData-replaceData.html",
+      "pass": 30,
+      "status": "fail",
+      "tests": 34
+    },
+    {
+      "fail": 12,
+      "file": "nodes\\CharacterData-substringData.html",
+      "pass": 16,
+      "status": "fail",
+      "tests": 28
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\CharacterData-surrogates.html",
+      "pass": 4,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 45,
+      "file": "nodes\\ChildNode-after.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 45
+    },
+    {
+      "fail": 45,
+      "file": "nodes\\ChildNode-before.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 45
+    },
+    {
+      "fail": 33,
+      "file": "nodes\\ChildNode-replaceWith.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 33
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Comment-constructor.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DOMImplementation-createDocument-with-null-browsing-context-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\DOMImplementation-createDocument.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 81,
+      "file": "nodes\\DOMImplementation-createDocumentType.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 82
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\DOMImplementation-createHTMLDocument-with-saved-implementation.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DOMImplementation-createHTMLDocument.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DOMImplementation-hasFeature.html",
+      "pass": 137,
+      "status": "pass",
+      "tests": 137
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-URL.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\Document-adoptNode.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-characterSet-normalization-1.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-characterSet-normalization-2.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Document-constructor.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_bmp.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_css.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_datauri_02.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_gif.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_html.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_javascripturi.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_jpg.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_mimeheader_01.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_mimeheader_02.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_png.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_txt.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\contenttype_xml.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\createDocument.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-contentType\\contentType\\createHTMLDocument.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-contentType\\contentType\\xhr_responseType_document.html",
+      "pass": 0,
+      "reason": "requires XMLHttpRequest",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createAttribute.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createCDATASection.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createComment.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\bare_mathml.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\bare_svg.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\bare_xhtml.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\empty.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\mathml.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\minimal_html.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\svg.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\xhtml.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\xhtml_ns_changed.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElement-namespace-tests\\xhtml_ns_removed.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 50,
+      "file": "nodes\\Document-createElement-namespace.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 51
+    },
+    {
+      "fail": 108,
+      "file": "nodes\\Document-createElement.html",
+      "pass": 39,
+      "status": "fail",
+      "tests": 147
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createElementNS.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createEvent.https.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createProcessingInstruction.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-createTextNode.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Document-createTreeWalker.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Document-doctype.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-getElementById.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-getElementsByClassName.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-getElementsByTagName.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Document-getElementsByTagNameNS.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Document-implementation.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Document-importNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\DocumentFragment-constructor.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\DocumentFragment-getElementById.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DocumentFragment-querySelectorAll-after-modification.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\DocumentType-literal.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\DocumentType-remove.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-childElement-null.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-childElementCount-dynamic-add.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-childElementCount-dynamic-remove.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-childElementCount-nochild.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-childElementCount.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-children.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-classlist.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 23,
+      "file": "nodes\\Element-closest.html",
+      "pass": 6,
+      "status": "fail",
+      "tests": 29
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-firstElementChild-namespace.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-firstElementChild.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\Element-getElementsByClassName.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-getElementsByTagName-change-document-HTMLNess.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-getElementsByTagName.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-getElementsByTagNameNS.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Element-hasAttribute.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Element-hasAttributes.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Element-insertAdjacentElement.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Element-insertAdjacentText.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-lastElementChild.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 6,
+      "file": "nodes\\Element-matches-namespaced-elements.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-matches.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-nextElementSibling.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-previousElementSibling.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Element-remove.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Element-removeAttribute.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-removeAttributeNS.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-setAttribute-crbug-1138487.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Element-setAttribute.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-siblingElement-null.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Element-tagName.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Element-webkitMatchesSelector.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-attributes.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-callback-arguments.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-characterData.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-childList.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-cross-realm-callback-report-exception.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-disconnect.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-document.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-inner-outer.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-nested-crash.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-sanity.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-takeRecords.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\MutationObserver-textContent.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 7,
+      "file": "nodes\\Node-appendChild.html",
+      "pass": 4,
+      "status": "fail",
+      "tests": 11
+    },
+    {
+      "fail": 9,
+      "file": "nodes\\Node-baseURI.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 9
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Node-childNodes-cache-2.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Node-childNodes-cache.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Node-childNodes.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Node-cloneNode-XMLDocument.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\Node-cloneNode-document-with-doctype.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-cloneNode-external-stylesheet-no-bc.sub.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-cloneNode-on-inactive-document-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-cloneNode-svg.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 15,
+      "file": "nodes\\Node-cloneNode.html",
+      "pass": 120,
+      "status": "fail",
+      "tests": 135
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-compareDocumentPosition.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-constants.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-contains.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-insertBefore.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Node-isConnected-shadow-dom.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Node-isConnected.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 9,
+      "file": "nodes\\Node-isEqualNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 9
+    },
+    {
+      "fail": 9,
+      "file": "nodes\\Node-isSameNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 9
+    },
+    {
+      "fail": 18,
+      "file": "nodes\\Node-lookupNamespaceURI.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 18
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\Node-mutation-adoptNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\Node-nodeName.html",
+      "pass": 3,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 7,
+      "file": "nodes\\Node-nodeValue.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 7
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\Node-normalize.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 11,
+      "file": "nodes\\Node-parentElement.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 12
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-parentNode-iframe.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\Node-parentNode.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-properties.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-removeChild.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 23,
+      "file": "nodes\\Node-replaceChild.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 24
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Node-textContent.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\NodeList-Iterable.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-1.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-2.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-3.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-indexOf-1.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-indexOf-2.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\NodeList-static-length-getter-tampered-indexOf-3.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-append.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\ParentNode-children.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-prepend.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-querySelector-All-content.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-querySelector-All.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\ParentNode-querySelector-case-insensitive.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 61,
+      "file": "nodes\\ParentNode-querySelector-escapes.html",
+      "pass": 7,
+      "status": "fail",
+      "tests": 68
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\ParentNode-querySelector-scope.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-querySelectorAll-removed-elements.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-querySelectors-exclusive.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-querySelectors-namespaces.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\ParentNode-querySelectors-space-and-dash-attribute-value.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\ParentNode-replaceChildren.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\Text-constructor.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\Text-splitText.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\Text-wholeText.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\append-on-Document.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 8,
+      "file": "nodes\\attributes-namednodemap.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 50,
+      "file": "nodes\\attributes.html",
+      "pass": 8,
+      "status": "fail",
+      "tests": 58
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\case.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\attribute-index-when-no-attributes.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\childNodes-last_visited-unwrap-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\document-replaceChild-input-documentElement.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\documentElement-remove-descendant-query.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\multiple-append-mutated-in-unload-document.https.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\crashtests\\multiple-append-mutated-in-unload.https.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\getElementsByClassName-32.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\getElementsByClassName-empty-set.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\getElementsByClassName-whitespace-class-names.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 10,
+      "file": "nodes\\insert-adjacent.html",
+      "pass": 4,
+      "status": "fail",
+      "tests": 14
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\insertBefore-iframe-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-append-form-and-script-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\insertion-removing-steps\\Node-append-meta-referrer-and-script-from-fragment.html",
+      "pass": 0,
+      "reason": "requires fetch() API",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-button-from-div.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-custom-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-default-style-meta-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-div-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-iframe.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-source-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-and-style.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-in-script.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-script-with-mutation-observer-takeRecords.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-text-and-script-in-style.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-text-in-script.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-three-scripts-from-fragment.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\insertion-removing-steps\\Node-appendChild-three-scripts.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\insertion-removing-steps\\later-script-removed-by-earlier-script.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\Node-moveBefore.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\child-style-preserve.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\chrome-338071841-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\chrome-433696404-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-animation-left.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-animation-transform.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-transition-left-pseudo.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-transition-left.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-transition-transform-pseudo.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\continue-css-transition-transform.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\css-animation-commit-styles.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\css-transition-cross-document.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\css-transition-cross-shadow.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\css-transition-to-disconnected-document.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\css-transition-trigger.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\custom-element-move-reactions.html",
+      "pass": 6,
+      "status": "pass",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\fieldset-child-blur-event.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\fieldset-child-date-input-blur-event.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\moveBefore\\fire-focusin-focusout.html",
+      "pass": 2,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\focus-preserve-render.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\focus-preserve.html",
+      "pass": 3,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\moveBefore\\focus-within.html",
+      "pass": 2,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\fullscreen-preserve.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\hover-style-update.html",
+      "pass": 2,
+      "status": "pass",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\input-moveBefore-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\listed-form-element-reset.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\moveBefore\\live-range-updates.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\modal-dialog.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-as-flex-item.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-dir.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-from-light-to-shadow.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 4,
+      "file": "nodes\\moveBefore\\moveBefore-id-map.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-iframe-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-lang.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-legend-input-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\moveBefore\\moveBefore-name-map.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-nodeiterator.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-option-recalc-style.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-range-iframe-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-selector-matching.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-shadow-inside.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-shadow-root.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\moveBefore-size-query.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\moveBefore-subframe-count-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\mutation-observer.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\nonce.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\object-crash-regression.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\pointer-events.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\popover-preserve.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\preserve-render-blocking-script.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\preserve-render-blocking-style.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\relevant-mutations.html",
+      "pass": 2,
+      "status": "pass",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\resources\\moveBefore-iframe.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\role-updates-after-move.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\moveBefore\\script-move-before.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 2,
+      "file": "nodes\\moveBefore\\select-option-optgroup.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\selection-preserve.html",
+      "pass": 6,
+      "status": "pass",
+      "tests": 6
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\slotchange-events.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\moveBefore\\style-applies.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\moveBefore\\throws-exception.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\name-validation.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\node-appendchild-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\prepend-on-Document.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\processing-instruction-attributes.html",
+      "pass": 0,
+      "reason": "requires MutationObserver",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\query-target-in-load-event.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\query-target-in-load-event.part.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\querySelector-mixed-case.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "nodes\\remove-and-adopt-thcrash.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\remove-from-shadow-host-and-adopt-into-iframe.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\remove-next-sibling-during-replace-with.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "nodes\\remove-unscopable.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 0,
+      "file": "nodes\\replaceWith-document-element-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 5,
+      "file": "nodes\\rootNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 3,
+      "file": "nodes\\svg-template-querySelector.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "observable\\tentative\\idlharness.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 3,
+      "file": "ranges\\Range-adopt-test.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 25,
+      "file": "ranges\\Range-attribute-nodes.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 26
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-attributes.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-cloneContents.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-cloneRange.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-collapse.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-commonAncestorContainer-2.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-commonAncestorContainer.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-compareBoundaryPoints-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-compareBoundaryPoints.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 3,
+      "file": "ranges\\Range-comparePoint-2.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-comparePoint.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-constructor.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-deleteContents.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-detach.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-extractContents-dynamic-end.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-extractContents.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-in-shadow-after-the-shadow-removed.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-insertNode-multiple-document-children-crash.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-insertNode.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-intersectsNode-2.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-intersectsNode-binding.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-intersectsNode-shadow.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-intersectsNode.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\Range-isPointInRange.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-appendChild.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-appendData.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-dataChange.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-deleteData.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-insertBefore.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-insertData.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-removeChild.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-replaceChild.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-replaceData.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-mutations-splitText.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-selectNode.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-set.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 4,
+      "file": "ranges\\Range-stringifier.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-surroundContents.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\Range-test-iframe.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\StaticRange-constructor.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\crashtests\\Range-setEnd-to-node-removed-by-extractContents.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 17,
+      "file": "ranges\\tentative\\OpaqueRange-auto-disconnect.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 17
+    },
+    {
+      "fail": 3,
+      "file": "ranges\\tentative\\OpaqueRange-basic.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 5,
+      "file": "ranges\\tentative\\OpaqueRange-disconnect.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 18,
+      "file": "ranges\\tentative\\OpaqueRange-display-none.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 18
+    },
+    {
+      "fail": 14,
+      "file": "ranges\\tentative\\OpaqueRange-geometry-basic.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 14
+    },
+    {
+      "fail": 6,
+      "file": "ranges\\tentative\\OpaqueRange-geometry-complexity-and-visibility.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 15,
+      "file": "ranges\\tentative\\OpaqueRange-geometry-multiline-and-mutations.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 15
+    },
+    {
+      "fail": 8,
+      "file": "ranges\\tentative\\OpaqueRange-highlight.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 8
+    },
+    {
+      "fail": 11,
+      "file": "ranges\\tentative\\OpaqueRange-highlightsFromPoint.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 11
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\tentative\\OpaqueRange-interactive-basic.html",
+      "pass": 16,
+      "status": "pass",
+      "tests": 16
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\tentative\\OpaqueRange-interactive-overlap-and-selection.html",
+      "pass": 10,
+      "status": "pass",
+      "tests": 10
+    },
+    {
+      "fail": 11,
+      "file": "ranges\\tentative\\OpaqueRange-offset.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 11
+    },
+    {
+      "fail": 28,
+      "file": "ranges\\tentative\\OpaqueRange-programmatic-updates.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 28
+    },
+    {
+      "fail": 4,
+      "file": "ranges\\tentative\\OpaqueRange-range-updates.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 6,
+      "file": "ranges\\tentative\\OpaqueRange-supported-elements.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\tentative\\OpaqueRange-unsupported-elements.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "ranges\\tentative\\OpaqueRange-update-event-order.html",
+      "pass": 4,
+      "status": "pass",
+      "tests": 4
+    },
+    {
+      "fail": 1,
+      "file": "ranges\\tentative\\OpaqueRange-validation.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "slot-recalc.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "svg-insert-crash.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\NodeFilter-constants.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 4,
+      "file": "traversal\\NodeIterator-removal-during-filtering.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\NodeIterator-removal.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "traversal\\NodeIterator.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-acceptNode-filter-cross-realm-null-browsing-context.html",
+      "pass": 1,
+      "status": "pass",
+      "tests": 1
+    },
+    {
+      "fail": 5,
+      "file": "traversal\\TreeWalker-acceptNode-filter-cross-realm.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 5
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-acceptNode-filter.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 6,
+      "file": "traversal\\TreeWalker-basic.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 6
+    },
+    {
+      "fail": 4,
+      "file": "traversal\\TreeWalker-currentNode.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 4
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-previousNodeLastChildReject.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-previousSiblingLastChildSkip.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "traversal\\TreeWalker-realm.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 2
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-traversal-reject.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-traversal-skip-most.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\TreeWalker-traversal-skip.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 1,
+      "file": "traversal\\TreeWalker-walking-outside-a-tree.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 1,
+      "file": "traversal\\TreeWalker.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\support\\TreeWalker-acceptNode-filter-cross-realm-null-browsing-context-subframe.html",
+      "pass": 0,
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 0,
+      "file": "traversal\\support\\empty-document.html",
+      "pass": 0,
+      "reason": "no inline scripts",
+      "status": "skip",
+      "tests": 0
+    },
+    {
+      "fail": 2,
+      "file": "window-extends-event-target.html",
+      "pass": 1,
+      "status": "fail",
+      "tests": 3
+    },
+    {
+      "fail": 1,
+      "file": "xpath-result-single-node-value-nullable.html",
+      "pass": 0,
+      "status": "fail",
+      "tests": 1
+    }
+  ],
+  "total_fail": 1529,
+  "total_files": 552,
+  "total_pass": 649,
+  "total_skip": 31,
+  "total_tests": 2178
+}
