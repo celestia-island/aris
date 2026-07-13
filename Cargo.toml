@@ -20,7 +20,7 @@ edition = "2024"
 rust-version = "1.91"
 authors = ["langyo <langyo.china@gmail.com>"]
 license = "BUSL-1.1"
-description = "aris — Linux-standard distribution with a desktop for evernight & shittim-chest (HMI / host stations)"
+description = "aris — a pure-Rust browser engine derived from servo, embeddable and standalone"
 repository = "https://github.com/celestia-island/aris"
 
 [workspace.dependencies]

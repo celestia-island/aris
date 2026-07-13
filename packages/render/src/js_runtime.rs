@@ -744,6 +744,18 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Like arg_string but converts any JsValue to string via JS String() semantics.
+/// undefined → "undefined", null → "null", numbers → their string form.
+fn arg_to_string(args: &[JsValue], idx: usize, ctx: &mut Context) -> String {
+    match args.get(idx) {
+        Some(v) => match v.to_string(ctx) {
+            Ok(s) => s.to_std_string_escaped(),
+            Err(_) => String::new(),
+        },
+        None => String::new(),
+    }
+}
+
 /// Populate a JS element handle with real properties from a node snapshot.
 fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
     let pd = |val: JsValue| {
@@ -1805,11 +1817,37 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_doc).build(),
         )),
     );
-    let create_html_doc = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+    let create_html_doc = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let title = arg_string(args, 0);
         let d = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        // Give it its own implementation object so createDocumentType works on it.
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        // Build a proper document with doctype, head, title, body.
+        let doctype = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = doctype.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!("html"))));
+        let _ = doctype.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("html"))));
+        let _ = doctype.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = doctype.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = doctype.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
+        let _ = doctype.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(d.clone())));
+        let _ = d.insert_property(boa_engine::js_string!("doctype"), pd(doctype.into()));
+        let _ = d.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(9u32)));
+        let _ = d.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#document"))));
+        let _ = d.insert_property(boa_engine::js_string!("contentType"), pd(JsValue::from(boa_engine::js_string!("text/html"))));
+        let _ = d.insert_property(boa_engine::js_string!("URL"), pd(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("documentURI"), pd(JsValue::from(boa_engine::js_string!("about:blank"))));
+        let _ = d.insert_property(boa_engine::js_string!("compatMode"), pd(JsValue::from(boa_engine::js_string!("CSS1Compat"))));
+        let _ = d.insert_property(boa_engine::js_string!("characterSet"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("charset"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("inputEncoding"), pd(JsValue::from(boa_engine::js_string!("UTF-8"))));
+        let _ = d.insert_property(boa_engine::js_string!("location"), pd(JsValue::null()));
+        // Build the implementation that knows its owner document.
         let impl2 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        let cdt_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let doc_ref = d.clone();
+        let cdt_fn = NativeFunction::from_copy_closure_with_captures(
+            move |_t, args, doc_ref, ctx| {
             let name = arg_string(args, 0);
             let public_id = arg_string(args, 1);
             let system_id = arg_string(args, 2);
@@ -1825,8 +1863,9 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = dt.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
             let _ = dt.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
             let _ = dt.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+            let _ = dt.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(doc_ref.clone())));
             Ok(dt.into())
-        });
+        }, doc_ref);
         let hf_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
         let _ = impl2.insert_property(boa_engine::js_string!("hasFeature"),
             boa_engine::property::PropertyDescriptor::builder()
@@ -1836,11 +1875,20 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cdt_fn).build()))
                 .writable(true).enumerable(true).configurable(true).build());
-        let pd = |val: JsValue| {
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(val).writable(true).enumerable(true).configurable(true).build()
-        };
         let _ = d.insert_property(boa_engine::js_string!("implementation"), pd(impl2.into()));
+        // head + body stubs.
+        let head = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = head.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HEAD"))));
+        let title_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = title_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("TITLE"))));
+        let _ = title_el.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(title))));
+        let _ = d.insert_property(boa_engine::js_string!("head"), pd(head.into()));
+        let body = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = body.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("BODY"))));
+        let _ = d.insert_property(boa_engine::js_string!("body"), pd(body.into()));
+        let html_el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = html_el.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("HTML"))));
+        let _ = d.insert_property(boa_engine::js_string!("documentElement"), pd(html_el.into()));
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
@@ -2351,6 +2399,187 @@ fn write_data_utf16(this: &boa_engine::JsValue, units: &[u16], ctx: &mut Context
     }
 }
 
+/// Check if a JS element object matches a simple CSS selector.
+/// Supports: tag, .class, #id, [attr], [attr=val], tag.class, tag#id, tag[attr],
+/// div:not(.cls), tag.cls#id[attr=val], comma-separated selector lists.
+fn element_matches_selector(obj: &boa_engine::object::JsObject, selector: &str, ctx: &mut Context) -> bool {
+    let selector = selector.trim();
+    if selector.is_empty() { return false; }
+    // Handle comma-separated selector lists: match if ANY sub-selector matches.
+    for sub in selector.split(',') {
+        let sub = sub.trim();
+        if element_matches_single_selector(obj, sub, ctx) {
+            return true;
+        }
+    }
+    false
+}
+
+fn element_matches_single_selector(obj: &boa_engine::object::JsObject, selector: &str, ctx: &mut Context) -> bool {
+    let selector = selector.trim();
+    if selector.is_empty() { return false; }
+
+    // Handle :not(...) pseudo-class.
+    if let Some(rest) = selector.strip_prefix(":not(") {
+        if let Some(inner) = rest.strip_suffix(')') {
+            return !element_matches_single_selector(obj, inner.trim(), ctx);
+        }
+    }
+
+    // Parse compound selector: tag.class#id[attr=val]...
+    let mut tag = String::new();
+    let mut classes: Vec<String> = Vec::new();
+    let mut id: Option<String> = None;
+    let mut attrs: Vec<(String, Option<String>)> = Vec::new();
+    let mut pseudo_not: Option<String> = None;
+
+    // Extract pseudo-class :not(...) first.
+    let working = if let Some(idx) = selector.find(":not(") {
+        let before = &selector[..idx];
+        let after_paren = &selector[idx + 5..];
+        if let Some(end) = after_paren.find(')') {
+            pseudo_not = Some(after_paren[..end].to_string());
+        }
+        before.to_string()
+    } else {
+        selector.to_string()
+    };
+
+    // Parse the compound selector character by character.
+    let mut chars = working.chars().peekable();
+    let mut current = String::new();
+    let mut state = 't'; // t=tag, .=class, #=id, [=attr
+    let mut attr_name = String::new();
+    let mut attr_val: Option<String> = None;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '.' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                else if state == ']' { attrs.push((attr_name.clone(), attr_val.clone())); }
+                current.clear();
+                state = '.';
+            }
+            '#' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                else if state == ']' { attrs.push((attr_name.clone(), attr_val.clone())); }
+                current.clear();
+                state = '#';
+            }
+            '[' => {
+                if state == 't' && !current.is_empty() { tag = current.clone(); }
+                else if state == '.' { classes.push(current.clone()); }
+                else if state == '#' { id = Some(current.clone()); }
+                current.clear();
+                attr_name.clear();
+                attr_val = None;
+                state = '[';
+            }
+            ']' => {
+                // Parse attr_name=val from current.
+                if let Some(eq) = current.find('=') {
+                    attr_name = current[..eq].trim().to_string();
+                    let v = current[eq + 1..].trim().to_string();
+                    attr_val = Some(v.trim_matches('"').trim_matches('\'').to_string());
+                } else {
+                    attr_name = current.trim().to_string();
+                }
+                attrs.push((attr_name.clone(), attr_val.clone()));
+                current.clear();
+                state = ']';
+            }
+            _ => { current.push(c); }
+        }
+    }
+    // Handle trailing state.
+    match state {
+        't' => { if !current.is_empty() { tag = current; } }
+        '.' => { classes.push(current); }
+        '#' => { id = Some(current); }
+        '[' => {
+            if let Some(eq) = current.find('=') {
+                attr_name = current[..eq].trim().to_string();
+                let v = current[eq + 1..].trim().to_string();
+                attr_val = Some(v.trim_matches('"').trim_matches('\'').to_string());
+            } else {
+                attr_name = current.trim().to_string();
+            }
+            attrs.push((attr_name, attr_val));
+        }
+        _ => {}
+    }
+
+    // Check tag name.
+    if !tag.is_empty() {
+        let tn = obj.get(boa_engine::js_string!("tagName"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if !tn.eq_ignore_ascii_case(&tag) { return false; }
+    }
+    // Check classes.
+    for cls in &classes {
+        let cn = obj.get(boa_engine::js_string!("className"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if !cn.split_whitespace().any(|c| c.eq_ignore_ascii_case(cls)) { return false; }
+    }
+    // Check id.
+    if let Some(ref id_val) = id {
+        let eid = obj.get(boa_engine::js_string!("id"), ctx).ok()
+            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+            .unwrap_or_default();
+        if &eid != id_val { return false; }
+    }
+    // Check attributes.
+    for (aname, aval) in &attrs {
+        let has = obj.get(boa_engine::js_string!(aname.clone()), ctx).ok();
+        match has {
+            Some(v) => {
+                if let Some(expected) = aval {
+                    let actual = v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default();
+                    if &actual != expected { return false; }
+                }
+            }
+            None => {
+                // Check if it's in the NamedNodeMap.
+                let found = if let Ok(av2) = obj.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(ao) = av2.as_object() {
+                        let len = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        let mut f = false;
+                        for i in 0..len {
+                            if let Ok(a) = ao.get(i as u32, ctx) {
+                                if let Some(a_obj) = a.as_object() {
+                                    if let Ok(an) = a_obj.get(boa_engine::js_string!("name"), ctx) {
+                                        if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&aname.to_ascii_lowercase()) {
+                                            if let Some(expected) = aval {
+                                                if let Ok(av3) = a_obj.get(boa_engine::js_string!("value"), ctx) {
+                                                    if av3.as_string().map(|s| s.to_std_string_escaped()).as_deref() == Some(expected.as_str()) { f = true; break; }
+                                                }
+                                            } else { f = true; break; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        f
+                    } else { false }
+                } else { false };
+                if !found { return false; }
+            }
+        }
+    }
+    // Check :not() pseudo-class.
+    if let Some(not_sel) = pseudo_not {
+        if element_matches_single_selector(obj, &not_sel, ctx) { return false; }
+    }
+    true
+}
+
 /// Throw an IndexSizeError DOMException-like error.
 fn throw_index_size(ctx: &mut Context) -> JsResult<JsValue> {
     Err(boa_engine::JsNativeError::typ()
@@ -2426,7 +2655,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     // createElement
     let create_el = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
-            let tag = arg_string(args, 0);
+            // Per spec, createElement converts the argument to string via String().
+            // createElement(undefined) → createElement("undefined")
+            // createElement(null) → createElement("null")
+            let tag = arg_to_string(args, 0, ctx);
             // Validate the tag name per the Name production.
             // First char must be a letter, '_', or ':'. Rest must be letter, digit,
             // '_', ':', '-', '.', or combining char.
@@ -2459,7 +2691,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .configurable(true)
                     .build()
             };
-            let upper = tag.to_uppercase();
+            // ASCII-only uppercase for tagName (per HTML spec for HTML documents).
+            let upper: String = tag.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect();
+            let lower: String = tag.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
             let _ = handle.insert_property(
                 boa_engine::js_string!("tagName"),
                 pd(JsValue::from(boa_engine::js_string!(upper.clone()))),
@@ -2470,7 +2704,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             );
             let _ = handle.insert_property(
                 boa_engine::js_string!("localName"),
-                pd(JsValue::from(boa_engine::js_string!(tag.to_lowercase()))),
+                pd(JsValue::from(boa_engine::js_string!(lower))),
             );
             let _ = handle.insert_property(
                 boa_engine::js_string!("namespaceURI"),
@@ -3270,12 +3504,192 @@ fn make_element_handle(
     });
     init.function(has_attr, boa_engine::js_string!("hasAttribute"), 1);
 
-    // removeAttribute
-    let remove_attr = NativeFunction::from_copy_closure(|this, args, _ctx| {
-        let _name = arg_string(args, 0);
+    // removeAttribute — removes from attributes NamedNodeMap (best-effort).
+    let remove_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            // Remove from attributes NamedNodeMap by decrementing length.
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    if len > 0 {
+                        let _ = attrs.insert_property(boa_engine::js_string!("length"),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(len - 1)).writable(true).enumerable(true).configurable(true).build());
+                    }
+                }
+            }
+        }
         Ok(JsValue::undefined())
     });
     init.function(remove_attr, boa_engine::js_string!("removeAttribute"), 1);
+
+    // toggleAttribute(name, force?) — toggles boolean attribute.
+    let toggle_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0);
+        // Validate name.
+        if name.is_empty() || !is_valid_name_first(&name) {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("InvalidCharacterError")
+                .into());
+        }
+        let lower = name.to_ascii_lowercase();
+        let force = args.get(1).and_then(|v| v.as_boolean());
+        if let Some(o) = this.as_object() {
+            // Check if attribute exists.
+            let exists = if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    let mut found = false;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&lower) {
+                                        found = true; break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    found
+                } else { false }
+            } else { false };
+            match force {
+                Some(true) => {
+                    // Set to empty string.
+                    let sfn = o.get(boa_engine::js_string!("setAttribute"), ctx).ok();
+                    if let Some(sv) = sfn { if let Some(sf) = sv.as_object() { let _ = sf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(lower)), JsValue::from(boa_engine::js_string!(""))], ctx); } }
+                    return Ok(JsValue::from(true));
+                }
+                Some(false) => {
+                    if exists {
+                        let rfn = o.get(boa_engine::js_string!("removeAttribute"), ctx).ok();
+                        if let Some(rv) = rfn { if let Some(rf) = rv.as_object() { let _ = rf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(name))], ctx); } }
+                    }
+                    return Ok(JsValue::from(false));
+                }
+                None => {
+                    if exists {
+                        let rfn = o.get(boa_engine::js_string!("removeAttribute"), ctx).ok();
+                        if let Some(rv) = rfn { if let Some(rf) = rv.as_object() { let _ = rf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(name))], ctx); } }
+                        return Ok(JsValue::from(false));
+                    } else {
+                        let sfn = o.get(boa_engine::js_string!("setAttribute"), ctx).ok();
+                        if let Some(sv) = sfn { if let Some(sf) = sv.as_object() { let _ = sf.call(&JsValue::from(o.clone()), &[JsValue::from(boa_engine::js_string!(lower)), JsValue::from(boa_engine::js_string!(""))], ctx); } }
+                        return Ok(JsValue::from(true));
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(toggle_attr, boa_engine::js_string!("toggleAttribute"), 1);
+
+    // getAttributeNode(name) — returns the Attr object or null.
+    let get_attr_node = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let name = arg_string(args, 0).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        return Ok(av);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    init.function(get_attr_node, boa_engine::js_string!("getAttributeNode"), 1);
+
+    // hasAttributeNS(ns, name) — simplified: checks local name.
+    let has_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let _ns = arg_string(args, 0);
+        let name = arg_string(args, 1).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx)
+                                    .or_else(|_| ao.get(boa_engine::js_string!("name"), ctx)) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        return Ok(JsValue::from(true));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(has_attr_ns, boa_engine::js_string!("hasAttributeNS"), 2);
+
+    // getAttributeNS(ns, name) — returns value or null.
+    let get_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let _ns = arg_string(args, 0);
+        let name = arg_string(args, 1).to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx)
+                                    .or_else(|_| ao.get(boa_engine::js_string!("name"), ctx)) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        if let Ok(val) = ao.get(boa_engine::js_string!("value"), ctx) {
+                                            return Ok(val);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    init.function(get_attr_ns, boa_engine::js_string!("getAttributeNS"), 2);
+
+    // removeAttributeNS — no-op stub.
+    let remove_attr_ns = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(remove_attr_ns, boa_engine::js_string!("removeAttributeNS"), 2);
+
+    // hasAttributes() — true if attributes.length > 0.
+    let has_attributes = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(av) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(ao) = av.as_object() {
+                    let len = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0);
+                    return Ok(JsValue::from(len > 0.0));
+                }
+            }
+        }
+        Ok(JsValue::from(false))
+    });
+    init.function(has_attributes, boa_engine::js_string!("hasAttributes"), 0);
 
     // addEventListener
     let add_listener = NativeFunction::from_copy_closure_with_captures(
@@ -3517,34 +3931,49 @@ fn make_element_handle(
     });
     init.function(get_root_node, boa_engine::js_string!("getRootNode"), 0);
 
+    // lookupNamespaceURI(prefix) — returns namespace URI for given prefix.
+    // Simplified: always null except 'xml' → XML namespace, 'xmlns' → xmlns namespace.
+    let lookup_ns_uri = NativeFunction::from_copy_closure(|_this, args, ctx| {
+        let prefix = args.first().map(|v| {
+            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
+        }).unwrap_or_default();
+        match prefix.as_str() {
+            "xml" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/XML/1998/namespace"))),
+            "xmlns" => Ok(JsValue::from(boa_engine::js_string!("http://www.w3.org/2000/xmlns/"))),
+            _ => Ok(JsValue::null()),
+        }
+    });
+    init.function(lookup_ns_uri, boa_engine::js_string!("lookupNamespaceURI"), 1);
+
+    // lookupPrefix(namespace) — returns prefix for given namespace (simplified: null).
+    let lookup_prefix = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::null()));
+    init.function(lookup_prefix, boa_engine::js_string!("lookupPrefix"), 1);
+
+    // isDefaultNamespace(namespace) — true if namespace is null or empty.
+    let is_default_ns = NativeFunction::from_copy_closure(|_this, args, _ctx| {
+        let ns = args.first().map(|v| {
+            v.as_string().map(|s| s.to_std_string_escaped()).unwrap_or_default()
+        }).unwrap_or_default();
+        // Default namespace is null/empty for HTML documents.
+        Ok(JsValue::from(ns.is_empty() || ns == "http://www.w3.org/1999/xhtml"))
+    });
+    init.function(is_default_ns, boa_engine::js_string!("isDefaultNamespace"), 1);
+
+    // normalize() — no-op.
+    let normalize_fn = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+    init.function(normalize_fn, boa_engine::js_string!("normalize"), 0);
+
     // closest(selector) — walks up parentNode chain matching selector.
     let closest_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
         let selector = arg_string(args, 0);
         if selector.is_empty() { return Ok(JsValue::null()); }
         let mut current = this.as_object();
         for _ in 0..1000 {
-            let node = match current {
-                Some(o) => o,
+            let node = match current.as_ref() {
+                Some(o) => o.clone(),
                 None => break,
             };
-            // Simple selector matching: tag name, .class, #id
-            let matches = if selector.starts_with('.') {
-                let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                cn.split_whitespace().any(|c| format!(".{}", c) == selector)
-            } else if selector.starts_with('#') {
-                let id = node.get(boa_engine::js_string!("id"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                format!("#{}", id) == selector
-            } else {
-                let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
-                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                    .unwrap_or_default();
-                tn.eq_ignore_ascii_case(&selector)
-            };
-            if matches {
+            if element_matches_selector(&node, &selector, ctx) {
                 return Ok(JsValue::from(node));
             }
             // Move to parent.
@@ -3563,23 +3992,7 @@ fn make_element_handle(
             Some(o) => o,
             None => return Ok(JsValue::from(false)),
         };
-        let matches = if selector.starts_with('.') {
-            let cn = node.get(boa_engine::js_string!("className"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            cn.split_whitespace().any(|c| format!(".{}", c) == selector)
-        } else if selector.starts_with('#') {
-            let id = node.get(boa_engine::js_string!("id"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            format!("#{}", id) == selector
-        } else {
-            let tn = node.get(boa_engine::js_string!("tagName"), ctx).ok()
-                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                .unwrap_or_default();
-            tn.eq_ignore_ascii_case(&selector)
-        };
-        Ok(JsValue::from(matches))
+        Ok(JsValue::from(element_matches_selector(&node, &selector, ctx)))
     });
     init.function(matches_fn, boa_engine::js_string!("matches"), 1);
 
