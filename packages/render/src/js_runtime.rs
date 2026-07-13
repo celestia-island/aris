@@ -977,6 +977,7 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         // to prevent infinite recursion during deep clone.
         if key_str.contains("firstChild") || key_str.contains("lastChild")
             || key_str.contains("innerHTML") || key_str.contains("outerHTML")
+            || key_str.contains("previousSibling") || key_str.contains("nextSibling")
         {
             continue;
         }
@@ -4899,6 +4900,70 @@ fn make_element_handle(
     let fc_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
     let lc_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lc_get).build();
     for (name, getter) in &[("firstChild", fc_fn.clone()), ("lastChild", lc_fn.clone())] {
+        let _ = obj.insert_property(
+            boa_engine::js_string!(*name),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(getter.clone())
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+    }
+
+    // previousSibling/nextSibling as accessors: find this in parent's _children.
+    let ps_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let (Some(obj), Some(parent)) = (this.as_object(),
+            this.as_object().and_then(|o| o.get(boa_engine::js_string!("parentNode"), ctx).ok()).and_then(|v| v.as_object()))
+        {
+            if let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) {
+                if let Some(ca) = cv.as_object() {
+                    let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(child) = ca.get(i as u32, ctx) {
+                            if let Some(co) = child.as_object() {
+                                if boa_engine::object::JsObject::equals(&co, &obj) {
+                                    if i > 0 {
+                                        return Ok(ca.get(i - 1, ctx).unwrap_or(JsValue::null()));
+                                    }
+                                    return Ok(JsValue::null());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    let ns_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let (Some(obj), Some(parent)) = (this.as_object(),
+            this.as_object().and_then(|o| o.get(boa_engine::js_string!("parentNode"), ctx).ok()).and_then(|v| v.as_object()))
+        {
+            if let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) {
+                if let Some(ca) = cv.as_object() {
+                    let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(child) = ca.get(i as u32, ctx) {
+                            if let Some(co) = child.as_object() {
+                                if boa_engine::object::JsObject::equals(&co, &obj) {
+                                    if i + 1 < len {
+                                        return Ok(ca.get(i + 1, ctx).unwrap_or(JsValue::null()));
+                                    }
+                                    return Ok(JsValue::null());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::null())
+    });
+    let ps_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ps_get).build();
+    let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ns_get).build();
+    for (name, getter) in &[("previousSibling", ps_fn.clone()), ("nextSibling", ns_fn.clone())] {
         let _ = obj.insert_property(
             boa_engine::js_string!(*name),
             boa_engine::property::PropertyDescriptor::builder()
