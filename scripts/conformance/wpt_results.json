@@ -1,5 +1,5 @@
 {
-  "pass_rate": 41,
+  "pass_rate": 40,
   "results": [
     {
       "fail": 0,
@@ -52,11 +52,11 @@
       "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 4,
       "file": "collections\\HTMLCollection-delete.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 4
     },
     {
       "fail": 7,
@@ -346,11 +346,11 @@
       "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 2,
       "file": "events\\Event-dispatch-throwing.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 2
     },
     {
       "fail": 0,
@@ -360,9 +360,9 @@
       "tests": 1
     },
     {
-      "fail": 5,
+      "fail": 3,
       "file": "events\\Event-initEvent.html",
-      "pass": 7,
+      "pass": 9,
       "status": "fail",
       "tests": 12
     },
@@ -444,18 +444,18 @@
       "tests": 3
     },
     {
-      "fail": 0,
+      "fail": 5,
       "file": "events\\EventListener-handleEvent-cross-realm.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 5
     },
     {
-      "fail": 0,
+      "fail": 5,
       "file": "events\\EventListener-handleEvent.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 1,
+      "status": "fail",
+      "tests": 6
     },
     {
       "fail": 0,
@@ -521,11 +521,11 @@
       "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "events\\EventTarget-dispatchEvent.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
       "fail": 6,
@@ -563,11 +563,11 @@
       "tests": 0
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "events\\event-global-is-still-set-when-reporting-exception-onerror.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
       "fail": 0,
@@ -921,16 +921,16 @@
       "tests": 0
     },
     {
-      "fail": 12,
+      "fail": 6,
       "file": "events\\non-cancelable-when-passive\\synthetic-events-cancelable.html",
-      "pass": 0,
+      "pass": 6,
       "status": "fail",
       "tests": 12
     },
     {
-      "fail": 100,
+      "fail": 87,
       "file": "events\\passive-by-default.html",
-      "pass": 0,
+      "pass": 13,
       "status": "fail",
       "tests": 100
     },
@@ -1303,11 +1303,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "events\\window-event-restored-after-throwing-onerror.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
       "fail": 0,
@@ -1331,11 +1331,11 @@
       "tests": 23
     },
     {
-      "fail": 0,
+      "fail": 6,
       "file": "lists\\DOMTokenList-Iterable.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 6
     },
     {
       "fail": 0,
@@ -1915,11 +1915,11 @@
       "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 2,
       "file": "nodes\\Element-children.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 2
     },
     {
       "fail": 0,
@@ -2400,18 +2400,18 @@
       "tests": 24
     },
     {
-      "fail": 0,
+      "fail": 72,
       "file": "nodes\\Node-textContent.html",
-      "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "pass": 9,
+      "status": "fail",
+      "tests": 81
     },
     {
-      "fail": 0,
+      "fail": 8,
       "file": "nodes\\NodeList-Iterable.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 8
     },
     {
       "fail": 1,
@@ -3792,11 +3792,11 @@
       "tests": 5
     },
     {
-      "fail": 0,
+      "fail": 12,
       "file": "traversal\\TreeWalker-acceptNode-filter.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 12
     },
     {
       "fail": 6,
@@ -3813,18 +3813,18 @@
       "tests": 4
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "traversal\\TreeWalker-previousNodeLastChildReject.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
-      "fail": 0,
+      "fail": 1,
       "file": "traversal\\TreeWalker-previousSiblingLastChildSkip.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 1
     },
     {
       "fail": 2,
@@ -3834,25 +3834,25 @@
       "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 6,
       "file": "traversal\\TreeWalker-traversal-reject.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 6
     },
     {
-      "fail": 0,
+      "fail": 2,
       "file": "traversal\\TreeWalker-traversal-skip-most.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 2
     },
     {
-      "fail": 0,
+      "fail": 6,
       "file": "traversal\\TreeWalker-traversal-skip.html",
       "pass": 0,
-      "status": "skip",
-      "tests": 0
+      "status": "fail",
+      "tests": 6
     },
     {
       "fail": 1,
@@ -3884,9 +3884,9 @@
       "tests": 0
     },
     {
-      "fail": 2,
+      "fail": 3,
       "file": "window-extends-event-target.html",
-      "pass": 1,
+      "pass": 0,
       "status": "fail",
       "tests": 3
     },
@@ -3898,9 +3898,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 1389,
+  "total_fail": 1504,
   "total_files": 552,
-  "total_pass": 1003,
+  "total_pass": 1033,
   "total_skip": 31,
-  "total_tests": 2392
+  "total_tests": 2537
 }

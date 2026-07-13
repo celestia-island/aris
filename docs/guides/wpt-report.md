@@ -1,18 +1,19 @@
 # aris W3C Web-Platform-Tests Report
 
-> **Tests: 2392** | **Pass: 1003** | **Fail: 1389** | **Pass rate: 41%**
+> **Tests: 2537** | **Pass: 1033** | **Fail: 1504** | **Pass rate: 40%**
 > Source: web-platform-tests DOM suite (git submodule)
 > Engine: Boa 0.21.1
 
 ## Progress Timeline
-| Milestone | Pass Rate |
-|-----------|-----------|
-| Initial (Boa 0.20) | ~3.5% |
-| Boa 0.21 + instanceof | 6.1% |
-| Harness + CharacterData + NamedNodeMap | 29.7% |
-| createElementNS + Node methods | 35.3% |
-| createDocumentType + toggleAttribute | 40.6% |
-| _children tracking + innerHTML + firstChild/lastChild | 41.2% |
-| createEvent + initEvent + preventDefault | 41.9% |
+| Milestone | Tests Passed |
+|-----------|-------------|
+| Initial (Boa 0.20) | ~60/1700 |
+| Boa 0.21 + instanceof | 111/1829 |
+| Harness + CharacterData | 647/2178 |
+| createElementNS + Node methods | 834/2367 |
+| createDocumentType + toggleAttribute | 969/2385 |
+| _children + innerHTML + firstChild | 983/2385 |
+| createEvent + initEvent | 1003/2392 |
+| setup() + EventTarget + passive events | **1033/2537** |
 
 **60 test files pass 100%.**
