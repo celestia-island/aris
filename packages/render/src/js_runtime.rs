@@ -3000,12 +3000,62 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         let sub = &units[offset as usize..end];
         Ok(JsValue::from(boa_engine::JsString::from(sub)))
     });
+    let remove_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(obj) = this.as_object() {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            if let Some(parent_obj) = parent {
+                remove_from_children(&parent_obj, &obj, ctx);
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val).writable(true).enumerable(true).configurable(true).build()
+                };
+                let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+                let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    let before_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        if let Some(obj) = this.as_object() {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            if let Some(parent_obj) = parent {
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+                    }
+                }
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    let after_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        if let Some(obj) = this.as_object() {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            if let Some(parent_obj) = parent {
+                let next_sibling = get_next_sibling(&parent_obj, &obj, ctx);
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&parent_obj, &child_obj, next_sibling.clone(), ctx);
+                    }
+                }
+            }
+        }
+        Ok(JsValue::undefined())
+    });
     vec![
         ("appendData", append),
         ("deleteData", delete_d),
         ("insertData", insert_d),
         ("replaceData", replace_d),
         ("substringData", substring_d),
+        ("remove", remove_fn),
+        ("before", before_fn),
+        ("after", after_fn),
     ]
 }
 
