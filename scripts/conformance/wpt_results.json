@@ -185,9 +185,9 @@
       "tests": 2
     },
     {
-      "fail": 3,
+      "fail": 1,
       "file": "events\\Event-defaultPrevented.html",
-      "pass": 5,
+      "pass": 7,
       "status": "fail",
       "tests": 8
     },
@@ -213,9 +213,9 @@
       "tests": 5
     },
     {
-      "fail": 33,
+      "fail": 26,
       "file": "events\\Event-dispatch-click.html",
-      "pass": 0,
+      "pass": 7,
       "status": "fail",
       "tests": 33
     },
@@ -234,9 +234,9 @@
       "tests": 2
     },
     {
-      "fail": 12,
+      "fail": 10,
       "file": "events\\Event-dispatch-detached-input-and-change.html",
-      "pass": 0,
+      "pass": 2,
       "status": "fail",
       "tests": 12
     },
@@ -535,10 +535,10 @@
       "tests": 6
     },
     {
-      "fail": 2,
+      "fail": 0,
       "file": "events\\KeyEvent-initKeyEvent.html",
-      "pass": 1,
-      "status": "fail",
+      "pass": 3,
+      "status": "pass",
       "tests": 3
     },
     {
@@ -1767,9 +1767,9 @@
       "tests": 596
     },
     {
-      "fail": 216,
+      "fail": 200,
       "file": "nodes\\Document-createEvent.https.html",
-      "pass": 63,
+      "pass": 79,
       "status": "fail",
       "tests": 279
     },
@@ -3897,9 +3897,9 @@
       "tests": 1
     }
   ],
-  "total_fail": 5078,
+  "total_fail": 5049,
   "total_files": 552,
-  "total_pass": 1884,
+  "total_pass": 1913,
   "total_skip": 30,
   "total_tests": 6962
 }
