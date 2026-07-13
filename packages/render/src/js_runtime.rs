@@ -984,6 +984,7 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             || key_str.contains("previousSibling") || key_str.contains("nextSibling")
             || key_str.contains("ownerElement")  // Prevent circular reference recursion
             || key_str.contains("textContent")   // Accessor property
+            || key_str.contains("defaultView")   // Circular: document → window → document
         {
             continue;
         }
@@ -2420,6 +2421,9 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         let _ = doc_obj.insert_property(boa_engine::js_string!("body"), pd(JsValue::null()));
         let _ = doc_obj.insert_property(boa_engine::js_string!("head"), pd(JsValue::null()));
+        // document.defaultView = window (the global object).
+        let win = ctx.global_object();
+        let _ = doc_obj.insert_property(boa_engine::js_string!("defaultView"), pd(win.into()));
         // document.URL / document.documentURI
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("URL"),
@@ -3411,8 +3415,66 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     // Like createElement but respects the namespace and doesn't uppercase for non-HTML.
     let create_el_ns = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
-            let ns = arg_string(args, 0);
-            let qname = arg_string(args, 1);
+            // Handle null/undefined namespace → null (not empty string).
+            let ns_raw = args.first().cloned().unwrap_or(JsValue::null());
+            let ns_is_null = ns_raw.is_null() || ns_raw.is_undefined();
+            let ns = if ns_is_null { String::new() } else { arg_string(args, 0) };
+            let qname_raw = args.get(1).cloned().unwrap_or(JsValue::null());
+            let qname = if qname_raw.is_null() || qname_raw.is_undefined() {
+                "null".to_string()
+            } else {
+                arg_to_string(args, 1, ctx)
+            };
+            // Validate qualifiedName per spec.
+            if qname.is_empty() {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("INVALID_CHARACTER_ERR").into());
+            }
+            // Check first character is valid NameStartChar.
+            if !qname.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_' || c == ':').unwrap_or(false) {
+                // Check for INVALID_CHARACTER_ERR (invalid first char).
+                if qname.chars().next().map(|c| c == '<' || c == '>' || c == '}' || c == '/' || c == '\\' || c.is_ascii_digit() || c == '-' || c == '.' || c == ' ' || c == '^' || c == '|' || c == '&' || c == '?' || c == '*' || c == '(' || c == ')' || c == '+' || c == '=' || c == '@' || c == '$' || c == '%' || c == '#' || c == '~' || c == '!' || c == '"' || c == '\'' || c == '`').unwrap_or(false) {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("INVALID_CHARACTER_ERR").into());
+                }
+            }
+            // Check for invalid characters anywhere.
+            for c in qname.chars() {
+                if c == '<' || c == '>' || c == ' ' || c == '"' || c == '\'' {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("INVALID_CHARACTER_ERR").into());
+                }
+            }
+            // NAMESPACE_ERR: starts with ':' or contains '::' or prefix is xml/xmlns.
+            if qname.starts_with(':') {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("NAMESPACE_ERR").into());
+            }
+            if qname.contains("::") {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("NAMESPACE_ERR").into());
+            }
+            // Check prefix is not 'xml' unless namespace is XML namespace.
+            if let Some(idx) = qname.find(':') {
+                let prefix_str = &qname[..idx];
+                if prefix_str == "xml" && ns != "http://www.w3.org/XML/1998/namespace" {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+                if prefix_str == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+                if prefix_str == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+                let local_name = &qname[idx + 1..];
+                if local_name == "xmlns" && ns != "http://www.w3.org/2000/xmlns/" {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("NAMESPACE_ERR").into());
+                }
+            }
             // Parse prefix:localName from qname.
             let (prefix, local) = if let Some(idx) = qname.find(':') {
                 (&qname[..idx], &qname[idx + 1..])
@@ -3420,9 +3482,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 ("", qname.as_str())
             };
             let html_ns = "http://www.w3.org/1999/xhtml";
-            let is_html = ns.is_empty() || ns == html_ns;
-            // For HTML namespace, tagName is uppercased; otherwise preserve case.
-            let tag_name = if is_html { local.to_uppercase() } else { local.to_string() };
+            let is_html = ns == html_ns;
+            // For HTML namespace, tagName is ASCII-uppercased; otherwise preserve case.
+            let tag_name = if is_html {
+                local.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect::<String>()
+            } else {
+                qname.clone()
+            };
             let tag_name_clone = tag_name.clone();
             let pid = {
                 let mut bb = b.borrow_mut();
@@ -3439,10 +3505,16 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("tagName"), pd(JsValue::from(boa_engine::js_string!(tag_name))));
             let _ = handle.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(tag_name_clone))));
             let _ = handle.insert_property(boa_engine::js_string!("localName"), pd(JsValue::from(boa_engine::js_string!(local))));
-            let ns_val = if ns.is_empty() { html_ns.to_string() } else { ns.clone() };
-            let _ = handle.insert_property(boa_engine::js_string!("namespaceURI"), pd(JsValue::from(boa_engine::js_string!(ns_val))));
+            // namespaceURI: null if namespace was null/undefined/empty, else the namespace.
+            let ns_val = if ns_is_null || ns.is_empty() {
+                JsValue::null()
+            } else {
+                JsValue::from(boa_engine::js_string!(ns.clone()))
+            };
+            let _ = handle.insert_property(boa_engine::js_string!("namespaceURI"), pd(ns_val));
+            // prefix: null if no colon, else the prefix part.
             let _ = handle.insert_property(boa_engine::js_string!("prefix"),
-                pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix)) }));
+                pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix.to_string())) }));
             let _ = handle.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
             let _ = handle.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
             let _ = handle.insert_property(boa_engine::js_string!("id"), pd(JsValue::from(boa_engine::js_string!(""))));
