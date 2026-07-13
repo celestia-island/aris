@@ -4092,19 +4092,8 @@ fn serialize_node_depth(val: &JsValue, ctx: &mut Context, depth: u32) -> String 
                         }
                     }
                 }
-                // Serialize children from _children array.
-                let mut children_html = String::new();
-                if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
-                    if let Some(ca) = cv.as_object() {
-                        let clen = ca.get(boa_engine::js_string!("length"), ctx).ok()
-                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-                        for i in 0..clen {
-                            if let Ok(child) = ca.get(i as u32, ctx) {
-                                children_html.push_str(&serialize_node_depth(&child, ctx, depth + 1));
-                            }
-                        }
-                    }
-                }
+                // Serialize children from _children array (use serialize_children for JsArray support).
+                let children_html = serialize_children(&o, ctx);
                 // Void elements don't have closing tags.
                 let void = matches!(tag.to_ascii_lowercase().as_str(),
                     "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" |
