@@ -72,8 +72,18 @@ fn run_tests() {
             continue;
         }
 
-        // Extract <script> blocks (excluding external src references).
-        let scripts = aris_js::extract_scripts(&html);
+        // Extract <script> blocks + load external script src files.
+        let mut scripts = Vec::new();
+        // First, load external scripts (relative src attributes).
+        for src in extract_script_srcs(&html) {
+            // Resolve relative to the test file's directory.
+            let script_path = path.parent().unwrap_or(Path::new(".")).join(&src);
+            if let Ok(script_content) = std::fs::read_to_string(&script_path) {
+                scripts.push(script_content);
+            }
+        }
+        // Then, extract inline scripts.
+        scripts.extend(aris_js::extract_scripts(&html));
         if scripts.is_empty() {
             results.push(serde_json::json!({
                 "file": rel,
@@ -155,6 +165,44 @@ fn run_tests() {
 }
 
 /// Recursively collect .html test files.
+/// Extract src attributes from <script src="..."> tags (relative paths only).
+fn extract_script_srcs(html: &str) -> Vec<String> {
+    let mut srcs = Vec::new();
+    let mut remaining = html;
+    while let Some(pos) = remaining.find("<script") {
+        remaining = &remaining[pos..];
+        if let Some(end) = remaining.find('>') {
+            let tag = &remaining[..end];
+            // Check if this is a self-closing or has src.
+            if tag.contains(" src=") {
+                // Extract the src value.
+                if let Some(src_pos) = tag.find(" src=\"") {
+                    let after = &tag[src_pos + 6..];
+                    if let Some(quote_end) = after.find('"') {
+                        let src = &after[..quote_end];
+                        // Only load relative paths (skip /resources/, http://, etc.)
+                        if !src.starts_with('/') && !src.starts_with("http") && !src.is_empty() {
+                            srcs.push(src.to_string());
+                        }
+                    }
+                } else if let Some(src_pos) = tag.find(" src='") {
+                    let after = &tag[src_pos + 6..];
+                    if let Some(quote_end) = after.find('\'') {
+                        let src = &after[..quote_end];
+                        if !src.starts_with('/') && !src.starts_with("http") && !src.is_empty() {
+                            srcs.push(src.to_string());
+                        }
+                    }
+                }
+            }
+            remaining = &remaining[end + 1..];
+        } else {
+            break;
+        }
+    }
+    srcs
+}
+
 fn collect_tests(dir: &str) -> Vec<PathBuf> {
     let mut files = Vec::new();
     let path = Path::new(dir);

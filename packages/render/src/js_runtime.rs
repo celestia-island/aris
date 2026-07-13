@@ -828,6 +828,8 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         let _ = attr_obj.insert_property(boa_engine::js_string!("value"), pd(s_str(v)));
         let _ = attr_obj.insert_property(boa_engine::js_string!("nodeName"), pd(s_str(k)));
         let _ = attr_obj.insert_property(boa_engine::js_string!("nodeValue"), pd(s_str(v)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("textContent"), pd(s_str(v)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(s_str(k)));
         let _ = attr_obj.insert_property(
             boa_engine::js_string!("prefix"),
             pd(JsValue::null()),
@@ -836,6 +838,8 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
             boa_engine::js_string!("namespaceURI"),
             pd(JsValue::null()),
         );
+        let _ = attr_obj.insert_property(boa_engine::js_string!("specified"), pd(JsValue::from(true)));
+        let _ = attr_obj.insert_property(boa_engine::js_string!("ownerElement"), pd(JsValue::from(obj.clone())));
         let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(s_str(k)));
         let _ = attrs_arr.insert_property(i as u32, pd(JsValue::from(attr_obj)));
     }
@@ -978,6 +982,7 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
         if key_str.contains("firstChild") || key_str.contains("lastChild")
             || key_str.contains("innerHTML") || key_str.contains("outerHTML")
             || key_str.contains("previousSibling") || key_str.contains("nextSibling")
+            || key_str.contains("ownerElement")  // Prevent circular reference recursion
         {
             continue;
         }
@@ -4057,9 +4062,12 @@ fn make_element_handle(
                         let _ = attr_obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
                         let _ = attr_obj.insert_property(boa_engine::js_string!("value"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
                         let _ = attr_obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(value.clone()))));
                         let _ = attr_obj.insert_property(boa_engine::js_string!("localName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
                         let _ = attr_obj.insert_property(boa_engine::js_string!("prefix"), pd(JsValue::null()));
                         let _ = attr_obj.insert_property(boa_engine::js_string!("namespaceURI"), pd(JsValue::null()));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("specified"), pd(JsValue::from(true)));
+                        let _ = attr_obj.insert_property(boa_engine::js_string!("ownerElement"), pd(JsValue::from(o.clone())));
                         // Find if this attr already exists, else append.
                         let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
                             .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
