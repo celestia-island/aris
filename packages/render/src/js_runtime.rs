@@ -2134,6 +2134,36 @@ fn install_dom_globals(ctx: &mut Context) {
         }, doc_for_ct);
         let _ = d.insert_property(boa_engine::js_string!("createTextNode"),
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ct_fn).build())));
+        // createComment
+        let doc_for_cc = d.clone();
+        let cc_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_for_cc, ctx| {
+            let text = arg_string(args, 0);
+            let cn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = cn.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(8u32)));
+            let _ = cn.insert_property(boa_engine::js_string!("_data"), pd2(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = cn.insert_property(boa_engine::js_string!("data"), pd2(JsValue::from(boa_engine::js_string!(text.clone()))));
+            let _ = cn.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::from(boa_engine::js_string!(text))));
+            let _ = cn.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#comment"))));
+            let _ = cn.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::from(doc_for_cc.clone())));
+            Ok(cn.into())
+        }, doc_for_cc);
+        let _ = d.insert_property(boa_engine::js_string!("createComment"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cc_fn).build())));
+        // createDocumentFragment
+        let df_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+            let df = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            let _ = df.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(11u32)));
+            let _ = df.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document-fragment"))));
+            let _ = df.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
+            add_dom_methods(&df, ctx);
+            Ok(df.into())
+        });
+        let _ = d.insert_property(boa_engine::js_string!("createDocumentFragment"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_fn).build())));
+        // Add DOM methods to the document itself (appendChild, etc.)
+        add_dom_methods(&d, ctx);
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
