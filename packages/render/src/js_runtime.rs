@@ -3956,10 +3956,21 @@ fn value_to_node(val: &JsValue, ctx: &mut Context) -> JsValue {
             .value(v).writable(true).enumerable(true).configurable(true).build()
     };
     let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+    let _ = obj.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
     let _ = obj.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
     let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
     let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(s))));
     let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+    // Set Text.prototype so instanceof Text works.
+    if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+        if let Some(tc) = text_ctor.as_object() {
+            if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                if let Some(proto) = proto_val.as_object() {
+                    let _ = obj.set_prototype(Some(proto));
+                }
+            }
+        }
+    }
     JsValue::from(obj)
 }
 
