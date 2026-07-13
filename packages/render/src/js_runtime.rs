@@ -5230,15 +5230,51 @@ fn make_element_handle(
     // removeChild — returns the removed child + updates _children.
     let remove_child = NativeFunction::from_copy_closure(|this, args, ctx| {
         let child = args.first().cloned().unwrap_or(JsValue::null());
-        if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
-            remove_from_children(&parent_obj, &child_obj, ctx);
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val).writable(true).enumerable(true).configurable(true).build()
-            };
-            let _ = child_obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
-            let _ = child_obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+        // Throw TypeError for null/undefined/non-object.
+        if child.is_null() || child.is_undefined() || child.as_object().is_none() {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("Argument is not a Node")
+                .into());
         }
+        let child_obj = child.as_object().unwrap();
+        let parent_obj = match this.as_object() {
+            Some(o) => o,
+            None => return Ok(child),
+        };
+        // Check if child is actually in parent's _children.
+        let in_children = parent_obj.get(boa_engine::js_string!("_children"), ctx).ok()
+            .and_then(|v| v.as_object())
+            .map(|arr| {
+                let len = arr.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                (0..len).any(|i| {
+                    arr.get(i as u32, ctx).ok()
+                        .and_then(|v| v.as_object())
+                        .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if !in_children {
+            // Also check bridge snapshot for parsed DOM nodes.
+            let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+            let child_id = read_handle_id(&child);
+            if parent_id.is_some() && child_id.is_some() {
+                // Both are bridge nodes — assume it's in the tree.
+                // (We can't easily check the bridge tree here.)
+            } else {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("NotFoundError: The node to be removed is not a child of this node")
+                    .into());
+            }
+        }
+        remove_from_children(&parent_obj, &child_obj, ctx);
+        let pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        let _ = child_obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+        let _ = child_obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
         Ok(child)
     });
     init.function(remove_child, boa_engine::js_string!("removeChild"), 1);
