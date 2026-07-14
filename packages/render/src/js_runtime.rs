@@ -3878,6 +3878,63 @@ fn install_dom_globals(ctx: &mut Context) {
                 .writable(true).enumerable(true).configurable(true).build(),
         );
 
+        // Add isEqualNode to Node.prototype.
+        let ien_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let other = args.first().cloned().unwrap_or(JsValue::null());
+            if other.is_null() || other.is_undefined() { return Ok(JsValue::from(false)); }
+            if JsValue::same_value(this, &other) { return Ok(JsValue::from(true)); }
+            let this_obj = this.as_object();
+            let other_obj = other.as_object();
+            if this_obj.is_none() || other_obj.is_none() { return Ok(JsValue::from(false)); }
+            let o1 = this_obj.unwrap();
+            let o2 = other_obj.unwrap();
+            // Compare nodeType.
+            let nt1 = o1.get(boa_engine::js_string!("nodeType"), ctx).ok().and_then(|v| v.as_number()).unwrap_or(-1.0);
+            let nt2 = o2.get(boa_engine::js_string!("nodeType"), ctx).ok().and_then(|v| v.as_number()).unwrap_or(-1.0);
+            if nt1 != nt2 { return Ok(JsValue::from(false)); }
+            // For Element: compare tagName, attributes.
+            if nt1 == 1.0 {
+                let tn1 = o1.get(boa_engine::js_string!("tagName"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                let tn2 = o2.get(boa_engine::js_string!("tagName"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                if tn1 != tn2 { return Ok(JsValue::from(false)); }
+            }
+            // For CharacterData (Text/Comment/PI): compare data.
+            if nt1 == 3.0 || nt1 == 4.0 || nt1 == 8.0 || nt1 == 7.0 {
+                let d1 = o1.get(boa_engine::js_string!("data"), ctx).ok();
+                let d2 = o2.get(boa_engine::js_string!("data"), ctx).ok();
+                if d1 != d2 { return Ok(JsValue::from(false)); }
+            }
+            // For DocumentType: compare name, publicId, systemId.
+            if nt1 == 10.0 {
+                for p in &["name", "publicId", "systemId"] {
+                    let v1 = o1.get(boa_engine::js_string!(*p), ctx).ok();
+                    let v2 = o2.get(boa_engine::js_string!(*p), ctx).ok();
+                    if v1 != v2 { return Ok(JsValue::from(false)); }
+                }
+            }
+            // For Attr: compare name, value, namespaceURI.
+            if nt1 == 2.0 {
+                for p in &["name", "value", "namespaceURI"] {
+                    let v1 = o1.get(boa_engine::js_string!(*p), ctx).ok();
+                    let v2 = o2.get(boa_engine::js_string!(*p), ctx).ok();
+                    if v1 != v2 { return Ok(JsValue::from(false)); }
+                }
+            }
+            // Compare childNodes count.
+            let c1 = o1.get(boa_engine::js_string!("childNodes"), ctx).ok();
+            let c2 = o2.get(boa_engine::js_string!("childNodes"), ctx).ok();
+            let len1 = c1.as_ref().and_then(|v| v.as_object()).and_then(|a| a.get(boa_engine::js_string!("length"), ctx).ok()).and_then(|v| v.as_number()).unwrap_or(0.0);
+            let len2 = c2.as_ref().and_then(|v| v.as_object()).and_then(|a| a.get(boa_engine::js_string!("length"), ctx).ok()).and_then(|v| v.as_number()).unwrap_or(0.0);
+            if len1 != len2 { return Ok(JsValue::from(false)); }
+            Ok(JsValue::from(true))
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("isEqualNode"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ien_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+
         // Add contains to Node.prototype.
         let contains_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
             let other = args.first().cloned().unwrap_or(JsValue::null());
