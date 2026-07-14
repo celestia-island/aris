@@ -6627,6 +6627,34 @@ fn install_webrtc_stubs(ctx: &mut Context) {
     // WebSocket stub.
     let ws_ctor = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
     let _ = ctx.register_global_callable(boa_engine::js_string!("WebSocket"), 0, ws_ctor);
+
+    // DOMParser (caniuse 96%+)
+    let dp_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        // parseFromString(str, type) — returns a minimal document.
+        let pfs = NativeFunction::from_copy_closure(|_t, args, ctx| {
+            let _str = arg_string(args, 0);
+            let _typ = arg_string(args, 1).to_ascii_lowercase();
+            let doc = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+            let _ = doc.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(9u32)));
+            let _ = doc.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document"))));
+            let _ = doc.insert_property(boa_engine::js_string!("contentType"), pd2(JsValue::from(boa_engine::js_string!(_typ.clone()))));
+            let _ = doc.insert_property(boa_engine::js_string!("documentElement"), pd2(JsValue::null()));
+            if let Ok(dc) = ctx.global_object().get(boa_engine::js_string!("Document"), ctx) {
+                if let Some(dco) = dc.as_object() {
+                    if let Ok(pv) = dco.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(p) = pv.as_object() { let _ = doc.set_prototype(Some(p)); }
+                    }
+                }
+            }
+            Ok(JsValue::from(doc))
+        });
+        let _ = obj.insert_property(boa_engine::js_string!("parseFromString"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pfs).build())));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("DOMParser"), 0, dp_ctor);
 }
 
 fn make_element_handle(
