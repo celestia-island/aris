@@ -745,6 +745,19 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
         .unwrap_or_default()
 }
 
+/// Convert a JsValue to u32 using JS ToUint32 semantics (wraps negative numbers).
+fn js_to_uint32(v: &JsValue) -> u32 {
+    v.as_number()
+        .map(|n| {
+            // JS ToUint32: modulo 2^32
+            let n = n.trunc();
+            let n = n % 4294967296.0;
+            let n = if n < 0.0 { n + 4294967296.0 } else { n };
+            n as u32
+        })
+        .unwrap_or(0)
+}
+
 /// Like arg_string but converts any JsValue to string via JS String() semantics.
 /// undefined → "undefined", null → "null", numbers → their string form.
 fn arg_to_string(args: &[JsValue], idx: usize, ctx: &mut Context) -> String {
@@ -3768,7 +3781,7 @@ fn install_dom_globals(ctx: &mut Context) {
 }
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let v = arg_string(args, 0);
+        let v = arg_to_string(args, 0, ctx);
         let old_len = read_data_utf16(&this, ctx).len() as u32;
         let data_len = v.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
@@ -3781,8 +3794,8 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         Ok(JsValue::undefined())
     });
     let delete_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let offset = args.first().map(|v| js_to_uint32(v)).unwrap_or(0);
+        let count = args.get(1).map(|v| js_to_uint32(v)).unwrap_or(0);
         let mut units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
         if offset > len {
@@ -3798,8 +3811,8 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         Ok(JsValue::undefined())
     });
     let insert_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let data = arg_string(args, 1);
+        let offset = args.first().map(|v| js_to_uint32(v)).unwrap_or(0);
+        let data = arg_to_string(args, 1, ctx);
         let data_len = data.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
@@ -3816,9 +3829,9 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         Ok(JsValue::undefined())
     });
     let replace_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let data = arg_string(args, 2);
+        let offset = args.first().map(|v| js_to_uint32(v)).unwrap_or(0);
+        let count = args.get(1).map(|v| js_to_uint32(v)).unwrap_or(0);
+        let data = arg_to_string(args, 2, ctx);
         let data_len = data.encode_utf16().count() as u32;
         let mut units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
@@ -3836,8 +3849,8 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         Ok(JsValue::undefined())
     });
     let substring_d = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let offset = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-        let count = args.get(1).and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+        let offset = args.first().map(|v| js_to_uint32(v)).unwrap_or(0);
+        let count = args.get(1).map(|v| js_to_uint32(v)).unwrap_or(0);
         let units = read_data_utf16(&this, ctx);
         let len = units.len() as u32;
         if offset > len {
