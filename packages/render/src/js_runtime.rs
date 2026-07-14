@@ -5937,6 +5937,72 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let attrs_map = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
+            // classList — minimal DOMTokenList for createElementNS elements.
+            let cl_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = cl_obj.insert_property(boa_engine::js_string!("_element"), pd(JsValue::from(handle.clone())));
+            // contains
+            let cl_c = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let token = arg_string(args, 0);
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token)));
+                    }
+                }
+                Ok(JsValue::from(false))
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("contains"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_c).build())));
+            // add
+            let cl_a = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        for arg in args.iter() { let t = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default(); if !classes.contains(&t) { classes.push(t); } }
+                        let nc = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(nc))));
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("add"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_a).build())));
+            // remove
+            let cl_r = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        for arg in args.iter() { let t = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default(); classes.retain(|c| c != &t); }
+                        let nc = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(nc))));
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("remove"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_r).build())));
+            // toggle
+            let cl_t = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let token = arg_to_string(args, 0, ctx);
+                let force = args.get(1).and_then(|v| v.as_boolean());
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let present = classes.contains(&token);
+                        let should_add = force.unwrap_or(!present);
+                        if should_add && !present { classes.push(token); } else if !should_add && present { classes.retain(|c| c != &token); }
+                        let nc = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(nc))));
+                        return Ok(JsValue::from(should_add));
+                    }
+                }
+                Ok(JsValue::from(false))
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("toggle"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_t).build())));
+            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(cl_obj.into()));
             set_element_prototype(&handle, local, ctx);
             // For non-HTML namespace, override prototype to Element.prototype (not HTMLxxxElement).
             if !is_html {
