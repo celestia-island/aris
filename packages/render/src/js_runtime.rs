@@ -3631,6 +3631,7 @@ fn install_dom_globals(ctx: &mut Context) {
         // Additional DOM interfaces for interface-objects test
         ("AbortController", 0),
         ("AbortSignal", 0),
+        ("MutationObserver", 1),
         ("DOMImplementation", 0),
         ("ProcessingInstruction", 7),
         ("NodeList", 0),
@@ -4158,6 +4159,178 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = nf.insert_property(boa_engine::js_string!("SHOW_DOCUMENT_FRAGMENT"), pd_const(JsValue::from(0x400u32)));
         }
     }
+
+    // ── AbortController (caniuse: 99%+) ──
+    let ac_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        // Create the signal object.
+        let signal = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = signal.insert_property(boa_engine::js_string!("aborted"), pd(JsValue::from(false)));
+        let _ = signal.insert_property(boa_engine::js_string!("reason"), pd(JsValue::undefined()));
+        // Set AbortSignal.prototype.
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("AbortSignal"), ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object() {
+                if let Ok(pv) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(p) = pv.as_object() { let _ = signal.set_prototype(Some(p)); }
+                }
+            }
+        }
+        // throwIfAborted() method.
+        let sig_ref = signal.clone();
+        let tia = NativeFunction::from_copy_closure_with_captures(move |_t, _a, sig_ref, ctx| {
+            let aborted = sig_ref.get(boa_engine::js_string!("aborted"), ctx).ok()
+                .and_then(|v| v.as_boolean()).unwrap_or(false);
+            if aborted {
+                let reason = sig_ref.get(boa_engine::js_string!("reason"), ctx).ok().unwrap_or(JsValue::undefined());
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message(reason.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default())
+                    .into());
+            }
+            Ok(JsValue::undefined())
+        }, sig_ref);
+        let _ = signal.insert_property(boa_engine::js_string!("throwIfAborted"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tia).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("signal"), pd(signal.into()));
+        // Set AbortController.prototype.
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("AbortController"), ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object() {
+                if let Ok(pv) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(p) = pv.as_object() { let _ = obj.set_prototype(Some(p)); }
+                }
+            }
+        }
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("AbortController"), 0, ac_ctor);
+    // Add abort() to AbortController.prototype.
+    if let Ok(ac_val) = ctx.global_object().get(boa_engine::js_string!("AbortController"), ctx) {
+        if let Some(ac) = ac_val.as_object() {
+            if let Ok(proto_val) = ac.get(boa_engine::js_string!("prototype"), ctx) {
+                if let Some(proto) = proto_val.as_object() {
+                    let abort_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                        if let Some(o) = this.as_object() {
+                            let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                            if let Ok(sig) = o.get(boa_engine::js_string!("signal"), ctx) {
+                                if let Some(so) = sig.as_object() {
+                                    let reason = args.first().cloned().unwrap_or(JsValue::undefined());
+                                    let _ = so.insert_property(boa_engine::js_string!("aborted"), pd(JsValue::from(true)));
+                                    let _ = so.insert_property(boa_engine::js_string!("reason"), pd(reason));
+                                }
+                            }
+                        }
+                        Ok(JsValue::undefined())
+                    });
+                    let _ = proto.insert_property(boa_engine::js_string!("abort"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), abort_fn).build())
+                            .writable(true).enumerable(true).configurable(true).build());
+                }
+            }
+        }
+    }
+
+    // ── MutationObserver (caniuse: 97%+) ──
+    // Stub: creates observer, observe/disconnect/takeRecords are no-ops.
+    let mo_ctor = NativeFunction::from_copy_closure(move |this, args, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let callback = args.first().cloned().unwrap_or(JsValue::undefined());
+        let _ = obj.insert_property(boa_engine::js_string!("callback"), pd(callback));
+        // observe(target, options) — no-op stub.
+        let observe_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(boa_engine::js_string!("observe"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), observe_fn.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("disconnect"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), observe_fn.clone()).build())));
+        // takeRecords() returns empty array.
+        let take_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(JsArray::new(ctx))));
+        let _ = obj.insert_property(boa_engine::js_string!("takeRecords"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), take_fn).build())));
+        // Set MutationObserver.prototype.
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("MutationObserver"), ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object() {
+                if let Ok(pv) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(p) = pv.as_object() { let _ = obj.set_prototype(Some(p)); }
+                }
+            }
+        }
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("MutationObserver"), 1, mo_ctor);
+
+    // ── requestAnimationFrame / cancelAnimationFrame (caniuse: 100%) ──
+    // Synchronous stub: calls callback immediately with timestamp, returns 0.
+    let raf_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        if let Some(cb) = args.first() {
+            if let Some(cb_fn) = cb.as_object() {
+                if cb_fn.is_callable() {
+                    let ts = JsValue::from(0.0f64);
+                    let _ = cb_fn.call(&JsValue::undefined(), &[ts], ctx);
+                }
+            }
+        }
+        Ok(JsValue::from(0u32))
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("requestAnimationFrame"), 1, raf_fn);
+    let caf_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+    let _ = ctx.register_global_callable(boa_engine::js_string!("cancelAnimationFrame"), 1, caf_fn);
+
+    // ── Storage stubs: localStorage / sessionStorage (caniuse: 95%+) ──
+    fn make_storage(ctx: &mut Context) -> boa_engine::JsObject {
+        let store = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = store.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+        // getItem(key) → null (empty storage).
+        let gi = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+        let _ = store.insert_property(boa_engine::js_string!("getItem"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gi.clone()).build())));
+        let _ = store.insert_property(boa_engine::js_string!("setItem"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gi.clone()).build())));
+        let _ = store.insert_property(boa_engine::js_string!("removeItem"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gi.clone()).build())));
+        let _ = store.insert_property(boa_engine::js_string!("clear"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gi.clone()).build())));
+        let _ = store.insert_property(boa_engine::js_string!("key"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gi).build())));
+        store
+    }
+    let ls = make_storage(ctx);
+    let _ = ctx.global_object().insert_property(
+        boa_engine::js_string!("localStorage"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(ls)).writable(true).enumerable(true).configurable(true).build(),
+    );
+    let ss = make_storage(ctx);
+    let _ = ctx.global_object().insert_property(
+        boa_engine::js_string!("sessionStorage"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(ss)).writable(true).enumerable(true).configurable(true).build(),
+    );
+
+    // ── queueMicrotask (caniuse: 97%+) ── Synchronous execution.
+    let qmt_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        if let Some(cb) = args.first() {
+            if let Some(cb_fn) = cb.as_object() {
+                if cb_fn.is_callable() {
+                    let _ = cb_fn.call(&JsValue::undefined(), &[], ctx);
+                }
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("queueMicrotask"), 1, qmt_fn);
+
+    // ── structuredClone (caniuse: 97%+) ── Simple deep clone via JSON roundtrip fallback.
+    let sc_fn = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        // Best-effort: use clone_node_js for objects, otherwise return as-is.
+        let val = args.first().cloned().unwrap_or(JsValue::undefined());
+        if let Some(o) = val.as_object() {
+            return clone_node_js(Some(&o), true, ctx);
+        }
+        Ok(val)
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("structuredClone"), 1, sc_fn);
 }
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {

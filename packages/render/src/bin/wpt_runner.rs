@@ -7,6 +7,8 @@
 // pass/fail/skip counts per test file. Outputs JSON for the report generator.
 //
 // Usage:
+//   # 先按需拉取 WPT 测试集（浅克隆，约 500M）：
+//   ./tests/wpt/fetch-wpt.sh
 //   cargo run -p aris-render --features "desktop winit js" --bin wpt_runner -- tests/wpt/wpt-master/dom
 //
 // The runner walks the directory recursively, finds *.html files, and for
@@ -278,9 +280,7 @@ fn should_skip(html: &str) -> Option<&'static str> {
     if html.contains("new IntersectionObserver") {
         return Some("requires IntersectionObserver");
     }
-    if html.contains("new MutationObserver") {
-        return Some("requires MutationObserver");
-    }
+    // MutationObserver is now implemented (stub).
     if html.contains("indexedDB") {
         return Some("requires IndexedDB");
     }
