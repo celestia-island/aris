@@ -4309,6 +4309,12 @@ fn install_dom_globals(ctx: &mut Context) {
     // DragEvent (caniuse 97%+)
     if let Some(proto) = get_proto("DragEvent", ctx) {
         let _ = proto.insert_property(boa_engine::js_string!("dataTransfer"), ev_null.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("clientX"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("clientY"), ev_zero);
+    }
+    // GamepadEvent (caniuse 97%+)
+    if let Some(proto) = get_proto("GamepadEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("gamepad"), ev_null.clone());
     }
     // InputEvent (caniuse 97%+) — Chromium non-standard
     if let Some(proto) = get_proto("InputEvent", ctx) {
