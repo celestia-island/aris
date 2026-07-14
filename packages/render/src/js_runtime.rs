@@ -5892,17 +5892,45 @@ fn make_element_handle(
     });
     init.function(get_attr, boa_engine::js_string!("getAttribute"), 1);
 
-    // hasAttribute
+    // hasAttribute — HTML attributes are case-insensitive in HTML documents.
     let has_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
         let name = arg_string(args, 0);
-        let obj = this.as_object();
-        let v = match &obj {
-            Some(o) => o
-                .get(boa_engine::js_string!(name), ctx)
-                .unwrap_or(JsValue::null()),
-            None => JsValue::null(),
-        };
-        Ok(JsValue::from(!v.is_null() && !v.is_undefined()))
+        let name_lower = name.to_ascii_lowercase();
+        if let Some(o) = this.as_object() {
+            // Try exact match first.
+            if let Ok(v) = o.get(boa_engine::js_string!(name.clone()), ctx) {
+                if !v.is_null() && !v.is_undefined() {
+                    return Ok(JsValue::from(true));
+                }
+            }
+            // Try lowercase (HTML case-insensitivity).
+            if let Ok(v) = o.get(boa_engine::js_string!(name_lower.clone()), ctx) {
+                if !v.is_null() && !v.is_undefined() {
+                    return Ok(JsValue::from(true));
+                }
+            }
+            // Also check the attributes NamedNodeMap.
+            if let Ok(av) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(ao) = av.as_object() {
+                    let len = ao.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(attr) = ao.get(i as u32, ctx) {
+                            if let Some(ao2) = attr.as_object() {
+                                if let Ok(an) = ao2.get(boa_engine::js_string!("name"), ctx) {
+                                    if let Some(an_s) = an.as_string() {
+                                        if an_s.to_std_string_escaped().to_ascii_lowercase() == name_lower.as_str() {
+                                            return Ok(JsValue::from(true));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(false))
     });
     init.function(has_attr, boa_engine::js_string!("hasAttribute"), 1);
 
