@@ -1,4 +1,0 @@
-[submodule "tests/wpt/wpt-master"]
-	path = tests/wpt/wpt-master
-	url = https://github.com/web-platform-tests/wpt.git
-	branch = master

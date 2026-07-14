@@ -8,7 +8,7 @@
 //
 // Usage:
 //   # 先按需拉取 WPT 测试集（浅克隆，约 500M）：
-//   ./tests/wpt/fetch-wpt.sh
+//   just fetch-wpt
 //   cargo run -p aris-render --features "desktop winit js" --bin wpt_runner -- tests/wpt/wpt-master/dom
 //
 // The runner walks the directory recursively, finds *.html files, and for
