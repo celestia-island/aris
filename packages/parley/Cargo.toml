@@ -1,0 +1,30 @@
+[package]
+name = "aris-parley"
+version = "0.10.0"
+license = "Apache-2.0 OR MIT"
+edition = "2021"
+description = "aris-parley — minimal text layout facade for aris. Re-exports aris-fontique::SourceCache + aris-fontique::Collection into a FontContext struct usable by blitz-dom."
+readme = "README.md"
+repository = "https://github.com/celestia-island/aris"
+rust-version = "1.70"
+keywords = ["text", "font", "layout"]
+categories = ["text-processing", "graphics"]
+
+# aris-fork: keep the [lib] name as `parley` so that blitz-dom and aris-render
+# keep working without source change. Only the package identity is aris-internal.
+[lib]
+name = "parley"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+aris-fontique = { path = "../fontique", version = "0.10.0", default-features = false, features = [
+    "std",
+] }
+aris-resource-handle = { path = "../resource-handle", version = "0.1.1", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"

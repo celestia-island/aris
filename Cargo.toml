@@ -1,9 +1,7 @@
 [workspace]
 resolver = "2"
 
-default-members = [
-    "packages/core",
-]
+default-members = ["packages/core"]
 
 members = [
     "packages/core",
@@ -12,6 +10,11 @@ members = [
     "packages/abi",
     "packages/js",
     "packages/wasm",
+    # aris-internal forks of Linebender / GoogleFonts crates, kei-compatible.
+    "packages/parley",
+    "packages/fontique",
+    "packages/skrifa",
+    "packages/resource-handle",
 ]
 
 [workspace.package]
@@ -52,7 +55,11 @@ tokio = { version = "^1", features = [
 # OTA subsystem
 sha2 = "^0.10"
 hex = "^0.4"
-reqwest = { version = "^0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "^0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
 futures-util = "^0.3"
 
 # Dev / test

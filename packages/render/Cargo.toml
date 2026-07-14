@@ -28,8 +28,9 @@ anyrender_vello_cpu = { version = "0.14", optional = true }
 kurbo = "0.13"
 peniko = "0.6"
 # For embedded font registration (render_html_with_font).
-linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.10", default-features = false, features = ["std"], optional = true }
+aris-resource-handle = { path = "../resource-handle", version = "0.1", optional = true }
+aris-parley = { path = "../parley", version = "0.10", default-features = false, features = ["std"], optional = true }
+aris-fontique = { path = "../fontique", version = "0.10", default-features = false, features = ["std"], optional = true }
 
 # Boa JS engine (optional)
 aris-js = { path = "../js", optional = true }
