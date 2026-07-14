@@ -4245,6 +4245,48 @@ fn install_dom_globals(ctx: &mut Context) {
         }
     }
 
+    // Add caniuse event properties to event prototypes (KeyboardEvent, MouseEvent, FocusEvent).
+    let ev_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let ev_false = ev_pd(JsValue::from(false));
+    let ev_zero = ev_pd(JsValue::from(0u32));
+    let ev_null = ev_pd(JsValue::null());
+    let ev_empty = ev_pd(JsValue::from(boa_engine::js_string!("")));
+    // KeyboardEvent
+    if let Some(proto) = get_proto("KeyboardEvent", ctx) {
+        for (prop, val) in &[("key", ev_empty.clone()), ("code", ev_empty.clone()), ("location", ev_zero.clone()),
+            ("ctrlKey", ev_false.clone()), ("shiftKey", ev_false.clone()), ("altKey", ev_false.clone()), ("metaKey", ev_false.clone()),
+            ("repeat", ev_false.clone()), ("isComposing", ev_false.clone()), ("charCode", ev_zero.clone()),
+            ("keyCode", ev_zero.clone()), ("which", ev_zero.clone()), ("detail", ev_zero.clone())] {
+            let _ = proto.insert_property(boa_engine::js_string!(*prop), val.clone());
+        }
+    }
+    // MouseEvent
+    if let Some(proto) = get_proto("MouseEvent", ctx) {
+        for (prop, val) in &[("screenX", ev_zero.clone()), ("screenY", ev_zero.clone()),
+            ("clientX", ev_zero.clone()), ("clientY", ev_zero.clone()), ("ctrlKey", ev_false.clone()),
+            ("shiftKey", ev_false.clone()), ("altKey", ev_false.clone()), ("metaKey", ev_false.clone()),
+            ("button", ev_zero.clone()), ("buttons", ev_zero.clone()), ("relatedTarget", ev_null.clone()),
+            ("movementX", ev_zero.clone()), ("movementY", ev_zero.clone()), ("detail", ev_zero.clone())] {
+            let _ = proto.insert_property(boa_engine::js_string!(*prop), val.clone());
+        }
+    }
+    // FocusEvent
+    if let Some(proto) = get_proto("FocusEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("relatedTarget"), ev_null.clone());
+    }
+    // UIEvent
+    if let Some(proto) = get_proto("UIEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("detail"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("view"), ev_null.clone());
+    }
+    // WheelEvent (non-standard, widely used)
+    if let Some(proto) = get_proto("WheelEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("deltaX"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("deltaY"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("deltaZ"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("deltaMode"), ev_zero);
+    }
+
     // Add iterable methods to NodeList.prototype (values, entries, forEach, Symbol.iterator).
     if let Some(nl_proto) = get_proto("NodeList", ctx) {
         let fn_pd = |val: JsValue| {
