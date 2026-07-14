@@ -29,5 +29,5 @@ packages/js/target/
 .wpt/
 patches/boa_engine_021/target/
 
-# WPT 测试集，按需克隆（见 scripts/fetch_wpt.py / `just fetch-wpt`），不纳入版本控制
+# WPT 测试集，按需克隆（见 scripts/fetch_wpt.py / `just pull wpt`），不纳入版本控制
 /tests/wpt/wpt-master/
