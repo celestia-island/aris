@@ -4320,14 +4320,67 @@ fn install_dom_globals(ctx: &mut Context) {
         let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
         let callback = args.first().cloned().unwrap_or(JsValue::undefined());
         let _ = obj.insert_property(boa_engine::js_string!("callback"), pd(callback));
-        // observe(target, options) — no-op stub.
-        let observe_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        // observe(target, options) — stores target and snapshot of className.
+        let observe_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let target = args.first().cloned().unwrap_or(JsValue::null());
+            if let (Some(o), Some(t)) = (this.as_object(), target.as_object()) {
+                let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                // Store observed element.
+                let _ = o.insert_property(boa_engine::js_string!("_observed"), pd2(JsValue::from(t.clone())));
+                // Snapshot className (for attribute mutation detection).
+                let snap = t.get(boa_engine::js_string!("className"), ctx).ok()
+                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                    .unwrap_or_default();
+                let _ = o.insert_property(boa_engine::js_string!("_classSnap"), pd2(JsValue::from(boa_engine::js_string!(snap))));
+                // Also snapshot attributes to detect any attribute change.
+                let _ = o.insert_property(boa_engine::js_string!("_attrSnap"), pd2(JsValue::from(true)));
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(boa_engine::js_string!("observe"),
-            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), observe_fn.clone()).build())));
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), observe_fn).build())));
+        // disconnect() — clears stored references.
+        let disconnect_fn = NativeFunction::from_copy_closure(|this, _a, ctx| {
+            if let Some(o) = this.as_object() {
+                let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                let _ = o.insert_property(boa_engine::js_string!("_observed"), pd2(JsValue::null()));
+                let _ = o.insert_property(boa_engine::js_string!("_classSnap"), pd2(JsValue::from(boa_engine::js_string!(""))));
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(boa_engine::js_string!("disconnect"),
-            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), observe_fn.clone()).build())));
-        // takeRecords() returns empty array.
-        let take_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(JsArray::new(ctx))));
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), disconnect_fn).build())));
+        // takeRecords() — returns mutation records if className changed.
+        let take_fn = NativeFunction::from_copy_closure(|this, _a, ctx| {
+            let records = JsArray::new(ctx);
+            if let Some(o) = this.as_object() {
+                // Check if className changed since observe().
+                let target = o.get(boa_engine::js_string!("_observed"), ctx).ok()
+                    .and_then(|v| v.as_object());
+                let old_snap = o.get(boa_engine::js_string!("_classSnap"), ctx).ok()
+                    .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                    .unwrap_or_default();
+                if let Some(t) = target {
+                    let new_class = t.get(boa_engine::js_string!("className"), ctx).ok()
+                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                        .unwrap_or_default();
+                    if new_class != old_snap {
+                        // Class changed — return a MutationRecord.
+                        let record = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let rpd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = record.insert_property(boa_engine::js_string!("type"), rpd(JsValue::from(boa_engine::js_string!("attributes"))));
+                        let _ = record.insert_property(boa_engine::js_string!("attributeName"), rpd(JsValue::from(boa_engine::js_string!("class"))));
+                        let _ = record.insert_property(boa_engine::js_string!("target"), rpd(JsValue::from(t.clone())));
+                        let _ = record.insert_property(boa_engine::js_string!("oldValue"), rpd(JsValue::from(boa_engine::js_string!(old_snap.clone()))));
+                        let _ = records.push(JsValue::from(record), ctx);
+                        // Update snapshot to avoid duplicate reports.
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = o.insert_property(boa_engine::js_string!("_classSnap"), pd2(JsValue::from(boa_engine::js_string!(new_class))));
+                    }
+                }
+            }
+            Ok(JsValue::from(records))
+        });
         let _ = obj.insert_property(boa_engine::js_string!("takeRecords"),
             pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), take_fn).build())));
         // Set MutationObserver.prototype.
@@ -5763,6 +5816,15 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let cl_replace = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let old = arg_to_string(args, 0, ctx);
                 let new = arg_to_string(args, 1, ctx);
+                // Validate tokens per DOM spec: empty → SyntaxError, whitespace → InvalidCharacterError.
+                for token in &[&old, &new] {
+                    if token.is_empty() {
+                        return Err(boa_engine::JsNativeError::syntax().with_message("SyntaxError: The token must not be empty.").into());
+                    }
+                    if token.contains(|c: char| c.is_ascii_whitespace()) {
+                        return Err(boa_engine::JsNativeError::typ().with_message("InvalidCharacterError: The token must not contain ASCII whitespace.").into());
+                    }
+                }
                 if let Some(o) = this.as_object() {
                     let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
                         .and_then(|v| v.as_object());
@@ -6062,6 +6124,15 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let cl_rp = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let old = arg_to_string(args, 0, ctx);
                 let new = arg_to_string(args, 1, ctx);
+                // Validate tokens per DOM spec.
+                for token in &[&old, &new] {
+                    if token.is_empty() {
+                        return Err(boa_engine::JsNativeError::syntax().with_message("SyntaxError: The token must not be empty.").into());
+                    }
+                    if token.contains(|c: char| c.is_ascii_whitespace()) {
+                        return Err(boa_engine::JsNativeError::typ().with_message("InvalidCharacterError: The token must not contain ASCII whitespace.").into());
+                    }
+                }
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
