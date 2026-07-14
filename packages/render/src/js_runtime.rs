@@ -6179,10 +6179,10 @@ fn make_element_handle(
     });
     init.function(set_attr_ns, boa_engine::js_string!("setAttributeNS"), 3);
 
-    // getAttributeNS(ns, name) — returns value or null.
+    // getAttributeNS(ns, name) — returns value or null. Case-sensitive (no lowercasing).
     let get_attr_ns = NativeFunction::from_copy_closure(|this, args, ctx| {
         let _ns = arg_string(args, 0);
-        let name = arg_string(args, 1).to_ascii_lowercase();
+        let name = arg_string(args, 1);
         if let Some(o) = this.as_object() {
             if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
                 if let Some(attrs) = attrs_val.as_object() {
@@ -6193,7 +6193,7 @@ fn make_element_handle(
                             if let Some(ao) = av.as_object() {
                                 if let Ok(an) = ao.get(boa_engine::js_string!("localName"), ctx)
                                     .or_else(|_| ao.get(boa_engine::js_string!("name"), ctx)) {
-                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped()).as_deref() == Some(&name) {
                                         if let Ok(val) = ao.get(boa_engine::js_string!("value"), ctx) {
                                             return Ok(val);
                                         }
