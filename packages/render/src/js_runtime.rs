@@ -3953,6 +3953,37 @@ fn install_dom_globals(ctx: &mut Context) {
         }
     }
 
+    // Add Symbol.toStringTag to key prototypes for Object.prototype.toString.call().
+    // Get the actual Symbol.toStringTag well-known symbol from the global Symbol object.
+    let to_string_tag_sym: Option<boa_engine::JsSymbol> = {
+        let global = ctx.global_object();
+        if let Ok(sym_ctor_val) = global.get(boa_engine::js_string!("Symbol"), ctx) {
+            if let Some(sym_ctor) = sym_ctor_val.as_object() {
+                if let Ok(tst_val) = sym_ctor.get(boa_engine::js_string!("toStringTag"), ctx) {
+                    tst_val.as_symbol()
+                } else { None }
+            } else { None }
+        } else { None }
+    };
+    let tag_pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val).writable(false).enumerable(false).configurable(true).build()
+    };
+    if let Some(sym) = to_string_tag_sym {
+        for (name, tag) in &[
+            ("TreeWalker", "TreeWalker"), ("NodeIterator", "NodeIterator"),
+            ("NodeList", "NodeList"), ("HTMLCollection", "HTMLCollection"),
+            ("Range", "Range"), ("Document", "Document"),
+            ("DocumentFragment", "DocumentFragment"), ("DocumentType", "DocumentType"),
+            ("Element", "Element"), ("Text", "Text"), ("Comment", "Comment"),
+            ("Attr", "Attr"), ("Event", "Event"), ("Node", "Node"),
+        ] {
+            if let Some(proto) = get_proto(name, ctx) {
+                let _ = proto.insert_property(sym.clone(), tag_pd(JsValue::from(boa_engine::js_string!(*tag))));
+            }
+        }
+    }
+
     // Link Text.prototype → CharacterData.prototype → Node.prototype
     // Link Comment.prototype → CharacterData.prototype → Node.prototype
     // Link Document.prototype → Node.prototype
