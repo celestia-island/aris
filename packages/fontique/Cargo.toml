@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.88"
-name = "aris-fontique"
+name = "fontique"
 version = "0.10.0"
 build = false
 autolib = false
@@ -48,8 +48,8 @@ system = [
     "dep:roxmltree",
 ]
 
-# aris-fork: keep the [lib] name as `fontique` so that parley and blitz-dom
-# keep working without source change. Only the package identity is aris-internal.
+# aris-fork: package name matches upstream (fontique) so that [patch.crates-io]
+# can resolve correctly. The lib name is the same anyway.
 [lib]
 name = "fontique"
 path = "src/lib.rs"
@@ -63,11 +63,9 @@ version = "0.17.0"
 features = ["default-hasher", "raw-entry"]
 default-features = false
 
-# aris-fork: replaced crates.io `linebender_resource_handle` with the aris-internal
-# `aris-resource-handle` package (kei-compatible Arc<Vec<T>> backing).
-# The lib name is preserved as `linebender_resource_handle`, so internal
-# `use linebender_resource_handle::...` paths in src/ keep working unchanged.
-[dependencies.aris-resource-handle]
+# aris-fork: uses the in-tree linebender_resource_handle fork (kei-compatible
+# Arc<Vec<T>> backing). Package name matches upstream so [patch.crates-io] works.
+[dependencies.linebender_resource_handle]
 path = "../resource-handle"
 version = "0.1.1"
 default-features = false

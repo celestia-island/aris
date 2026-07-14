@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.85"
-name = "aris-skrifa"
+name = "skrifa"
 version = "0.42.1"
 build = false
 autolib = false
@@ -37,9 +37,8 @@ spec_next = ["read-fonts/spec_next"]
 std = ["read-fonts/std"]
 traversal = ["std", "read-fonts/experimental_traverse"]
 
-# aris-fork: keep the [lib] name as `skrifa` so that fontique, parley, and
-# blitz-dom keep working without source change. Only the package identity
-# is aris-internal.
+# aris-fork: package name matches upstream (skrifa) so that [patch.crates-io]
+# can resolve correctly. The lib name is the same anyway.
 [lib]
 name = "skrifa"
 path = "src/lib.rs"

@@ -1,5 +1,5 @@
 [package]
-name = "aris-resource-handle"
+name = "linebender_resource_handle"
 version = "0.1.1"
 license = "Apache-2.0 OR MIT"
 edition = "2021"
@@ -12,9 +12,8 @@ repository = "https://github.com/celestia-island/aris"
 rust-version = "1.70"
 exclude = [".github", ".clippy.toml", ".gitignore", ".typos.toml"]
 
-# aris-fork: keep the [lib] name as `linebender_resource_handle` so that
-# upstream consumers (fontique, parley, blitz-dom, …) keep working without
-# any source change. Only the package identity is aris-internal.
+# aris-fork: package name matches upstream (linebender_resource_handle) so that
+# [patch.crates-io] can resolve correctly. The lib name is the same anyway.
 [lib]
 name = "linebender_resource_handle"
 path = "src/lib.rs"
