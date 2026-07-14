@@ -7189,6 +7189,96 @@ fn make_element_handle(
     });
     init.function(matches_fn, boa_engine::js_string!("matches"), 1);
 
+    // insertAdjacentElement(position, element) — inserts element relative to this.
+    let iae_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let position = arg_string(args, 0).to_ascii_lowercase();
+        let element = args.get(1).cloned().unwrap_or(JsValue::null());
+        if let (Some(obj), Some(el_obj)) = (this.as_object(), element.as_object()) {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            match position.as_str() {
+                "beforebegin" => {
+                    if let Some(p) = parent {
+                        insert_into_children(&p, &el_obj, Some(obj.clone()), ctx);
+                    }
+                }
+                "afterend" => {
+                    if let Some(p) = parent {
+                        let next = get_next_sibling(&p, &obj, ctx);
+                        insert_into_children(&p, &el_obj, next, ctx);
+                    }
+                }
+                "afterbegin" => {
+                    let first_child = if let Ok(cv) = obj.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() { None } else { v.as_object() }
+                        } else { None }
+                    } else { None };
+                    insert_into_children(&obj, &el_obj, first_child, ctx);
+                }
+                "beforeend" => {
+                    insert_into_children(&obj, &el_obj, None, ctx);
+                }
+                _ => {}
+            }
+        }
+        Ok(element)
+    });
+    init.function(iae_fn, boa_engine::js_string!("insertAdjacentElement"), 2);
+
+    // insertAdjacentText(position, text) — creates text node and inserts it.
+    let iat_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        let position = arg_string(args, 0).to_ascii_lowercase();
+        let text = arg_to_string(args, 1, ctx);
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        // Create a text node.
+        let tn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = tn.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+        let _ = tn.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(text.clone()))));
+        let _ = tn.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(text.clone()))));
+        let _ = tn.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(text.clone()))));
+        let _ = tn.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(text))));
+        let _ = tn.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+        if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+            if let Some(tc) = text_ctor.as_object() {
+                if let Ok(pv) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(p) = pv.as_object() { let _ = tn.set_prototype(Some(p)); }
+                }
+            }
+        }
+        if let Some(obj) = this.as_object() {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            match position.as_str() {
+                "beforebegin" => {
+                    if let Some(p) = parent { insert_into_children(&p, &tn, Some(obj.clone()), ctx); }
+                }
+                "afterend" => {
+                    if let Some(p) = parent {
+                        let next = get_next_sibling(&p, &obj, ctx);
+                        insert_into_children(&p, &tn, next, ctx);
+                    }
+                }
+                "afterbegin" => {
+                    let first_child = if let Ok(cv) = obj.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() { None } else { v.as_object() }
+                        } else { None }
+                    } else { None };
+                    insert_into_children(&obj, &tn, first_child, ctx);
+                }
+                "beforeend" => {
+                    insert_into_children(&obj, &tn, None, ctx);
+                }
+                _ => {}
+            }
+        }
+        Ok(JsValue::undefined())
+    });
+    init.function(iat_fn, boa_engine::js_string!("insertAdjacentText"), 2);
+
     // getElementsByTagName — returns array of matching element handles.
     let by_tag = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
