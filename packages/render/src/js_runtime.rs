@@ -3916,6 +3916,30 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         }
         Ok(JsValue::undefined())
     });
+    let replace_with_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+        if let Some(obj) = this.as_object() {
+            let parent = obj.get(boa_engine::js_string!("parentNode"), ctx).ok()
+                .and_then(|v| v.as_object());
+            if let Some(parent_obj) = parent {
+                // Insert all args before this node.
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+                    }
+                }
+                // Remove this node.
+                remove_from_children(&parent_obj, &obj, ctx);
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val).writable(true).enumerable(true).configurable(true).build()
+                };
+                let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+                let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+            }
+        }
+        Ok(JsValue::undefined())
+    });
     vec![
         ("appendData", append),
         ("deleteData", delete_d),
@@ -3925,6 +3949,7 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         ("remove", remove_fn),
         ("before", before_fn),
         ("after", after_fn),
+        ("replaceWith", replace_with_fn),
     ]
 }
 
