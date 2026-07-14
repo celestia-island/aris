@@ -5817,6 +5817,26 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             });
             let _ = class_list.insert_property(boa_engine::js_string!("toString"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_ts).build())));
+            // item(index) — returns the class at index.
+            let cl_item = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let idx = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        let classes: Vec<&str> = cn.split_whitespace().collect();
+                        if idx < classes.len() as u32 {
+                            return Ok(JsValue::from(boa_engine::js_string!(classes[idx as usize])));
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let _ = class_list.insert_property(boa_engine::js_string!("item"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_item).build())));
             // classList is inserted AFTER set_element_prototype to avoid Boa bug
             // where changing prototype makes own properties inaccessible.
             // Element navigation properties (all null/empty for new elements).
@@ -6081,6 +6101,21 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 Ok(JsValue::from(boa_engine::js_string!("")))
             });
             let _ = cl_obj.insert_property(boa_engine::js_string!("toString"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_ts).build())));
+            // item(index) — returns the class at index.
+            let cl_it = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let idx = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        let classes: Vec<&str> = cn.split_whitespace().collect();
+                        if idx < classes.len() as u32 {
+                            return Ok(JsValue::from(boa_engine::js_string!(classes[idx as usize])));
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("item"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_it).build())));
             set_element_prototype(&handle, local, ctx);
             // For non-HTML namespace, override prototype to Element.prototype (not HTMLxxxElement).
             if !is_html {
