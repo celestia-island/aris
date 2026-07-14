@@ -7012,7 +7012,8 @@ fn make_element_handle(
         if !v.is_undefined() && !v.is_null() {
             return Ok(v);
         }
-        // Fallback: check id/class special cases.
+        // Fallback: check id/class special cases. Only return non-null if
+        // the attribute exists in the NamedNodeMap (not just className).
         if name == "id" {
             if let Some(o) = &obj {
                 return Ok(o
@@ -7021,10 +7022,33 @@ fn make_element_handle(
             }
         } else if name == "class" {
             if let Some(o) = &obj {
-                return Ok(o
-                    .get(boa_engine::js_string!("className"), ctx)
-                    .unwrap_or(JsValue::null()));
+                // Only return className if the class attribute exists in the NamedNodeMap.
+                if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(attrs) = attrs_val.as_object() {
+                        let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        let mut found = false;
+                        for i in 0..len {
+                            if let Ok(av) = attrs.get(i as u32, ctx) {
+                                if let Some(ao) = av.as_object() {
+                                    if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                        if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some("class") {
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if found {
+                            return Ok(o
+                                .get(boa_engine::js_string!("className"), ctx)
+                                .unwrap_or(JsValue::null()));
+                        }
+                    }
+                }
             }
+            return Ok(JsValue::null());
         }
         Ok(JsValue::null())
     });
@@ -7076,17 +7100,51 @@ fn make_element_handle(
     let remove_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
         let name = arg_string(args, 0).to_ascii_lowercase();
         if let Some(o) = this.as_object() {
-            // Remove from attributes NamedNodeMap by decrementing length.
+            // Remove from attributes NamedNodeMap.
             if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
                 if let Some(attrs) = attrs_val.as_object() {
                     let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
                         .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
-                    if len > 0 {
+                    // Find and remove the matching attribute entry.
+                    let mut found_idx: Option<u32> = None;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some(&name) {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(idx) = found_idx {
+                        // Shift remaining entries down.
+                        for i in idx..len - 1 {
+                            if let Ok(next) = attrs.get((i + 1) as u32, ctx) {
+                                let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                                let _ = attrs.insert_property(i as u32, pd2(next));
+                            }
+                        }
                         let _ = attrs.insert_property(boa_engine::js_string!("length"),
                             boa_engine::property::PropertyDescriptor::builder()
                                 .value(JsValue::from(len - 1)).writable(true).enumerable(true).configurable(true).build());
                     }
                 }
+            }
+            // Clear direct property and special properties.
+            let pd_clear = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+            if name == "class" {
+                let _ = o.insert_property(boa_engine::js_string!("className"), pd_clear(JsValue::from(boa_engine::js_string!(""))));
+                // Clear the direct class property set by setAttribute.
+                let _ = o.insert_property(boa_engine::js_string!("class"), pd_clear(JsValue::null()));
+            } else if name == "id" {
+                let _ = o.insert_property(boa_engine::js_string!("id"), pd_clear(JsValue::from(boa_engine::js_string!(""))));
+                let _ = o.insert_property(boa_engine::js_string!("id"), pd_clear(JsValue::null()));
+            } else {
+                // Clear the direct property.
+                let _ = o.insert_property(boa_engine::js_string!(name.clone()), pd_clear(JsValue::null()));
             }
         }
         Ok(JsValue::undefined())
