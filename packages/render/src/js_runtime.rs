@@ -3969,6 +3969,106 @@ fn install_dom_globals(ctx: &mut Context) {
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), hcn_fn).build())
                 .writable(true).enumerable(true).configurable(true).build(),
         );
+
+        // Add normalize to Node.prototype — merges adjacent text nodes.
+        let normalize_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            if let Some(o) = this.as_object() {
+                if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                    if let Some(ca) = cv.as_object() {
+                        let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                        // Merge adjacent text nodes.
+                        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let mut i = 0u32;
+                        let mut new_children: Vec<JsValue> = Vec::new();
+                        while i < len {
+                            if let Ok(child) = ca.get(i, ctx) {
+                                if let Some(co) = child.as_object() {
+                                    let nt = co.get(boa_engine::js_string!("nodeType"), ctx).ok()
+                                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                                    if nt == 3 {
+                                        // Text node — merge with following text nodes.
+                                        let mut combined = read_data_utf16(&child, ctx);
+                                        let mut j = i + 1;
+                                        while j < len {
+                                            if let Ok(next) = ca.get(j, ctx) {
+                                                if let Some(no) = next.as_object() {
+                                                    let nnt = no.get(boa_engine::js_string!("nodeType"), ctx).ok()
+                                                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                                                    if nnt == 3 {
+                                                        combined.extend(read_data_utf16(&next, ctx));
+                                                        j += 1;
+                                                    } else { break; }
+                                                } else { break; }
+                                            } else { break; }
+                                        }
+                                        if j > i + 1 {
+                                            // Create merged text node.
+                                            let tn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                                            let _ = tn.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+                                            let js_str = boa_engine::JsString::from(&combined[..]);
+                                            let _ = tn.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(js_str.clone())));
+                                            let _ = tn.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(js_str.clone())));
+                                            let _ = tn.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(js_str.clone())));
+                                            let _ = tn.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(js_str)));
+                                            let _ = tn.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+                                            let _ = tn.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(o.clone())));
+                                            if let Ok(tc) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                                                if let Some(tco) = tc.as_object() {
+                                                    if let Ok(pv) = tco.get(boa_engine::js_string!("prototype"), ctx) {
+                                                        if let Some(p) = pv.as_object() { let _ = tn.set_prototype(Some(p)); }
+                                                    }
+                                                }
+                                            }
+                                            new_children.push(tn.into());
+                                            i = j;
+                                            continue;
+                                        }
+                                    }
+                                    new_children.push(child);
+                                    i += 1;
+                                } else {
+                                    i += 1;
+                                }
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        // Update _children if changes were made.
+                        if new_children.len() as u32 != len {
+                            let new_arr = JsArray::new(ctx);
+                            for child in new_children {
+                                let _ = new_arr.push(child, ctx);
+                            }
+                            let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+                        }
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("normalize"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), normalize_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+
+        // Add cloneNode to Node.prototype — always uses clone_node_js directly
+        // (avoids infinite recursion when looking up own cloneNode property).
+        let clone_node_proto_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let deep = args.first().and_then(|v| v.as_boolean()).unwrap_or(false);
+            if let Some(o) = this.as_object() {
+                return clone_node_js(Some(&o), deep, ctx);
+            }
+            Ok(JsValue::null())
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("cloneNode"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), clone_node_proto_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
     }
 
     // Link all HTMLxxxElement.prototype to HTMLElement.prototype
