@@ -5855,7 +5855,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        // Normalize: split whitespace, remove empty & duplicate tokens.
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) {
+                                classes.push(t.to_string());
+                            }
+                        }
                         for arg in args.iter() {
                             let token = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
                             if !classes.contains(&token) {
@@ -5912,7 +5918,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        // Normalize: split whitespace, remove empty & duplicate tokens.
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) {
+                                classes.push(t.to_string());
+                            }
+                        }
                         for arg in args.iter() {
                             let token = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
                             classes.retain(|c| c != &token);
@@ -5968,7 +5980,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         let present = classes.contains(&token);
                         let should_add = force.unwrap_or(!present);
                         if should_add && !present {
@@ -6037,7 +6052,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         if let Some(idx) = classes.iter().position(|c| c == &old) {
                             classes[idx] = new;
                             let new_cn = classes.join(" ");
@@ -6302,7 +6320,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         for arg in args.iter() { let t = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default(); if !classes.contains(&t) { classes.push(t); } }
                         let nc = classes.join(" ");
                         let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
@@ -6317,7 +6338,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         for arg in args.iter() { let t = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default(); classes.retain(|c| c != &t); }
                         let nc = classes.join(" ");
                         let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
@@ -6334,7 +6358,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         let present = classes.contains(&token);
                         let should_add = force.unwrap_or(!present);
                         if should_add && !present { classes.push(token); } else if !should_add && present { classes.retain(|c| c != &token); }
@@ -6363,7 +6390,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
-                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let mut classes: Vec<String> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !classes.contains(&t.to_string()) { classes.push(t.to_string()); }
+                        }
                         if let Some(idx) = classes.iter().position(|c| c == &old) {
                             classes[idx] = new;
                             let nc = classes.join(" ");
