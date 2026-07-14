@@ -4306,6 +4306,10 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = proto.insert_property(boa_engine::js_string!("colno"), ev_zero.clone());
         let _ = proto.insert_property(boa_engine::js_string!("error"), ev_null.clone());
     }
+    // DragEvent (caniuse 97%+)
+    if let Some(proto) = get_proto("DragEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("dataTransfer"), ev_null);
+    }
 
     // Add iterable methods to NodeList.prototype (values, entries, forEach, Symbol.iterator).
     if let Some(nl_proto) = get_proto("NodeList", ctx) {
@@ -4670,6 +4674,11 @@ fn install_dom_globals(ctx: &mut Context) {
         Ok(obj.into())
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("BroadcastChannel"), 1, bc_ctor);
+
+    // ── Gamepad API (caniuse: 97%+) ── Stub.
+    let gp_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(JsArray::new(ctx))));
+    let _ = ctx.global_object().insert_property(boa_engine::js_string!("getGamepads"), boa_engine::property::PropertyDescriptor::builder()
+        .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), gp_fn).build())).writable(true).enumerable(true).configurable(true).build());
 
     // ── Web Crypto (caniuse: 97%+) ── Stub.
     let crypto_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
