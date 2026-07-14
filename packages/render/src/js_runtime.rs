@@ -5638,36 +5638,153 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(JsValue::from(0u32)),
             );
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
-            // classList — DOMTokenList backed by className.
+            // classList — DOMTokenList backed by element's className attribute.
             let class_list = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            // Store reference to parent element.
+            let _ = class_list.insert_property(boa_engine::js_string!("_element"), pd(JsValue::from(handle.clone())));
+            // Helper to read current classes from parent element.
             let _ = class_list.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
-            // contains(token) — checks if className contains token.
+            // contains(token)
             let cl_contains = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let token = arg_string(args, 0);
                 if let Some(o) = this.as_object() {
-                    // Get className from the parent element (stored as _className on classList).
-                    let cn = o.get(boa_engine::js_string!("_className"), ctx).ok()
-                        .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-                        .unwrap_or_default();
-                    let found = cn.split_whitespace().any(|c| c == token);
-                    return Ok(JsValue::from(found));
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token)));
+                    }
                 }
                 Ok(JsValue::from(false))
             });
             let _ = class_list.insert_property(boa_engine::js_string!("contains"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_contains).build())));
             // add(...tokens)
-            let cl_add = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let cl_add = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        for arg in args.iter() {
+                            let token = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+                            if !classes.contains(&token) {
+                                classes.push(token);
+                            }
+                        }
+                        let new_cn = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el_obj.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(new_cn.clone()))));
+                        // Also update via setAttribute if available.
+                        if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
+                            if let Some(sa_fn) = sa.as_object() {
+                                if sa_fn.is_callable() {
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
             let _ = class_list.insert_property(boa_engine::js_string!("add"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_add).build())));
             // remove(...tokens)
-            let cl_remove = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let cl_remove = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        for arg in args.iter() {
+                            let token = arg.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+                            classes.retain(|c| c != &token);
+                        }
+                        let new_cn = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el_obj.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(new_cn.clone()))));
+                        if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
+                            if let Some(sa_fn) = sa.as_object() {
+                                if sa_fn.is_callable() {
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
             let _ = class_list.insert_property(boa_engine::js_string!("remove"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_remove).build())));
-            // toggle(token)
-            let cl_toggle = NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::from(false)));
+            // toggle(token, force?)
+            let cl_toggle = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let token = arg_to_string(args, 0, ctx);
+                let force = args.get(1).and_then(|v| v.as_boolean());
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        let present = classes.contains(&token);
+                        let should_add = force.unwrap_or(!present);
+                        if should_add && !present {
+                            classes.push(token.clone());
+                        } else if !should_add && present {
+                            classes.retain(|c| c != &token);
+                        }
+                        let new_cn = classes.join(" ");
+                        let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                        let _ = el_obj.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(new_cn.clone()))));
+                        if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
+                            if let Some(sa_fn) = sa.as_object() {
+                                if sa_fn.is_callable() {
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                }
+                            }
+                        }
+                        return Ok(JsValue::from(should_add));
+                    }
+                }
+                Ok(JsValue::from(false))
+            });
             let _ = class_list.insert_property(boa_engine::js_string!("toggle"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_toggle).build())));
+            // replace(old, new)
+            let cl_replace = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let old = arg_to_string(args, 0, ctx);
+                let new = arg_to_string(args, 1, ctx);
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        if let Some(idx) = classes.iter().position(|c| c == &old) {
+                            classes[idx] = new;
+                            let new_cn = classes.join(" ");
+                            let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                            let _ = el_obj.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(new_cn))));
+                            return Ok(JsValue::from(true));
+                        }
+                    }
+                }
+                Ok(JsValue::from(false))
+            });
+            let _ = class_list.insert_property(boa_engine::js_string!("replace"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_replace).build())));
             let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(class_list.into()));
             // Element navigation properties (all null/empty for new elements).
             let _ = handle.insert_property(boa_engine::js_string!("children"),
