@@ -6189,15 +6189,15 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         .with_message("INVALID_CHARACTER_ERR").into());
                 }
             }
-            // NAMESPACE_ERR: starts with ':' or contains '::' or prefix is xml/xmlns.
+            // NAMESPACE_ERR: starts with ':' in non-null namespace → INVALID_CHARACTER_ERR.
             if qname.starts_with(':') {
-                return Err(boa_engine::JsNativeError::typ()
-                    .with_message("NAMESPACE_ERR").into());
+                if ns_is_null || ns.is_empty() {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message("INVALID_CHARACTER_ERR").into());
+                }
+                // null/empty namespace + ':' prefix → INVALID_CHARACTER_ERR
             }
-            if qname.contains("::") {
-                return Err(boa_engine::JsNativeError::typ()
-                    .with_message("NAMESPACE_ERR").into());
-            }
+            // Note: "::" in qname is VALID per spec (e.g., "prefix::local" → prefix="prefix", localName=":local").
             // NAMESPACE_ERR checks per spec.
             if let Some(idx) = qname.find(':') {
                 let prefix_str = &qname[..idx];
