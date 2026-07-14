@@ -3849,6 +3849,15 @@ fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
         Ok(JsValue::undefined())
     });
     let substring_d = NativeFunction::from_copy_closure(|this, args, ctx| {
+        // offset and count are mandatory (throw TypeError if missing).
+        if args.is_empty() || args.first().map(|v| v.is_undefined()).unwrap_or(true) {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("substringData requires at least 1 argument").into());
+        }
+        if args.get(1).map(|v| v.is_undefined()).unwrap_or(true) {
+            return Err(boa_engine::JsNativeError::typ()
+                .with_message("substringData requires offset and count").into());
+        }
         let offset = args.first().map(|v| js_to_uint32(v)).unwrap_or(0);
         let count = args.get(1).map(|v| js_to_uint32(v)).unwrap_or(0);
         let units = read_data_utf16(&this, ctx);

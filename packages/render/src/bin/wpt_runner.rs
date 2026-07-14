@@ -535,16 +535,20 @@ function assert_throws_dom(code, fn_or_ctor, fn_or_msg, msg) {
     throw new Error((msg || "") + " did not throw " + code_str);
 }
 
-function assert_throws_js(name, fn, msg) {
+function assert_throws_js(constructor, fn, msg) {
     try {
         fn();
     } catch(e) {
-        if (e && e.name === name) {
+        if (e instanceof constructor) {
+            return;
+        }
+        // Also check by name string for cross-realm compatibility.
+        if (e && typeof constructor === 'function' && e.name === constructor.name) {
             return;
         }
         throw new Error((msg || "") + " threw wrong error type: " + (e && e.name));
     }
-    throw new Error((msg || "") + " did not throw " + name);
+    throw new Error((msg || "") + " did not throw " + (constructor && constructor.name));
 }
 
 // EventTarget support on window: store listeners, dispatch on dispatchEvent.
