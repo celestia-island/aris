@@ -5992,7 +5992,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = class_list.insert_property(boa_engine::js_string!("_attrs"), pd(JsValue::from(attrs_map)));
             // contains(token)
             let cl_contains = NativeFunction::from_copy_closure(|this, args, ctx| {
-                let token = arg_string(args, 0);
+                let token_str = arg_to_string(args, 0, ctx);
                 if let Some(o) = this.as_object() {
                     let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
                         .and_then(|v| v.as_object());
@@ -6000,7 +6000,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token)));
+                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token_str)));
                     }
                 }
                 Ok(JsValue::from(false))
@@ -6239,7 +6239,12 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
                             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                             .unwrap_or_default();
-                        return Ok(JsValue::from(cn.split_whitespace().count() as u32));
+                        // Normalize: count only unique tokens.
+                        let mut seen: Vec<&str> = Vec::new();
+                        for t in cn.split_whitespace() {
+                            if !seen.contains(&t) { seen.push(t); }
+                        }
+                        return Ok(JsValue::from(seen.len() as u32));
                     }
                 }
                 Ok(JsValue::from(0u32))
@@ -6468,11 +6473,11 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = cl_obj.insert_property(boa_engine::js_string!("_attrs"), pd(JsValue::from(attrs_clone)));
             // contains
             let cl_c = NativeFunction::from_copy_closure(|this, args, ctx| {
-                let token = arg_string(args, 0);
+                let token_str = arg_to_string(args, 0, ctx);
                 if let Some(o) = this.as_object() {
                     if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
                         let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
-                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token)));
+                        return Ok(JsValue::from(cn.split_whitespace().any(|c| c == token_str)));
                     }
                 }
                 Ok(JsValue::from(false))
