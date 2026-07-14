@@ -2021,6 +2021,48 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = d.insert_property(boa_engine::js_string!("createRange"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cr_fn).build())));
         // Add DOM methods (appendChild etc.) so xmlDoc.appendChild works.
         add_dom_methods(&d, ctx);
+        // Set Document.prototype for instanceof + Node method inheritance.
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("Document"), ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object() {
+                if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(proto) = proto_val.as_object() {
+                        let _ = d.set_prototype(Some(proto));
+                    }
+                }
+            }
+        }
+        // append/prepend (ParentNode interface).
+        let doc_ref_app = d.clone();
+        let app_fn = NativeFunction::from_copy_closure_with_captures(move |this, args, _doc_ref_app, ctx| {
+            if let Some(o) = this.as_object() {
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&o, &child_obj, None, ctx);
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        }, doc_ref_app);
+        let _ = d.insert_property(boa_engine::js_string!("append"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), app_fn).build())));
+        let prep_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            if let Some(o) = this.as_object() {
+                let first_child = if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                    if let Some(ca) = cv.as_object() {
+                        let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                        if v.is_undefined() { None } else { v.as_object() }
+                    } else { None }
+                } else { None };
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&o, &child_obj, first_child.clone(), ctx);
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = d.insert_property(boa_engine::js_string!("prepend"), pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), prep_fn).build())));
         // Handle doctype argument (3rd arg) — set as doctype property.
         if let Some(dt) = args.get(2) {
             if !dt.is_null() && !dt.is_undefined() {
@@ -2097,6 +2139,16 @@ fn install_dom_globals(ctx: &mut Context) {
                     .enumerable(true).configurable(true).build(),
             );
             let _ = dt.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(doc_ref.clone())));
+            // Set DocumentType.prototype.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("DocumentType"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = dt.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             Ok(dt.into())
         }, doc_ref);
         let hf_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
@@ -2407,6 +2459,16 @@ fn install_dom_globals(ctx: &mut Context) {
         // ownerDocument = the current document.
         let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
         let _ = d.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
+        // Set DocumentType.prototype for instanceof + Node method inheritance.
+        if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("DocumentType"), ctx) {
+            if let Some(ctor_obj) = ctor_val.as_object() {
+                if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(proto) = proto_val.as_object() {
+                        let _ = d.set_prototype(Some(proto));
+                    }
+                }
+            }
+        }
         Ok(d.into())
     });
     let _ = impl_obj.insert_property(
@@ -2893,6 +2955,46 @@ fn install_dom_globals(ctx: &mut Context) {
             pd(JsValue::from(
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), create_frag).build(),
             )),
+        );
+
+        // document.append(...nodes) — ParentNode method.
+        let doc_append = NativeFunction::from_copy_closure(|this, args, ctx| {
+            if let Some(o) = this.as_object() {
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&o, &child_obj, None, ctx);
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("append"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), doc_append).build())),
+        );
+        // document.prepend(...nodes) — ParentNode method.
+        let doc_prepend = NativeFunction::from_copy_closure(|this, args, ctx| {
+            if let Some(o) = this.as_object() {
+                // Find first child (reference node).
+                let first_child = if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                    if let Some(ca) = cv.as_object() {
+                        let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                        if v.is_undefined() { None } else { v.as_object() }
+                    } else { None }
+                } else { None };
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        insert_into_children(&o, &child_obj, first_child.clone(), ctx);
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("prepend"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), doc_prepend).build())),
         );
 
         // document.createProcessingInstruction(target, data)
@@ -3730,6 +3832,113 @@ fn install_dom_globals(ctx: &mut Context) {
                 }
             }
         }
+
+        // Add isSameNode to Node.prototype so all node types inherit it.
+        let isn_fn = NativeFunction::from_copy_closure(|this, args, _ctx| {
+            let other = args.first().cloned().unwrap_or(JsValue::null());
+            // Reference equality: this === other
+            Ok(JsValue::from(JsValue::same_value(this, &other)))
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("isSameNode"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), isn_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+
+        // Add contains to Node.prototype.
+        let contains_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let other = args.first().cloned().unwrap_or(JsValue::null());
+            if other.is_null() || other.is_undefined() {
+                return Ok(JsValue::from(false));
+            }
+            if JsValue::same_value(this, &other) {
+                return Ok(JsValue::from(true));
+            }
+            // Walk up parentNode chain from other.
+            let mut current = other.as_object();
+            for _ in 0..10000 {
+                match current {
+                    Some(o) => {
+                        if let Ok(pn) = o.get(boa_engine::js_string!("parentNode"), ctx) {
+                            if JsValue::same_value(this, &pn) {
+                                return Ok(JsValue::from(true));
+                            }
+                            current = pn.as_object();
+                        } else {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            Ok(JsValue::from(false))
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("contains"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), contains_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+
+        // Add getRootNode to Node.prototype.
+        let grn_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            let mut current = this.as_object();
+            let mut root = current.clone();
+            for _ in 0..10000 {
+                match current {
+                    Some(o) => {
+                        if let Ok(pn) = o.get(boa_engine::js_string!("parentNode"), ctx) {
+                            if pn.is_null() || pn.is_undefined() {
+                                break;
+                            }
+                            current = pn.as_object();
+                            root = current.clone();
+                        } else {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            match root {
+                Some(o) => Ok(o.into()),
+                None => Ok(this.clone()),
+            }
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("getRootNode"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), grn_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+
+        // Add hasChildNodes to Node.prototype.
+        let hcn_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            if let Some(o) = this.as_object() {
+                if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                    if let Some(ca) = cv.as_object() {
+                        let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0);
+                        return Ok(JsValue::from(len > 0.0));
+                    }
+                }
+                if let Ok(cn) = o.get(boa_engine::js_string!("childNodes"), ctx) {
+                    if let Some(ca) = cn.as_object() {
+                        let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                            .and_then(|v| v.as_number()).unwrap_or(0.0);
+                        return Ok(JsValue::from(len > 0.0));
+                    }
+                }
+            }
+            Ok(JsValue::from(false))
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("hasChildNodes"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), hcn_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
     }
 
     // Link all HTMLxxxElement.prototype to HTMLElement.prototype
