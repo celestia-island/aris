@@ -271,16 +271,10 @@ fn should_skip(html: &str) -> Option<&'static str> {
     if html.contains("crypto.subtle") {
         return Some("requires Web Crypto");
     }
-    if html.contains("performance.") && html.contains("PerformanceObserver") {
-        return Some("requires Performance API");
-    }
-    if html.contains("new ResizeObserver") {
-        return Some("requires ResizeObserver");
-    }
-    if html.contains("new IntersectionObserver") {
-        return Some("requires IntersectionObserver");
-    }
     // MutationObserver is now implemented (stub).
+    // ResizeObserver is now implemented (stub).
+    // IntersectionObserver is now implemented (stub).
+    // Performance API is now implemented (minimal stub).
     if html.contains("indexedDB") {
         return Some("requires IndexedDB");
     }

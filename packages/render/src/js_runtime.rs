@@ -4331,6 +4331,50 @@ fn install_dom_globals(ctx: &mut Context) {
         Ok(val)
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("structuredClone"), 1, sc_fn);
+
+    // ── ResizeObserver (caniuse: 96%+) ── Stub.
+    let ro_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let noop = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(boa_engine::js_string!("observe"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("unobserve"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("disconnect"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop).build())));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("ResizeObserver"), 1, ro_ctor);
+
+    // ── IntersectionObserver (caniuse: 97%+) ── Stub.
+    let io_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let noop = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(boa_engine::js_string!("observe"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("unobserve"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("disconnect"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("takeRecords"),
+            pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(JsArray::new(ctx))))).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("root"), pd(JsValue::null()));
+        let _ = obj.insert_property(boa_engine::js_string!("rootMargin"), pd(JsValue::from(boa_engine::js_string!("0px"))));
+        let _ = obj.insert_property(boa_engine::js_string!("thresholds"), pd(JsValue::from(JsArray::new(ctx))));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("IntersectionObserver"), 1, io_ctor);
+
+    // ── Performance API (caniuse: 98%+) ── Minimal stub.
+    let perf_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let perf_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let _ = perf_obj.insert_property(boa_engine::js_string!("now"), perf_pd(JsValue::from(
+        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::from(0.0f64)))).build())));
+    let _ = perf_obj.insert_property(boa_engine::js_string!("timeOrigin"), perf_pd(JsValue::from(0.0f64)));
+    let _ = ctx.global_object().insert_property(boa_engine::js_string!("performance"),
+        boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(perf_obj)).writable(true).enumerable(true).configurable(true).build());
 }
 fn build_character_data_methods() -> Vec<(&'static str, NativeFunction)> {
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
