@@ -2,7 +2,24 @@
 
 > 本文件于 **2026-07-13** 更新，记录项目当前状态、近期进展与后续计划。
 > 定位已于 2026-07-10 变更为「基于 servo 的浏览器引擎」——详见第 6 节。
+> **2026-07-14 刷新记录**：PLAN.md 顶部加 §"Refresh log 2026-07-14"；其他章节保留原貌。
 > 原有工业网关发行版计划已保留于文末「既有详细计划（存档）」。
+
+## Refresh log 2026-07-14
+
+- **当前分支**：`dev` · 领先 `origin/dev` 0 commits
+- **最近提交**：`✨ Arona: add kei TTY, prerender cursor/pixels, desktop snapshots.` (`c14a739`)
+- **未提交改动**（4 项）：
+  ```
+   M packages/wasm/src/bin/prerender_pixels.rs
+   M tests/fixtures/kei_desktop.wasm
+   M tests/fixtures/kei_desktop_1280x800.rgba
+   M tests/fixtures/kei_desktop_rendered.html
+  ```
+- **后续动作**：
+  1. 完成 `prerender_pixels.rs` 的 `.bak` 清理（已删）并把 wasm/fixture 改动随本轮 PLAN.md 一起 commit。
+  2. **顶层 `patches/` 长期方案**：把 `fontique / skrifa / linebender-resource-handle` 推到 celestia-island fork 仓（`celestia-island/skrifa.git` 等），本仓改用 `git = "..."` 引用；本轮 PLAN.md 标注，不动代码。
+  3. **boA 0.21.1 ICU pin 修复**（仓内 `patches/boa_*`）维持现状。
 
 ## 0. 浏览器功能状态（2026-07-13）
 
