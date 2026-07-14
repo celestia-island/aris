@@ -7,9 +7,9 @@
 
 ## Refresh log 2026-07-14
 
-- **当前分支**：`dev` · 领先 `origin/dev` 0 commits
-- **最近提交**：`✨ Arona: add kei TTY, prerender cursor/pixels, desktop snapshots.` (`c14a739`)
-- **未提交改动**（4 项）：
+- **当前分支**：`dev` · 领先 `origin/dev` 1 commit
+- **最近提交**：`🐛 Aris: align in-tree Linebender fork manifest (7c445f6 follow-up).` (`05679dc`)
+- **未提交改动**（4 项，与 2026-07-14 早些时候一致 — arona agent 积累的 wasm/fixture 改动，本轮不 commit）：
 
   ```
    M packages/wasm/src/bin/prerender_pixels.rs
@@ -22,6 +22,25 @@
   1. `prerender_pixels.rs` 和 `tests/fixtures/*` 的脏改动**保留未提交**（本轮仅做 Linebender 迁移；那些 wasm/fixture 改动是 arona agent 之前积累的，按独立 commit 节奏走，不混入）。
   2. **Linebender / GoogleFonts 长期方案 → 已落地**：原 `celestia/patches/{fontique,linebender-resource-handle,skrifa}/` 全部迁移到 `aris/packages/{fontique,skrifa,resource-handle}/`，新增 `aris/packages/parley/` 极简 FontContext facade。**aris 仓完全自维护**，不再依赖 celestia-island 上的独立 fork 仓。celestia 顶层 `patches/` 目录下的 3 个 Linebender 仓已删除；aris 顶层 `patches/boa_*` 保留。
   3. **boA 0.21.1 ICU pin 修复**（仓内 `patches/boa_*`）维持现状。
+
+## Refresh log 2026-07-15 (peer fork agent aris-charlie 实测)
+
+- **commit `05679dc`** 修复了 7c445f6 引入的 3 处 manifest-level bug：
+  1. `aris/packages/render/Cargo.toml` `render` feature 引用了未声明的 `dep:linebender_resource_handle` / `dep:parley`（lib name 而非 dep key），已改为 `dep:aris-resource-handle` / `dep:aris-parley`。
+  2. `aris/Cargo.toml` `[patch.crates-io]` 仍指向已删除的 `../patches/{skrifa,linebender-resource-handle,fontique}`，已删除这 3 条 stale entry。
+  3. `aris/packages/fontique/Cargo.toml` 中 `aris-resource-handle` 内联 dep 没有 section header，被 cargo 误归到 `[dependencies.hashbrown]`，已加 `[dependencies.aris-resource-handle]` section。
+- **`cargo check --workspace --exclude aris-abi` 结果**：
+  - ✅ `aris-resource-handle`（14 doc-warnings，upstream 风格，pre-existing）
+  - ✅ `aris-fontique`（无 error；1 stray key warning 已修）
+  - ✅ `aris-skrifa`（无 error）
+  - ✅ `aris-parley`（空 lib OK，编译通过 — 但 facade 未实现，见 BLOCK）
+  - ❌ `aris-render`（6 E0432，根因是 `aris-parley/src/lib.rs` 空文件）
+  - ⏭ `aris-abi`（Windows host 下 `std::os::fd` / `libc::ioctl` / `File::into_raw_fd` 解析失败，pre-existing，Unix-only code 缺 `#[cfg(unix)]` gate）
+- **BLOCK (待 langyo 决策)**：aris-parley 的 "极简 FontContext facade" 在 7c445f6 没说实现，src/lib.rs 是 0 字节文件。aris-render 已经 `use parley::FontContext; use parley::fontique::{Collection, CollectionOptions, SourceCache}`，需要 facade 实现：
+  - `parley::FontContext` struct（包装 aris-fontique 的 SourceCache + Collection）
+  - `parley::fontique` module（re-export aris-fontique 的 Collection / CollectionOptions / SourceCache）
+  - 详细报告见 `.amphoreus/RUNS/aris/build-errors.md`
+- **agent id 命名**：aris-charlie（per 5 仓优先级顺序第一个空 P0 仓 aris 的第一个认领者）
 
 ## 0. 浏览器功能状态（2026-07-13）
 
