@@ -7986,6 +7986,53 @@ fn make_element_handle(
             .build(),
     );
 
+    // dataset — DOMStringMap of data-* attributes. Built lazily from attributes NamedNodeMap.
+    let ds_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        let ds = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        if let Some(o) = this.as_object() {
+            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                if let Some(attrs) = attrs_val.as_object() {
+                    let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(av) = attrs.get(i as u32, ctx) {
+                            if let Some(ao) = av.as_object() {
+                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                    if let Some(an_s) = an.as_string() {
+                                        let name = an_s.to_std_string_escaped();
+                                        if name.starts_with("data-") {
+                                            let key: String = name[5..].split('-').enumerate().map(|(i, part)| {
+                                                if i == 0 { part.to_string() }
+                                                else {
+                                                    let mut c = part.chars();
+                                                    c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default() + c.as_str()
+                                                }
+                                            }).collect();
+                                            if let Ok(val) = ao.get(boa_engine::js_string!("value"), ctx) {
+                                                let _ = ds.insert_property(boa_engine::js_string!(key), pd(val));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(JsValue::from(ds))
+    });
+    let ds_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ds_get).build();
+    let _ = obj.insert_property(
+        boa_engine::js_string!("dataset"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .get(ds_get_fn)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+
     // textContent as accessor: getter concatenates descendant text, setter replaces children.
     let tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
         if let Some(o) = this.as_object() {
