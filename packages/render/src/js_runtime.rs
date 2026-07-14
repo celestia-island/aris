@@ -5783,11 +5783,78 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         Gc::clone(&bridge),
     );
 
+    // getElementsByTagName on document — needs bridge captures.
+    let doc_by_tag = NativeFunction::from_copy_closure_with_captures(
+        move |_this, args, b, ctx| {
+            let tag = arg_string(args, 0).to_lowercase();
+            let bb = b.borrow();
+            let matching: Vec<u32> = bb.node_props.iter()
+                .filter(|(_, s)| s.node_type == 1 && (tag == "*" || s.tag_name.to_lowercase() == tag))
+                .map(|(&id, _)| id)
+                .collect();
+            drop(bb);
+            let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            for (i, nid) in matching.iter().enumerate() {
+                let snap = b.borrow().node_props.get(nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                    set_element_prototype(&handle, &s.tag_name, ctx);
+                }
+                let _ = arr.insert_property(i as u32, pd(handle.into()));
+            }
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(matching.len() as u32)));
+            let item_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let idx = args.first().and_then(|v| v.as_number()).unwrap_or(-1.0) as i32;
+                if idx < 0 { return Ok(JsValue::null()); }
+                if let Some(o) = this.as_object() {
+                    let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    if (idx as u32) < len { return Ok(o.get(idx as u32, ctx).unwrap_or(JsValue::null())); }
+                }
+                Ok(JsValue::null())
+            });
+            let _ = arr.insert_property(boa_engine::js_string!("item"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), item_fn).build())));
+            Ok(arr.into())
+        },
+        Gc::clone(&bridge),
+    );
+    // getElementsByClassName on document
+    let doc_by_class = NativeFunction::from_copy_closure_with_captures(
+        move |_this, args, b, ctx| {
+            let cls = arg_string(args, 0);
+            let bb = b.borrow();
+            let matching: Vec<u32> = bb.node_props.iter()
+                .filter(|(_, s)| s.node_type == 1 && s.class_name.split_whitespace().any(|c| c == cls))
+                .map(|(&id, _)| id)
+                .collect();
+            drop(bb);
+            let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let pd = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
+            for (i, nid) in matching.iter().enumerate() {
+                let snap = b.borrow().node_props.get(nid).cloned();
+                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
+                if let Some(s) = snap {
+                    populate_props(&handle, &s, ctx);
+                    set_element_prototype(&handle, &s.tag_name, ctx);
+                }
+                let _ = arr.insert_property(i as u32, pd(handle.into()));
+            }
+            let _ = arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(matching.len() as u32)));
+            Ok(arr.into())
+        },
+        Gc::clone(&bridge),
+    );
+
     let document = ObjectInitializer::new(ctx)
         .function(get_by_id, boa_engine::js_string!("getElementById"), 1)
         .function(create_el, boa_engine::js_string!("createElement"), 1)
         .function(create_el_ns, boa_engine::js_string!("createElementNS"), 2)
         .function(query_sel, boa_engine::js_string!("querySelector"), 1)
+        .function(doc_by_tag, boa_engine::js_string!("getElementsByTagName"), 1)
+        .function(doc_by_class, boa_engine::js_string!("getElementsByClassName"), 1)
         .build();
 
     // Add addEventListener/dispatchEvent to document (EventTarget interface).
@@ -7669,6 +7736,8 @@ fn make_element_handle(
                 .map(|(&id, _)| id)
                 .collect();
             drop(bb);
+            // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
+            // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
             let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let pd = |val: JsValue| {
                 boa_engine::property::PropertyDescriptor::builder()
@@ -7699,16 +7768,8 @@ fn make_element_handle(
             });
             let _ = arr.insert_property(boa_engine::js_string!("item"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), item_fn).build())));
-            // Set HTMLCollection.prototype.
-            if let Ok(hc_ctor) = ctx.global_object().get(boa_engine::js_string!("HTMLCollection"), ctx) {
-                if let Some(hc) = hc_ctor.as_object() {
-                    if let Ok(proto_val) = hc.get(boa_engine::js_string!("prototype"), ctx) {
-                        if let Some(proto) = proto_val.as_object() {
-                            let _ = arr.set_prototype(Some(proto));
-                        }
-                    }
-                }
-            }
+            // Note: HTMLCollection.prototype is NOT set on the array because it
+            // breaks Boa's integer-index property lookup. Keep Array.prototype.
             Ok(arr.into())
         },
         Gc::clone(&bridge),
@@ -7745,6 +7806,8 @@ fn make_element_handle(
                 .map(|(&id, _)| id)
                 .collect();
             drop(bb);
+            // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
+            // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
             let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let pd = |val: JsValue| {
                 boa_engine::property::PropertyDescriptor::builder()
