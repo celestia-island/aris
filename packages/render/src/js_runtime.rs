@@ -5848,11 +5848,17 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         Gc::clone(&bridge),
     );
 
+    // querySelectorAll on document — returns empty NodeList (no CSS selector engine for doc-level).
+    let doc_qsa = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        Ok(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())))
+    });
+
     let document = ObjectInitializer::new(ctx)
         .function(get_by_id, boa_engine::js_string!("getElementById"), 1)
         .function(create_el, boa_engine::js_string!("createElement"), 1)
         .function(create_el_ns, boa_engine::js_string!("createElementNS"), 2)
         .function(query_sel, boa_engine::js_string!("querySelector"), 1)
+        .function(doc_qsa, boa_engine::js_string!("querySelectorAll"), 1)
         .function(doc_by_tag, boa_engine::js_string!("getElementsByTagName"), 1)
         .function(doc_by_class, boa_engine::js_string!("getElementsByClassName"), 1)
         .build();
