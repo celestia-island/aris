@@ -3019,6 +3019,16 @@ fn install_dom_globals(ctx: &mut Context) {
                 let _ = obj.insert_property(boa_engine::js_string!(*mname),
                     pd2(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_fn.clone()).build())));
             }
+            // Set TreeWalker.prototype and Symbol.toStringTag.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("TreeWalker"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
