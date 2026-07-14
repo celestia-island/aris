@@ -5691,11 +5691,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 boa_engine::js_string!("length"),
                 pd(JsValue::from(0u32)),
             );
-            let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
+            let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(JsValue::from(attrs_map.clone())));
             // classList — DOMTokenList backed by element's className attribute.
             let class_list = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             // Store reference to parent element.
             let _ = class_list.insert_property(boa_engine::js_string!("_element"), pd(JsValue::from(handle.clone())));
+            // Store reference to attributes NamedNodeMap (avoids Boa prototype bug on lookup).
+            let _ = class_list.insert_property(boa_engine::js_string!("_attrs"), pd(JsValue::from(attrs_map)));
             // contains(token)
             let cl_contains = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let token = arg_string(args, 0);
@@ -5736,8 +5738,32 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
                             if let Some(sa_fn) = sa.as_object() {
                                 if sa_fn.is_callable() {
-                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn.clone()))], ctx);
                                 }
+                            }
+                        }
+                        // Also manually sync attributes for non-HTML elements (Boa bug workaround).
+                        // Use _attrs stored on classList to bypass prototype chain issues.
+                        if let Ok(av) = o.get(boa_engine::js_string!("_attrs"), ctx) {
+                            if let Some(attrs) = av.as_object() {
+                                let alen = attrs.get(boa_engine::js_string!("length"), ctx).ok().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                                let mut fidx: Option<u32> = None;
+                                for i in 0..alen {
+                                    if let Ok(a) = attrs.get(i as u32, ctx) {
+                                        if let Some(ao) = a.as_object() {
+                                            if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                                if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some("class") { fidx = Some(i); break; }
+                                            }
+                                        }
+                                    }
+                                }
+                                let atr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                                let _ = atr.insert_property(boa_engine::js_string!("name"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                let _ = atr.insert_property(boa_engine::js_string!("value"), pd2(JsValue::from(boa_engine::js_string!(new_cn))));
+                                let _ = atr.insert_property(boa_engine::js_string!("namespaceURI"), pd2(JsValue::null()));
+                                let _ = atr.insert_property(boa_engine::js_string!("localName"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                if let Some(idx) = fidx { let _ = attrs.insert_property(idx, pd2(atr.into())); }
+                                else { let _ = attrs.insert_property(alen, pd2(atr.into())); let _ = attrs.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(alen + 1))); }
                             }
                         }
                     }
@@ -5766,8 +5792,32 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
                             if let Some(sa_fn) = sa.as_object() {
                                 if sa_fn.is_callable() {
-                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn.clone()))], ctx);
                                 }
+                            }
+                        }
+                        // Also manually sync attributes for non-HTML elements (Boa bug workaround).
+                        // Use _attrs stored on classList to bypass prototype chain issues.
+                        if let Ok(av) = o.get(boa_engine::js_string!("_attrs"), ctx) {
+                            if let Some(attrs) = av.as_object() {
+                                let alen = attrs.get(boa_engine::js_string!("length"), ctx).ok().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                                let mut fidx: Option<u32> = None;
+                                for i in 0..alen {
+                                    if let Ok(a) = attrs.get(i as u32, ctx) {
+                                        if let Some(ao) = a.as_object() {
+                                            if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                                if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some("class") { fidx = Some(i); break; }
+                                            }
+                                        }
+                                    }
+                                }
+                                let atr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                                let _ = atr.insert_property(boa_engine::js_string!("name"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                let _ = atr.insert_property(boa_engine::js_string!("value"), pd2(JsValue::from(boa_engine::js_string!(new_cn))));
+                                let _ = atr.insert_property(boa_engine::js_string!("namespaceURI"), pd2(JsValue::null()));
+                                let _ = atr.insert_property(boa_engine::js_string!("localName"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                if let Some(idx) = fidx { let _ = attrs.insert_property(idx, pd2(atr.into())); }
+                                else { let _ = attrs.insert_property(alen, pd2(atr.into())); let _ = attrs.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(alen + 1))); }
                             }
                         }
                     }
@@ -5801,8 +5851,32 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                         if let Ok(sa) = el_obj.get(boa_engine::js_string!("setAttribute"), ctx) {
                             if let Some(sa_fn) = sa.as_object() {
                                 if sa_fn.is_callable() {
-                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn))], ctx);
+                                    let _ = sa_fn.call(&JsValue::from(el_obj.clone()), &[JsValue::from(boa_engine::js_string!("class")), JsValue::from(boa_engine::js_string!(new_cn.clone()))], ctx);
                                 }
+                            }
+                        }
+                        // Also manually sync attributes for non-HTML elements (Boa bug workaround).
+                        // Use _attrs stored on classList to bypass prototype chain issues.
+                        if let Ok(av) = o.get(boa_engine::js_string!("_attrs"), ctx) {
+                            if let Some(attrs) = av.as_object() {
+                                let alen = attrs.get(boa_engine::js_string!("length"), ctx).ok().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                                let mut fidx: Option<u32> = None;
+                                for i in 0..alen {
+                                    if let Ok(a) = attrs.get(i as u32, ctx) {
+                                        if let Some(ao) = a.as_object() {
+                                            if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                                if an.as_string().map(|s| s.to_std_string_escaped().to_ascii_lowercase()).as_deref() == Some("class") { fidx = Some(i); break; }
+                                            }
+                                        }
+                                    }
+                                }
+                                let atr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                                let _ = atr.insert_property(boa_engine::js_string!("name"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                let _ = atr.insert_property(boa_engine::js_string!("value"), pd2(JsValue::from(boa_engine::js_string!(new_cn))));
+                                let _ = atr.insert_property(boa_engine::js_string!("namespaceURI"), pd2(JsValue::null()));
+                                let _ = atr.insert_property(boa_engine::js_string!("localName"), pd2(JsValue::from(boa_engine::js_string!("class"))));
+                                if let Some(idx) = fidx { let _ = attrs.insert_property(idx, pd2(atr.into())); }
+                                else { let _ = attrs.insert_property(alen, pd2(atr.into())); let _ = attrs.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(alen + 1))); }
                             }
                         }
                         return Ok(JsValue::from(should_add));
@@ -6074,10 +6148,12 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
             let attrs_map = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+            let attrs_clone = attrs_map.clone();
             let _ = handle.insert_property(boa_engine::js_string!("attributes"), pd(attrs_map.into()));
             // classList — minimal DOMTokenList for createElementNS elements.
             let cl_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ = cl_obj.insert_property(boa_engine::js_string!("_element"), pd(JsValue::from(handle.clone())));
+            let _ = cl_obj.insert_property(boa_engine::js_string!("_attrs"), pd(JsValue::from(attrs_clone)));
             // contains
             let cl_c = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let token = arg_string(args, 0);
