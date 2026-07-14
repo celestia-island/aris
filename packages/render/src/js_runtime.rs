@@ -5642,8 +5642,6 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let class_list = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             // Store reference to parent element.
             let _ = class_list.insert_property(boa_engine::js_string!("_element"), pd(JsValue::from(handle.clone())));
-            // Helper to read current classes from parent element.
-            let _ = class_list.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
             // contains(token)
             let cl_contains = NativeFunction::from_copy_closure(|this, args, ctx| {
                 let token = arg_string(args, 0);
@@ -5785,7 +5783,42 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             });
             let _ = class_list.insert_property(boa_engine::js_string!("replace"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_replace).build())));
-            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(class_list.into()));
+            // length as dynamic getter — counts tokens from element's className.
+            let cl_len_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        return Ok(JsValue::from(cn.split_whitespace().count() as u32));
+                    }
+                }
+                Ok(JsValue::from(0u32))
+            });
+            let cl_len_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_len_get).build();
+            let _ = class_list.insert_property(boa_engine::js_string!("length"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(cl_len_fn).enumerable(true).configurable(true).build());
+            // toString() — returns the element's className string.
+            let cl_ts = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
+                        .and_then(|v| v.as_object());
+                    if let Some(el_obj) = el {
+                        let cn = el_obj.get(boa_engine::js_string!("className"), ctx).ok()
+                            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                            .unwrap_or_default();
+                        return Ok(JsValue::from(boa_engine::js_string!(cn)));
+                    }
+                }
+                Ok(JsValue::from(boa_engine::js_string!("")))
+            });
+            let _ = class_list.insert_property(boa_engine::js_string!("toString"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_ts).build())));
+            // classList is inserted AFTER set_element_prototype to avoid Boa bug
+            // where changing prototype makes own properties inaccessible.
             // Element navigation properties (all null/empty for new elements).
             let _ = handle.insert_property(boa_engine::js_string!("children"),
                 pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
@@ -5807,6 +5840,8 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("isConnected"), pd(JsValue::from(false)));
             // Set the prototype chain so instanceof works.
             set_element_prototype(&handle, &tag, ctx);
+            // classList MUST be after set_element_prototype — Boa bug workaround.
+            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(class_list.into()));
             Ok(handle.into())
         },
         Gc::clone(&bridge),
@@ -6002,7 +6037,50 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 Ok(JsValue::from(false))
             });
             let _ = cl_obj.insert_property(boa_engine::js_string!("toggle"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_t).build())));
-            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(cl_obj.into()));
+            // replace(old, new)
+            let cl_rp = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let old = arg_to_string(args, 0, ctx);
+                let new = arg_to_string(args, 1, ctx);
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        let mut classes: Vec<String> = cn.split_whitespace().map(|s| s.to_string()).collect();
+                        if let Some(idx) = classes.iter().position(|c| c == &old) {
+                            classes[idx] = new;
+                            let nc = classes.join(" ");
+                            let pd2 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                            let _ = el.insert_property(boa_engine::js_string!("className"), pd2(JsValue::from(boa_engine::js_string!(nc))));
+                            return Ok(JsValue::from(true));
+                        }
+                    }
+                }
+                Ok(JsValue::from(false))
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("replace"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_rp).build())));
+            // length as getter — dynamically counts tokens from className.
+            let cl_len = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        return Ok(JsValue::from(cn.split_whitespace().count() as u32));
+                    }
+                }
+                Ok(JsValue::from(0u32))
+            });
+            let cl_len_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_len).build();
+            let _ = cl_obj.insert_property(boa_engine::js_string!("length"),
+                boa_engine::property::PropertyDescriptor::builder().get(cl_len_fn).enumerable(true).configurable(true).build());
+            // toString
+            let cl_ts = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Some(el) = o.get(boa_engine::js_string!("_element"), ctx).ok().and_then(|v| v.as_object()) {
+                        let cn = el.get(boa_engine::js_string!("className"), ctx).ok().and_then(|v| v.as_string().map(|s| s.to_std_string_escaped())).unwrap_or_default();
+                        return Ok(JsValue::from(boa_engine::js_string!(cn)));
+                    }
+                }
+                Ok(JsValue::from(boa_engine::js_string!("")))
+            });
+            let _ = cl_obj.insert_property(boa_engine::js_string!("toString"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_ts).build())));
             set_element_prototype(&handle, local, ctx);
             // For non-HTML namespace, override prototype to Element.prototype (not HTMLxxxElement).
             if !is_html {
@@ -6016,6 +6094,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     }
                 }
             }
+            // classList MUST be added after prototype changes — Boa loses own
+            // properties when the prototype is modified.
+            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(cl_obj.into()));
             Ok(handle.into())
         },
         Gc::clone(&bridge),
