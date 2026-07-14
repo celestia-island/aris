@@ -4115,6 +4115,88 @@ fn install_dom_globals(ctx: &mut Context) {
         }
     }
 
+    // Add iterable methods to NodeList.prototype (values, entries, forEach, Symbol.iterator).
+    if let Some(nl_proto) = get_proto("NodeList", ctx) {
+        let fn_pd = |val: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(val).writable(true).enumerable(true).configurable(true).build()
+        };
+        // item(index) method.
+        let nl_item = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let idx = args.first().and_then(|v| v.as_number()).unwrap_or(-1.0) as i32;
+            if idx < 0 { return Ok(JsValue::null()); }
+            if let Some(o) = this.as_object() {
+                let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                if (idx as u32) < len {
+                    return Ok(o.get(idx as u32, ctx).unwrap_or(JsValue::null()));
+                }
+            }
+            Ok(JsValue::null())
+        });
+        let _ = nl_proto.insert_property(boa_engine::js_string!("item"),
+            fn_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nl_item).build())));
+        // forEach(callback) method.
+        let nl_foreach = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let cb = args.first().cloned().unwrap_or(JsValue::undefined());
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            if let (Some(o), Some(cb_fn)) = (this.as_object(), cb.as_object()) {
+                if cb_fn.is_callable() {
+                    let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        let val = o.get(i, ctx).unwrap_or(JsValue::undefined());
+                        let _ = cb_fn.call(&this_arg, &[val, JsValue::from(i), this.clone()], ctx);
+                    }
+                }
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = nl_proto.insert_property(boa_engine::js_string!("forEach"),
+            fn_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nl_foreach).build())));
+        // values() returns an array of values.
+        let nl_values = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            let arr = JsArray::new(ctx);
+            if let Some(o) = this.as_object() {
+                let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                for i in 0..len {
+                    let val = o.get(i, ctx).unwrap_or(JsValue::undefined());
+                    let _ = arr.push(val, ctx);
+                }
+            }
+            // Make it an iterator.
+            let iter_pd = boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(),
+                    NativeFunction::from_copy_closure(|this, _a, _ctx| Ok(this.clone()))).build()))
+                .writable(true).enumerable(true).configurable(true).build();
+            let _ = arr.insert_property(boa_engine::symbol::JsSymbol::new(Some(boa_engine::JsString::from("Symbol(Symbol.iterator)"))).unwrap(), iter_pd);
+            Ok(arr.into())
+        });
+        let _ = nl_proto.insert_property(boa_engine::js_string!("values"),
+            fn_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nl_values.clone()).build())));
+        let _ = nl_proto.insert_property(boa_engine::js_string!("keys"),
+            fn_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nl_values).build())));
+        // entries() returns array of [key, value] pairs.
+        let nl_entries = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            let arr = JsArray::new(ctx);
+            if let Some(o) = this.as_object() {
+                let len = o.get(boa_engine::js_string!("length"), ctx).ok()
+                    .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                for i in 0..len {
+                    let val = o.get(i, ctx).unwrap_or(JsValue::undefined());
+                    let pair = JsArray::new(ctx);
+                    let _ = pair.push(JsValue::from(i), ctx);
+                    let _ = pair.push(val, ctx);
+                    let _ = arr.push(JsValue::from(pair), ctx);
+                }
+            }
+            Ok(arr.into())
+        });
+        let _ = nl_proto.insert_property(boa_engine::js_string!("entries"),
+            fn_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nl_entries).build())));
+    }
+
     // Link Text.prototype → CharacterData.prototype → Node.prototype
     // Link Comment.prototype → CharacterData.prototype → Node.prototype
     // Link Document.prototype → Node.prototype
@@ -5848,9 +5930,20 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         Gc::clone(&bridge),
     );
 
-    // querySelectorAll on document — returns empty NodeList (no CSS selector engine for doc-level).
+    // querySelectorAll on document — returns empty NodeList with NodeList.prototype.
     let doc_qsa = NativeFunction::from_copy_closure(|_t, _a, ctx| {
-        Ok(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())))
+        let nl = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = nl.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+        // Set NodeList.prototype.
+        if let Ok(nl_ctor) = ctx.global_object().get(boa_engine::js_string!("NodeList"), ctx) {
+            if let Some(nlc) = nl_ctor.as_object() {
+                if let Ok(pv) = nlc.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(p) = pv.as_object() { let _ = nl.set_prototype(Some(p)); }
+                }
+            }
+        }
+        Ok(JsValue::from(nl))
     });
 
     let document = ObjectInitializer::new(ctx)
