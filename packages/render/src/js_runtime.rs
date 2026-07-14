@@ -4071,6 +4071,56 @@ fn install_dom_globals(ctx: &mut Context) {
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), clone_node_proto_fn).build())
                 .writable(true).enumerable(true).configurable(true).build(),
         );
+
+        // Add lookupNamespaceURI, lookupPrefix, isDefaultNamespace to Node.prototype.
+        let lookup_ns_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let _prefix = args.first().map(|v| {
+                if v.is_null() || v.is_undefined() { None }
+                else { v.as_string().map(|s| s.to_std_string_escaped()) }
+            }).flatten();
+            if let Some(o) = this.as_object() {
+                if let Ok(ns) = o.get(boa_engine::js_string!("namespaceURI"), ctx) {
+                    if let Some(ns_s) = ns.as_string() {
+                        let ns_str = ns_s.to_std_string_escaped();
+                        if !ns_str.is_empty() {
+                            // Walk up parentNode chain looking for namespace definition.
+                            let mut current: Option<boa_engine::JsObject> = Some(o.clone());
+                            for _ in 0..1000 {
+                                if let Some(c) = current {
+                                    if let Ok(pn) = c.get(boa_engine::js_string!("parentNode"), ctx) {
+                                        if let Some(p) = pn.as_object() { current = Some(p.clone()); }
+                                        else if pn.is_null() { break; }
+                                        else { current = None; }
+                                    } else { current = None; }
+                                } else { break; }
+                            }
+                            return Ok(JsValue::null());
+                        }
+                    }
+                }
+            }
+            Ok(JsValue::null())
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("lookupNamespaceURI"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lookup_ns_fn.clone()).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+        let lookup_prefix_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("lookupPrefix"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lookup_prefix_fn.clone()).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
+        let is_def_ns_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::from(true)));
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("isDefaultNamespace"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), is_def_ns_fn).build())
+                .writable(true).enumerable(true).configurable(true).build(),
+        );
     }
 
     // Link all HTMLxxxElement.prototype to HTMLElement.prototype
