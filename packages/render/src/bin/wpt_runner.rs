@@ -301,6 +301,7 @@ var __active_ranges = [];
 __active_ranges.push = function(item) { this[this.length] = item; };
 __active_ranges.clear = function() { this.length = 0; };
 
+var __fail_details = [];
 function test(fn, name) {
     __tests++;
     try {
@@ -308,6 +309,7 @@ function test(fn, name) {
         __pass++;
     } catch(e) {
         __fail++;
+        __fail_details.push(name + ": " + e.message);
     }
 }
 
@@ -710,6 +712,20 @@ fn run_single_wpt(html: &str, combined_script: &str) -> (u32, u32, u32) {
         .and_then(|v| v.as_number())
         .map(|n| n as u32)
         .unwrap_or(n_pass + n_fail);
+
+    // Debug: print failure details to stderr if WPT_DEBUG is set.
+    if std::env::var("WPT_DEBUG").is_ok() {
+        if let Ok(details) = rt.ctx_mut().eval(boa_engine::Source::from_bytes(
+            "typeof __fail_details !== 'undefined' && __fail_details ? __fail_details.join('\\n') : ''",
+        )) {
+            if let Some(s) = details.as_string() {
+                let s = s.to_std_string_escaped();
+                if !s.is_empty() {
+                    eprintln!("[WPT_DEBUG] Failures:\n{}", s);
+                }
+            }
+        }
+    }
 
     (n_pass, n_fail, n_total)
 }

@@ -1029,8 +1029,14 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             || key_str.contains("innerHTML") || key_str.contains("outerHTML")
             || key_str.contains("previousSibling") || key_str.contains("nextSibling")
             || key_str.contains("ownerElement")  // Prevent circular reference recursion
+            || key_str.contains("ownerDocument") // Circular: element → document → elements
             || key_str.contains("textContent")   // Accessor property
             || key_str.contains("defaultView")   // Circular: document → window → document
+            || key_str.contains("\"parentNode\"")  // Prevent parent-child cycles
+            || key_str.contains("\"documentElement\"") // Circular: doc → html → doc
+            || key_str.contains("\"body\"")         // Circular: doc → body → doc
+            || key_str.contains("\"head\"")         // Circular: doc → head → doc
+            || key_str.contains("\"doctype\"")      // Circular: doc → doctype → doc
         {
             continue;
         }
@@ -1068,14 +1074,10 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             let _ = clone.insert_property(key, pd(attr_clone));
             continue;
         }
-        // Deep clone objects (like firstChild/lastChild).
-        if deep && val.as_object().is_some() && !val.is_null() {
-            let obj = val.as_object();
-            let child_clone = clone_node_js(obj.as_ref(), true, ctx)?;
-            let _ = clone.insert_property(key, pd(child_clone));
-        } else {
-            let _ = clone.insert_property(key, pd(val));
-        }
+        // For all other values (including objects), just copy by reference.
+        // Deep cloning arbitrary objects risks infinite recursion due to
+        // circular references (ownerDocument, implementation, etc.).
+        let _ = clone.insert_property(key, pd(val));
     }
 
     // Copy methods (functions) that weren't copied above — re-add standard
@@ -2063,9 +2065,24 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = dt.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name))));
             let _ = dt.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(public_id))));
             let _ = dt.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(system_id))));
-            let _ = dt.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+            // nodeValue and textContent for DocumentType: always null (setter is no-op).
+            let null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+            let noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+            let ng_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_get).build();
+            let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_set).build();
+            let _ = dt.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(ng_fn.clone()).set(ns_fn.clone())
+                    .enumerable(true).configurable(true).build(),
+            );
             let _ = dt.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32)));
-            let _ = dt.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+            let _ = dt.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(ng_fn).set(ns_fn)
+                    .enumerable(true).configurable(true).build(),
+            );
             let _ = dt.insert_property(boa_engine::js_string!("ownerDocument"), pd(JsValue::from(doc_ref.clone())));
             Ok(dt.into())
         }, doc_ref);
@@ -2157,7 +2174,116 @@ fn install_dom_globals(ctx: &mut Context) {
             let pd2 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
             let _ = df.insert_property(boa_engine::js_string!("nodeType"), pd2(JsValue::from(11u32)));
             let _ = df.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document-fragment"))));
-            let _ = df.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
+            // nodeValue: always null (setter is no-op per spec).
+            let null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+            let noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+            let ng_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_get).build();
+            let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_set).build();
+            let _ = df.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(ng_fn.clone()).set(ns_fn.clone())
+                    .enumerable(true).configurable(true).build(),
+            );
+            // Initialize _children for textContent setter support.
+            let _ = df.insert_property(boa_engine::js_string!("_children"), pd2(JsArray::new(ctx).into()));
+            // textContent accessor: getter concatenates children text, setter replaces children.
+            let df_tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(&o, ctx, 0))));
+                }
+                Ok(JsValue::from(boa_engine::js_string!("")))
+            });
+            let df_tc_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let val = args.first().map(|v| v.clone()).unwrap_or(JsValue::null());
+                    let s = if val.is_null() {
+                        String::new()
+                    } else {
+                        val.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default()
+                    };
+                    let pd3 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                    if s.is_empty() {
+                        let empty_arr = JsArray::new(ctx);
+                        let _ = o.insert_property(boa_engine::js_string!("_children"), pd3(empty_arr.into()));
+                    } else {
+                        let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = text_node.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(3u32)));
+                        let _ = text_node.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = text_node.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = text_node.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = text_node.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(s))));
+                        let _ = text_node.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#text"))));
+                        let _ = text_node.insert_property(boa_engine::js_string!("parentNode"), pd3(JsValue::from(o.clone())));
+                        if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                            if let Some(tc) = text_ctor.as_object() {
+                                if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                                    if let Some(proto) = proto_val.as_object() {
+                                        let _ = text_node.set_prototype(Some(proto));
+                                    }
+                                }
+                            }
+                        }
+                        let new_arr = JsArray::new(ctx);
+                        let _ = new_arr.push(JsValue::from(text_node), ctx);
+                        let _ = o.insert_property(boa_engine::js_string!("_children"), pd3(new_arr.into()));
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
+            let df_tg = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_tc_get).build();
+            let df_ts = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_tc_set).build();
+            let _ = df.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(df_tg).set(df_ts)
+                    .enumerable(true).configurable(true).build(),
+            );
+            // firstChild/lastChild/childNodes as accessors on _children.
+            let fc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() { return Ok(JsValue::null()); }
+                            return Ok(v);
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let cn_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if cv.is_object() { return Ok(cv); }
+                    }
+                }
+                Ok(JsValue::from(JsArray::new(ctx)))
+            });
+            let fc_fn2 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
+            let cn_fn2 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+            let _ = df.insert_property(
+                boa_engine::js_string!("firstChild"),
+                boa_engine::property::PropertyDescriptor::builder().get(fc_fn2.clone()).enumerable(true).configurable(true).build(),
+            );
+            let _ = df.insert_property(
+                boa_engine::js_string!("lastChild"),
+                boa_engine::property::PropertyDescriptor::builder().get(fc_fn2).enumerable(true).configurable(true).build(),
+            );
+            let _ = df.insert_property(
+                boa_engine::js_string!("childNodes"),
+                boa_engine::property::PropertyDescriptor::builder().get(cn_fn2).enumerable(true).configurable(true).build(),
+            );
+            // Set DocumentFragment.prototype.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("DocumentFragment"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = df.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             add_dom_methods(&df, ctx);
             Ok(df.into())
         });
@@ -2247,9 +2373,24 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = d.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(name.clone()))));
         let _ = d.insert_property(boa_engine::js_string!("publicId"), pd(JsValue::from(boa_engine::js_string!(public_id))));
         let _ = d.insert_property(boa_engine::js_string!("systemId"), pd(JsValue::from(boa_engine::js_string!(system_id))));
-        let _ = d.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+        // nodeValue and textContent for DocumentType: always null (setter is no-op).
+        let null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+        let noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let ng_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_get).build();
+        let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_set).build();
+        let _ = d.insert_property(
+            boa_engine::js_string!("nodeValue"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(ng_fn.clone()).set(ns_fn.clone())
+                .enumerable(true).configurable(true).build(),
+        );
         let _ = d.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(10u32))); // DOCUMENT_TYPE_NODE
-        let _ = d.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::null()));
+        let _ = d.insert_property(
+            boa_engine::js_string!("textContent"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(ng_fn).set(ns_fn)
+                .enumerable(true).configurable(true).build(),
+        );
         // ownerDocument = the current document.
         let doc_val = ctx.global_object().get(boa_engine::js_string!("document"), ctx).unwrap_or(JsValue::null());
         let _ = d.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
@@ -2275,7 +2416,7 @@ fn install_dom_globals(ctx: &mut Context) {
 
         // document.createTextNode
         let create_text = NativeFunction::from_copy_closure(|_t, args, ctx| {
-            let text = arg_string(args, 0);
+            let text = arg_to_string(args, 0, ctx);
             let text_len = text.encode_utf16().count() as u32;
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ =
@@ -2440,6 +2581,35 @@ fn install_dom_globals(ctx: &mut Context) {
                     .configurable(true)
                     .build(),
             );
+            // textContent as accessor (same get/set as data/nodeValue).
+            let tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let tc_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let tcg_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_get).build();
+            let tcs_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(tcg_fn)
+                    .set(tcs_fn)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
             // Set prototype to Text.prototype → CharacterData.prototype → Node.prototype
             // so Node constants are inherited.
             if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
@@ -2451,6 +2621,21 @@ fn install_dom_globals(ctx: &mut Context) {
                     }
                 }
             }
+            // ownerDocument — the global document object.
+            if let Ok(doc_val) = ctx.global_object().get(boa_engine::js_string!("document"), ctx) {
+                let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
+            }
+            // Text nodes have no children.
+            let empty_arr = JsArray::new(ctx);
+            let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(empty_arr.into()));
+            let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let has_child_nodes = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::from(false)));
+            let _ = obj.insert_property(
+                boa_engine::js_string!("hasChildNodes"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), has_child_nodes).build())),
+            );
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2462,7 +2647,7 @@ fn install_dom_globals(ctx: &mut Context) {
 
         // document.createComment
         let create_comment = NativeFunction::from_copy_closure(|_t, args, ctx| {
-            let text = arg_string(args, 0);
+            let text = arg_to_string(args, 0, ctx);
             let text_len = text.encode_utf16().count() as u32;
             let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let _ =
@@ -2518,6 +2703,13 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(
                 boa_engine::js_string!("nodeValue"),
                 boa_engine::property::PropertyDescriptor::builder()
+                    .get(cd_get_fn.clone()).set(cd_set_fn.clone())
+                    .enumerable(true).configurable(true).build(),
+            );
+            // textContent as accessor (same get/set as data/nodeValue).
+            let _ = obj.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
                     .get(cd_get_fn).set(cd_set_fn)
                     .enumerable(true).configurable(true).build(),
             );
@@ -2543,6 +2735,21 @@ fn install_dom_globals(ctx: &mut Context) {
                     }
                 }
             }
+            // ownerDocument — the global document object.
+            if let Ok(doc_val) = ctx.global_object().get(boa_engine::js_string!("document"), ctx) {
+                let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
+            }
+            // Comment nodes have no children.
+            let empty_arr2 = JsArray::new(ctx);
+            let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(empty_arr2.into()));
+            let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
+            let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let has_child_nodes2 = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::from(false)));
+            let _ = obj.insert_property(
+                boa_engine::js_string!("hasChildNodes"),
+                pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), has_child_nodes2).build())),
+            );
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2561,8 +2768,111 @@ fn install_dom_globals(ctx: &mut Context) {
                 boa_engine::js_string!("nodeName"),
                 pd(JsValue::from(boa_engine::js_string!("#document-fragment"))),
             );
-            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
-            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
+            // nodeValue: always null (setter is no-op per spec).
+            let null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+            let noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+            let ng_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), null_get).build();
+            let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("nodeValue"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(ng_fn.clone()).set(ns_fn.clone())
+                    .enumerable(true).configurable(true).build(),
+            );
+            // Initialize _children for textContent/firstChild/childNodes support.
+            let _ = obj.insert_property(boa_engine::js_string!("_children"), pd(JsArray::new(ctx).into()));
+            // textContent accessor.
+            let df_tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(&o, ctx, 0))));
+                }
+                Ok(JsValue::from(boa_engine::js_string!("")))
+            });
+            let df_tc_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                if let Some(o) = this.as_object() {
+                    let val = args.first().map(|v| v.clone()).unwrap_or(JsValue::null());
+                    let s = if val.is_null() { String::new() }
+                    else { val.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default() };
+                    let pd3 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+                    if s.is_empty() {
+                        let empty_arr = JsArray::new(ctx);
+                        let _ = o.insert_property(boa_engine::js_string!("_children"), pd3(empty_arr.into()));
+                    } else {
+                        let tn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = tn.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(3u32)));
+                        let _ = tn.insert_property(boa_engine::js_string!("_data"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = tn.insert_property(boa_engine::js_string!("data"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = tn.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::from(boa_engine::js_string!(s.clone()))));
+                        let _ = tn.insert_property(boa_engine::js_string!("textContent"), pd3(JsValue::from(boa_engine::js_string!(s))));
+                        let _ = tn.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!("#text"))));
+                        let _ = tn.insert_property(boa_engine::js_string!("parentNode"), pd3(JsValue::from(o.clone())));
+                        if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                            if let Some(tc) = text_ctor.as_object() {
+                                if let Ok(pv) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                                    if let Some(p) = pv.as_object() { let _ = tn.set_prototype(Some(p)); }
+                                }
+                            }
+                        }
+                        let new_arr = JsArray::new(ctx);
+                        let _ = new_arr.push(JsValue::from(tn), ctx);
+                        let _ = o.insert_property(boa_engine::js_string!("_children"), pd3(new_arr.into()));
+                    }
+                }
+                Ok(JsValue::undefined())
+            });
+            let df_tg = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_tc_get).build();
+            let df_ts = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), df_tc_set).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("textContent"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(df_tg).set(df_ts).enumerable(true).configurable(true).build(),
+            );
+            // firstChild/lastChild/childNodes accessors.
+            let fc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() { return Ok(JsValue::null()); }
+                            return Ok(v);
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let cn_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if cv.is_object() { return Ok(cv); }
+                    }
+                }
+                Ok(JsValue::from(JsArray::new(ctx)))
+            });
+            let fc_fn3 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
+            let cn_fn3 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+            let _ = obj.insert_property(
+                boa_engine::js_string!("firstChild"),
+                boa_engine::property::PropertyDescriptor::builder().get(fc_fn3.clone()).enumerable(true).configurable(true).build(),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("lastChild"),
+                boa_engine::property::PropertyDescriptor::builder().get(fc_fn3).enumerable(true).configurable(true).build(),
+            );
+            let _ = obj.insert_property(
+                boa_engine::js_string!("childNodes"),
+                boa_engine::property::PropertyDescriptor::builder().get(cn_fn3).enumerable(true).configurable(true).build(),
+            );
+            // Set DocumentFragment.prototype.
+            if let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("DocumentFragment"), ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
+            add_dom_methods(&obj, ctx);
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2580,11 +2890,35 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(7u32))); // PROCESSING_INSTRUCTION_NODE
             let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!(target.clone()))));
             let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::from(boa_engine::js_string!(target))));
-            // data and nodeValue are the same for PI.
-            let _ = obj.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(data.clone()))));
-            let _ = obj.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(data.clone()))));
-            let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(data))));
-            let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(""))));
+            // data and nodeValue are the same for PI. Use accessors that read/write _data.
+            let _ = obj.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(data))));
+            let pi_data_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                let units = read_data_utf16(&this, ctx);
+                Ok(JsValue::from(boa_engine::JsString::from(&units[..])))
+            });
+            let pi_data_set = NativeFunction::from_copy_closure(|this, args, ctx| {
+                let val = match args.first() {
+                    Some(v) if v.is_null() => String::new(),
+                    Some(v) => match v.to_string(ctx) {
+                        Ok(s) => s.to_std_string_escaped(),
+                        Err(_) => String::new(),
+                    },
+                    None => String::new(),
+                };
+                let units: Vec<u16> = val.encode_utf16().collect();
+                write_data_utf16(&this, &units, ctx);
+                Ok(JsValue::undefined())
+            });
+            let pi_dg = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pi_data_get).build();
+            let pi_ds = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pi_data_set).build();
+            for prop_name in &["data", "nodeValue", "textContent"] {
+                let _ = obj.insert_property(
+                    boa_engine::js_string!(*prop_name),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .get(pi_dg.clone()).set(pi_ds.clone())
+                        .enumerable(true).configurable(true).build(),
+                );
+            }
             // Add CharacterData methods.
             for (mname, mfn) in build_character_data_methods() {
                 let _ = obj.insert_property(
@@ -2865,6 +3199,35 @@ fn install_dom_globals(ctx: &mut Context) {
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn.clone()).build())));
             let _ = obj.insert_property(boa_engine::js_string!("stopImmediatePropagation"),
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn).build())));
+            // For CustomEvent: add detail property and initCustomEvent method.
+            if iface_name == "CustomEvent" {
+                let _ = obj.insert_property(boa_engine::js_string!("detail"), pd(JsValue::null()));
+                let ice_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+                    // First parameter (type) is mandatory.
+                    if args.is_empty() || args.first().map(|v| v.is_undefined()).unwrap_or(true) {
+                        return Err(boa_engine::JsNativeError::typ()
+                            .with_message("initCustomEvent requires at least 1 argument")
+                            .into());
+                    }
+                    if let Some(o) = this.as_object() {
+                        let pd2 = |val: JsValue| {
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(val).writable(true).enumerable(true).configurable(true).build()
+                        };
+                        let t = arg_string(args, 0);
+                        let b = args.get(1).and_then(|v| v.as_boolean()).unwrap_or(false);
+                        let c = args.get(2).and_then(|v| v.as_boolean()).unwrap_or(false);
+                        let detail = args.get(3).cloned().unwrap_or(JsValue::null());
+                        let _ = o.insert_property(boa_engine::js_string!("type"), pd2(JsValue::from(boa_engine::js_string!(t))));
+                        let _ = o.insert_property(boa_engine::js_string!("bubbles"), pd2(JsValue::from(b)));
+                        let _ = o.insert_property(boa_engine::js_string!("cancelable"), pd2(JsValue::from(c)));
+                        let _ = o.insert_property(boa_engine::js_string!("detail"), pd2(detail));
+                    }
+                    Ok(JsValue::undefined())
+                });
+                let _ = obj.insert_property(boa_engine::js_string!("initCustomEvent"),
+                    pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ice_fn).build())));
+            }
             Ok(obj.into())
         });
         let _ = doc_obj.insert_property(
@@ -2882,6 +3245,24 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("documentElement"),
             pd(JsValue::null()),
+        );
+        // Document.textContent is always null (getter returns null, setter is no-op).
+        let tc_null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+        let tc_noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let tc_ng = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_null_get).build();
+        let tc_ns = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_noop_set).build();
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("textContent"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(tc_ng.clone()).set(tc_ns.clone())
+                .enumerable(true).configurable(true).build(),
+        );
+        // Document.nodeValue is always null (setter is no-op).
+        let _ = doc_obj.insert_property(
+            boa_engine::js_string!("nodeValue"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(tc_ng).set(tc_ns)
+                .enumerable(true).configurable(true).build(),
         );
         let _ = doc_obj.insert_property(boa_engine::js_string!("body"), pd(JsValue::null()));
         let _ = doc_obj.insert_property(boa_engine::js_string!("head"), pd(JsValue::null()));
@@ -2952,13 +3333,22 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::js_string!("nodeType"),
             pd(JsValue::from(10u32)),
         );
+        // nodeValue and textContent for DocumentType: always null (setter is no-op).
+        let dt_null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+        let dt_noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let dt_ng = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), dt_null_get).build();
+        let dt_ns = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), dt_noop_set).build();
         let _ = doctype_obj.insert_property(
             boa_engine::js_string!("textContent"),
-            pd(JsValue::null()),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(dt_ng.clone()).set(dt_ns.clone())
+                .enumerable(true).configurable(true).build(),
         );
         let _ = doctype_obj.insert_property(
             boa_engine::js_string!("nodeValue"),
-            pd(JsValue::null()),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(dt_ng).set(dt_ns)
+                .enumerable(true).configurable(true).build(),
         );
         let _ = doc_obj.insert_property(
             boa_engine::js_string!("doctype"),
@@ -3098,9 +3488,22 @@ fn install_dom_globals(ctx: &mut Context) {
     ];
     for (name, nt) in all_types {
         let nt = nt.clone();
-        let ctor_fn = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let name_for_proto = name.to_string();
+        let ctor_fn = NativeFunction::from_copy_closure_with_captures(move |this, _a, name_for_proto, ctx| {
             // Use `this` from Boa's OrdinaryCallConstruct (has correct prototype).
             let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+            // Explicitly set prototype to ConstructorName.prototype so instanceof works.
+            // Boa's OrdinaryCallConstruct may not set the prototype correctly for native closures.
+            let global = ctx.global_object();
+            if let Ok(ctor_val) = global.get(boa_engine::JsString::from(name_for_proto.as_str()), &mut *ctx) {
+                if let Some(ctor_obj) = ctor_val.as_object() {
+                    if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), &mut *ctx) {
+                        if let Some(proto) = proto_val.as_object() {
+                            let _ = obj.set_prototype(Some(proto));
+                        }
+                    }
+                }
+            }
             let _ = obj.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(nt)));
             // For Document constructor, add document-level methods.
             if name == "Document" {
@@ -3108,29 +3511,40 @@ fn install_dom_globals(ctx: &mut Context) {
                 let _ = obj.insert_property(boa_engine::js_string!("nodeName"), pd2(JsValue::from(boa_engine::js_string!("#document"))));
                 let _ = obj.insert_property(boa_engine::js_string!("nodeValue"), pd2(JsValue::null()));
                 let _ = obj.insert_property(boa_engine::js_string!("textContent"), pd2(JsValue::null()));
-                let _ = obj.insert_property(boa_engine::js_string!("contentType"), pd2(JsValue::from(boa_engine::js_string!("text/html"))));
+                let _ = obj.insert_property(boa_engine::js_string!("contentType"), pd2(JsValue::from(boa_engine::js_string!("application/xml"))));
                 let _ = obj.insert_property(boa_engine::js_string!("URL"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
                 let _ = obj.insert_property(boa_engine::js_string!("documentURI"), pd2(JsValue::from(boa_engine::js_string!("about:blank"))));
                 let _ = obj.insert_property(boa_engine::js_string!("compatMode"), pd2(JsValue::from(boa_engine::js_string!("CSS1Compat"))));
                 let _ = obj.insert_property(boa_engine::js_string!("characterSet"), pd2(JsValue::from(boa_engine::js_string!("UTF-8"))));
+                let _ = obj.insert_property(boa_engine::js_string!("charset"), pd2(JsValue::from(boa_engine::js_string!("UTF-8"))));
+                let _ = obj.insert_property(boa_engine::js_string!("inputEncoding"), pd2(JsValue::from(boa_engine::js_string!("UTF-8"))));
                 let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd2(JsValue::null()));
                 let _ = obj.insert_property(boa_engine::js_string!("defaultView"), pd2(ctx.global_object().into()));
-                // createElement
+                // createElement — new Document() is XML, so no ASCII lowercasing, constructor is Element
                 let doc_ref = obj.clone();
                 let ce_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args, doc_ref, ctx| {
                     let tag = arg_to_string(args, 0, ctx);
-                    let upper: String = tag.chars().map(|c| if c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c }).collect();
-                    let lower: String = tag.chars().map(|c| if c.is_ascii_uppercase() { c.to_ascii_lowercase() } else { c }).collect();
                     let el = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                     let pd3 = |val: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(val).writable(true).enumerable(true).configurable(true).build() };
-                    let upper_clone = upper.clone();
-                    let _ = el.insert_property(boa_engine::js_string!("tagName"), pd3(JsValue::from(boa_engine::js_string!(upper))));
-                    let _ = el.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!(upper_clone))));
+                    let _ = el.insert_property(boa_engine::js_string!("tagName"), pd3(JsValue::from(boa_engine::js_string!(tag.clone()))));
+                    let _ = el.insert_property(boa_engine::js_string!("nodeName"), pd3(JsValue::from(boa_engine::js_string!(tag.clone()))));
+                    let _ = el.insert_property(boa_engine::js_string!("localName"), pd3(JsValue::from(boa_engine::js_string!(tag.clone()))));
                     let _ = el.insert_property(boa_engine::js_string!("nodeType"), pd3(JsValue::from(1u32)));
                     let _ = el.insert_property(boa_engine::js_string!("nodeValue"), pd3(JsValue::null()));
                     let _ = el.insert_property(boa_engine::js_string!("ownerDocument"), pd3(JsValue::from(doc_ref.clone())));
-                    let _ = el.insert_property(boa_engine::js_string!("namespaceURI"), pd3(JsValue::from(boa_engine::js_string!("http://www.w3.org/1999/xhtml"))));
+                    let _ = el.insert_property(boa_engine::js_string!("namespaceURI"), pd3(JsValue::null()));
                     let _ = el.insert_property(boa_engine::js_string!("prefix"), pd3(JsValue::null()));
+                    // Set prototype to Element.prototype so constructor === Element
+                    let global = ctx.global_object();
+                    if let Ok(elem_ctor_val) = global.get(boa_engine::js_string!("Element"), &mut *ctx) {
+                        if let Some(elem_ctor) = elem_ctor_val.as_object() {
+                            if let Ok(elem_proto_val) = elem_ctor.get(boa_engine::js_string!("prototype"), &mut *ctx) {
+                                if let Some(elem_proto) = elem_proto_val.as_object() {
+                                    let _ = el.set_prototype(Some(elem_proto));
+                                }
+                            }
+                        }
+                    }
                     add_dom_methods(&el, ctx);
                     Ok(el.into())
                 }, doc_ref);
@@ -3210,7 +3624,7 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(boa_engine::js_string!("head"), pd_doc(JsValue::null()));
             let _ = obj.insert_property(boa_engine::js_string!("body"), pd_doc(JsValue::null()));
             Ok(obj.into())
-        });
+        }, name_for_proto);
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
         // Use the .prototype already created by register_global_callable.
@@ -4472,10 +4886,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 boa_engine::js_string!("nodeType"),
                 pd(JsValue::from(1u32)),
             );
-            let _ = handle.insert_property(
-                boa_engine::js_string!("nodeValue"),
-                pd(JsValue::null()),
-            );
+            // nodeValue is set as an accessor (always null) by make_element_handle.
             // textContent is set as an accessor by make_element_handle.
             let _ = handle.insert_property(
                 boa_engine::js_string!("ownerDocument"),
@@ -4673,7 +5084,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let _ = handle.insert_property(boa_engine::js_string!("prefix"),
                 pd(if prefix.is_empty() { JsValue::null() } else { JsValue::from(boa_engine::js_string!(prefix.to_string())) }));
             let _ = handle.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(1u32)));
-            let _ = handle.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::null()));
+            // nodeValue is set as an accessor (always null) by make_element_handle.
             // textContent is set as an accessor by make_element_handle.
             let _ = handle.insert_property(boa_engine::js_string!("id"), pd(JsValue::from(boa_engine::js_string!(""))));
             let _ = handle.insert_property(boa_engine::js_string!("className"), pd(JsValue::from(boa_engine::js_string!(""))));
@@ -6828,30 +7239,51 @@ fn make_element_handle(
             } else {
                 val.to_string(ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default()
             };
-            // Replace all children with a single text node.
             let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
-            // Create new _children with single text node (with Text.prototype).
-            let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = text_node.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
-            let _ = text_node.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
-            let _ = text_node.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
-            let _ = text_node.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
-            let _ = text_node.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(s))));
-            let _ = text_node.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
-            let _ = text_node.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(o.clone())));
-            // Set Text.prototype so instanceof Text works.
-            if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
-                if let Some(tc) = text_ctor.as_object() {
-                    if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
-                        if let Some(proto) = proto_val.as_object() {
-                            let _ = text_node.set_prototype(Some(proto));
+            // Clear parentNode on all existing children.
+            if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                if let Some(ca) = cv.as_object() {
+                    let ca = ca.clone();
+                    let len = ca.get(boa_engine::js_string!("length"), ctx).ok()
+                        .and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                    for i in 0..len {
+                        if let Ok(child) = ca.get(i as u32, ctx) {
+                            if let Some(co) = child.as_object() {
+                                let co = co.clone();
+                                let _ = co.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+                            }
                         }
                     }
                 }
             }
-            let new_arr = JsArray::new(ctx);
-            let _ = new_arr.push(JsValue::from(text_node), ctx);
-            let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+            if s.is_empty() {
+                // Empty string → no children.
+                let empty_arr = JsArray::new(ctx);
+                let _ = o.insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
+            } else {
+                // Replace all children with a single text node.
+                let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let _ = text_node.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+                let _ = text_node.insert_property(boa_engine::js_string!("_data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+                let _ = text_node.insert_property(boa_engine::js_string!("data"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+                let _ = text_node.insert_property(boa_engine::js_string!("nodeValue"), pd(JsValue::from(boa_engine::js_string!(s.clone()))));
+                let _ = text_node.insert_property(boa_engine::js_string!("textContent"), pd(JsValue::from(boa_engine::js_string!(s))));
+                let _ = text_node.insert_property(boa_engine::js_string!("nodeName"), pd(JsValue::from(boa_engine::js_string!("#text"))));
+                let _ = text_node.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::from(o.clone())));
+                // Set Text.prototype so instanceof Text works.
+                if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+                    if let Some(tc) = text_ctor.as_object() {
+                        if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                            if let Some(proto) = proto_val.as_object() {
+                                let _ = text_node.set_prototype(Some(proto));
+                            }
+                        }
+                    }
+                }
+                let new_arr = JsArray::new(ctx);
+                let _ = new_arr.push(JsValue::from(text_node), ctx);
+                let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+            }
         }
         Ok(JsValue::undefined())
     });
@@ -6872,7 +7304,9 @@ fn make_element_handle(
         if let Some(o) = this.as_object() {
             if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
                 if let Some(ca) = cv.as_object() {
-                    return Ok(ca.get(0u32, ctx).unwrap_or(JsValue::null()));
+                    let v = ca.get(0u32, ctx).unwrap_or(JsValue::null());
+                    if v.is_undefined() { return Ok(JsValue::null()); }
+                    return Ok(v);
                 }
             }
         }
@@ -6904,6 +7338,37 @@ fn make_element_handle(
                 .build(),
         );
     }
+    // nodeValue for elements: always null (getter returns null, setter is no-op per spec).
+    let nv_null_get = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::null()));
+    let nv_noop_set = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+    let nv_ng = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_null_get).build();
+    let nv_ns = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nv_noop_set).build();
+    let _ = obj.insert_property(
+        boa_engine::js_string!("nodeValue"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .get(nv_ng).set(nv_ns)
+            .enumerable(true).configurable(true).build(),
+    );
+    // childNodes as accessor: returns _children array (or empty array).
+    let cn_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object() {
+            if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                if cv.is_object() {
+                    return Ok(cv);
+                }
+            }
+        }
+        Ok(JsValue::from(JsArray::new(ctx)))
+    });
+    let cn_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+    let _ = obj.insert_property(
+        boa_engine::js_string!("childNodes"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .get(cn_fn)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
 
     // previousSibling/nextSibling as accessors: find this in parent's _children.
     let ps_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
