@@ -67,7 +67,10 @@ default-features = false
 # `aris-resource-handle` package (kei-compatible Arc<Vec<T>> backing).
 # The lib name is preserved as `linebender_resource_handle`, so internal
 # `use linebender_resource_handle::...` paths in src/ keep working unchanged.
-aris-resource-handle = { path = "../resource-handle", version = "0.1.1", default-features = false }
+[dependencies.aris-resource-handle]
+path = "../resource-handle"
+version = "0.1.1"
+default-features = false
 
 [dependencies.memmap2]
 version = "0.9.10"

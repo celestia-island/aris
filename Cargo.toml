@@ -93,14 +93,12 @@ strip = "debuginfo"
 [profile.bench]
 debug = 0
 
-# Patch skrifa, linebender_resource_handle, and fontique for kei compatibility.
-# linebender_resource_handle: replace Arc<dyn> with Arc<Vec> to avoid vtable NULL.
-# fontique: use Blob::from_vec in source_cache to avoid vtable dispatch.
+# skrifa / linebender_resource_handle / fontique are NOT patched here — they
+# live as aris-internal forks under packages/{skrifa,resource-handle,fontique},
+# pulled in as ordinary workspace members. (Their [lib] name keeps the
+# upstream crate name so blitz-dom / anyrender / kurbo see no source change.)
 # Patch boa_engine/parser/gc 0.21.1 to relax icu pins (~2.0 → ^2.0).
 [patch.crates-io]
-skrifa = { path = "../patches/skrifa" }
-linebender_resource_handle = { path = "../patches/linebender-resource-handle" }
-fontique = { path = "../patches/fontique" }
 boa_engine = { path = "patches/boa_engine" }
 boa_parser = { path = "patches/boa_parser" }
 boa_gc = { path = "patches/boa_gc" }

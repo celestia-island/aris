@@ -73,7 +73,7 @@ default = ["desktop", "render"]
 # Use: cargo build --no-default-features --features fbdev
 fbdev = []
 # HTML rendering engine (Blitz DOM + Vello CPU + parley fonts).
-render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley", "dep:keyboard-types", "dep:png"]
+render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:aris-resource-handle", "dep:aris-parley", "dep:keyboard-types", "dep:png"]
 # Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
 desktop = ["blitz-dom/system_fonts", "blitz-dom/svg"]
