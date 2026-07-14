@@ -5924,7 +5924,27 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             // Set the prototype chain so instanceof works.
             set_element_prototype(&handle, &tag, ctx);
             // classList MUST be after set_element_prototype — Boa bug workaround.
-            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(class_list.into()));
+            // Store in _classListCache so the getter can access it (read-only per spec).
+            let _ = handle.insert_property(boa_engine::js_string!("_classListCache"), pd(class_list.into()));
+            // classList as read-only getter — setter is no-op per spec.
+            let cl_getter = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cl) = o.get(boa_engine::js_string!("_classListCache"), ctx) {
+                        if !cl.is_null() && !cl.is_undefined() { return Ok(cl); }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let cl_noop = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+            let cl_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_getter).build();
+            let cl_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_noop).build();
+            let _ = handle.insert_property(
+                boa_engine::js_string!("classList"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(cl_get_fn).set(cl_set_fn)
+                    .enumerable(true).configurable(true)
+                    .build(),
+            );
             Ok(handle.into())
         },
         Gc::clone(&bridge),
@@ -6203,7 +6223,26 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             }
             // classList MUST be added after prototype changes — Boa loses own
             // properties when the prototype is modified.
-            let _ = handle.insert_property(boa_engine::js_string!("classList"), pd(cl_obj.into()));
+            // Store in internal cache for read-only getter.
+            let _ = handle.insert_property(boa_engine::js_string!("_classListCache"), pd(cl_obj.into()));
+            let cl_getter2 = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cl) = o.get(boa_engine::js_string!("_classListCache"), ctx) {
+                        if !cl.is_null() && !cl.is_undefined() { return Ok(cl); }
+                    }
+                }
+                Ok(JsValue::null())
+            });
+            let cl_noop2 = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+            let cl_get_fn2 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_getter2).build();
+            let cl_set_fn2 = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_noop2).build();
+            let _ = handle.insert_property(
+                boa_engine::js_string!("classList"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .get(cl_get_fn2).set(cl_set_fn2)
+                    .enumerable(true).configurable(true)
+                    .build(),
+            );
             Ok(handle.into())
         },
         Gc::clone(&bridge),
