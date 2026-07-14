@@ -4308,7 +4308,28 @@ fn install_dom_globals(ctx: &mut Context) {
     }
     // DragEvent (caniuse 97%+)
     if let Some(proto) = get_proto("DragEvent", ctx) {
-        let _ = proto.insert_property(boa_engine::js_string!("dataTransfer"), ev_null);
+        let _ = proto.insert_property(boa_engine::js_string!("dataTransfer"), ev_null.clone());
+    }
+    // InputEvent (caniuse 97%+) — Chromium non-standard
+    if let Some(proto) = get_proto("InputEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("data"), ev_null.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("dataTransfer"), ev_null.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("inputType"), ev_empty.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("isComposing"), ev_false);
+    }
+    // TouchEvent (caniuse 98%+) — touch support
+    if let Some(proto) = get_proto("TouchEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("touches"), ev_pd(JsValue::from(JsArray::new(ctx))));
+        let _ = proto.insert_property(boa_engine::js_string!("targetTouches"), ev_pd(JsValue::from(JsArray::new(ctx))));
+        let _ = proto.insert_property(boa_engine::js_string!("changedTouches"), ev_pd(JsValue::from(JsArray::new(ctx))));
+        let _ = proto.insert_property(boa_engine::js_string!("ctrlKey"), ev_pd(JsValue::from(false)));
+        let _ = proto.insert_property(boa_engine::js_string!("shiftKey"), ev_pd(JsValue::from(false)));
+        let _ = proto.insert_property(boa_engine::js_string!("altKey"), ev_pd(JsValue::from(false)));
+        let _ = proto.insert_property(boa_engine::js_string!("metaKey"), ev_pd(JsValue::from(false)));
+    }
+    // CompositionEvent (caniuse 97%+)
+    if let Some(proto) = get_proto("CompositionEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("data"), ev_pd(JsValue::from(boa_engine::js_string!(""))));
     }
 
     // Add iterable methods to NodeList.prototype (values, entries, forEach, Symbol.iterator).
