@@ -7208,7 +7208,18 @@ fn make_element_handle(
             }
         } else if name == "class" {
             if let Some(o) = &obj {
-                // Only return className if the class attribute exists in the NamedNodeMap.
+                // Always check className first — the NamedNodeMap may be stale
+                // for non-HTML elements (Boa prototype change bug).
+                let cn = o.get(boa_engine::js_string!("className"), ctx)
+                    .unwrap_or(JsValue::null());
+                if let Some(cn_s) = cn.as_string() {
+                    let s = cn_s.to_std_string_escaped();
+                    if !s.is_empty() {
+                        return Ok(JsValue::from(boa_engine::js_string!(s)));
+                    }
+                }
+                // className is empty — check NamedNodeMap to distinguish
+                // "class was removed" (return null) from edge cases.
                 if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
                     if let Some(attrs) = attrs_val.as_object() {
                         let len = attrs.get(boa_engine::js_string!("length"), ctx).ok()
