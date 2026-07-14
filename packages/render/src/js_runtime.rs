@@ -1257,7 +1257,7 @@ fn install_window(ctx: &mut Context, url: String) {
     );
     // window, self, globalThis all point to the global object itself.
     let self_ref = JsValue::from(global.clone());
-    for name in &["window", "self", "globalThis", "top", "parent"] {
+    for name in &["window", "self", "globalThis", "top", "parent", "frames"] {
         let _ = global.insert_property(
             boa_engine::js_string!(*name),
             boa_engine::property::PropertyDescriptor::builder()
@@ -1268,6 +1268,36 @@ fn install_window(ctx: &mut Context, url: String) {
                 .build(),
         );
     }
+    // window.length = 0 (no frames).
+    let _ = global.insert_property(
+        boa_engine::js_string!("length"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(0u32))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    // window.name = "" (window name).
+    let _ = global.insert_property(
+        boa_engine::js_string!("name"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!("")))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+    // window.closed = false.
+    let _ = global.insert_property(
+        boa_engine::js_string!("closed"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(false))
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
 }
 
 /// Install a `console` global with `log`/`warn`/`error`/`info` methods that
