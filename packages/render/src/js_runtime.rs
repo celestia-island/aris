@@ -4029,6 +4029,28 @@ fn install_dom_globals(ctx: &mut Context) {
                 .writable(true).enumerable(true).configurable(true).build(),
         );
 
+        // Add parentElement getter to Node.prototype — returns parent if it's an Element, else null.
+        let pe_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+            if let Some(o) = this.as_object() {
+                if let Ok(pn) = o.get(boa_engine::js_string!("parentNode"), ctx) {
+                    if let Some(p) = pn.as_object() {
+                        if let Ok(nt) = p.get(boa_engine::js_string!("nodeType"), ctx) {
+                            if nt.as_number().map(|n| n as u32 == 1).unwrap_or(false) {
+                                return Ok(JsValue::from(p.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(JsValue::null())
+        });
+        let _ = node_proto.insert_property(
+            boa_engine::js_string!("parentElement"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .get(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pe_get).build())
+                .enumerable(true).configurable(true).build(),
+        );
+
         // Add normalize to Node.prototype — merges adjacent text nodes.
         let normalize_fn = NativeFunction::from_copy_closure(|this, _args, ctx| {
             if let Some(o) = this.as_object() {
