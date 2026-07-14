@@ -6105,7 +6105,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cl_ts).build())));
             // item(index) — returns the class at index.
             let cl_item = NativeFunction::from_copy_closure(|this, args, ctx| {
-                let idx = args.first().and_then(|v| v.as_number()).unwrap_or(0.0) as u32;
+                let idx_raw = args.first().and_then(|v| v.as_number()).unwrap_or(0.0);
+                if idx_raw < 0.0 { return Ok(JsValue::null()); }
+                let idx = idx_raw as u32;
                 if let Some(o) = this.as_object() {
                     let el = o.get(boa_engine::js_string!("_element"), ctx).ok()
                         .and_then(|v| v.as_object());
