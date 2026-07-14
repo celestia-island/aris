@@ -4284,7 +4284,27 @@ fn install_dom_globals(ctx: &mut Context) {
         let _ = proto.insert_property(boa_engine::js_string!("deltaX"), ev_zero.clone());
         let _ = proto.insert_property(boa_engine::js_string!("deltaY"), ev_zero.clone());
         let _ = proto.insert_property(boa_engine::js_string!("deltaZ"), ev_zero.clone());
-        let _ = proto.insert_property(boa_engine::js_string!("deltaMode"), ev_zero);
+        let _ = proto.insert_property(boa_engine::js_string!("deltaMode"), ev_zero.clone());
+    }
+    // PointerEvent (caniuse 97%+)
+    if let Some(proto) = get_proto("PointerEvent", ctx) {
+        for (prop, val) in &[("pointerId", ev_zero.clone()), ("width", ev_zero.clone()), ("height", ev_zero.clone()),
+            ("pressure", ev_pd(JsValue::from(0.0f64))), ("tiltX", ev_zero.clone()), ("tiltY", ev_zero.clone()),
+            ("pointerType", ev_empty.clone()), ("isPrimary", ev_false.clone())] {
+            let _ = proto.insert_property(boa_engine::js_string!(*prop), val.clone());
+        }
+    }
+    // ClipboardEvent (caniuse 96%+)
+    if let Some(proto) = get_proto("ClipboardEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("clipboardData"), ev_null.clone());
+    }
+    // ErrorEvent (caniuse 97%+)
+    if let Some(proto) = get_proto("ErrorEvent", ctx) {
+        let _ = proto.insert_property(boa_engine::js_string!("message"), ev_empty.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("filename"), ev_empty.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("lineno"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("colno"), ev_zero.clone());
+        let _ = proto.insert_property(boa_engine::js_string!("error"), ev_null.clone());
     }
 
     // Add iterable methods to NodeList.prototype (values, entries, forEach, Symbol.iterator).
@@ -4638,6 +4658,47 @@ fn install_dom_globals(ctx: &mut Context) {
         Ok(val)
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("structuredClone"), 1, sc_fn);
+
+    // ── BroadcastChannel (caniuse: 96%+) ── Stub.
+    let bc_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = obj.insert_property(boa_engine::js_string!("name"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let noop = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()));
+        let _ = obj.insert_property(boa_engine::js_string!("postMessage"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop.clone()).build())));
+        let _ = obj.insert_property(boa_engine::js_string!("close"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop).build())));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("BroadcastChannel"), 1, bc_ctor);
+
+    // ── Web Crypto (caniuse: 97%+) ── Stub.
+    let crypto_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let crypto_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let _ = crypto_obj.insert_property(boa_engine::js_string!("subtle"), crypto_pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
+    let get_random = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd3 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = arr.insert_property(boa_engine::js_string!("length"), pd3(JsValue::from(0u32)));
+        Ok(JsValue::from(arr))
+    });
+    let _ = crypto_obj.insert_property(boa_engine::js_string!("getRandomValues"), crypto_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), get_random).build())));
+    let _ = crypto_obj.insert_property(boa_engine::js_string!("randomUUID"), crypto_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(boa_engine::js_string!("00000000-0000-0000-0000-000000000000"))))).build())));
+    let _ = ctx.global_object().insert_property(boa_engine::js_string!("crypto"), boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(crypto_obj)).writable(true).enumerable(true).configurable(true).build());
+
+    // ── indexedDB (caniuse: 95%+) ── Stub.
+    let idb_factory = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let idb_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let idb_open = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        let req = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd4 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = req.insert_property(boa_engine::js_string!("result"), pd4(JsValue::null()));
+        let _ = req.insert_property(boa_engine::js_string!("error"), pd4(JsValue::null()));
+        let _ = req.insert_property(boa_engine::js_string!("onsuccess"), pd4(JsValue::null()));
+        let _ = req.insert_property(boa_engine::js_string!("onerror"), pd4(JsValue::null()));
+        Ok(JsValue::from(req))
+    });
+    let _ = idb_factory.insert_property(boa_engine::js_string!("open"), idb_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), idb_open).build())));
+    let _ = ctx.global_object().insert_property(boa_engine::js_string!("indexedDB"), boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(idb_factory)).writable(true).enumerable(true).configurable(true).build());
 
     // ── CSS.supports / CSS.escape (caniuse: 97%+) ──
     let css_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
