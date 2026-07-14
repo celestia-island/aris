@@ -7008,6 +7008,70 @@ fn install_webrtc_stubs(ctx: &mut Context) {
         Ok(obj.into())
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("DOMParser"), 0, dp_ctor);
+
+    // ── fetch (caniuse: 98%+) ── Returns a Promise-like object.
+    let fetch_fn = NativeFunction::from_copy_closure(|_t, _args, ctx| {
+        let resp = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = resp.insert_property(boa_engine::js_string!("ok"), pd(JsValue::from(false)));
+        let _ = resp.insert_property(boa_engine::js_string!("status"), pd(JsValue::from(0u32)));
+        let _ = resp.insert_property(boa_engine::js_string!("statusText"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = resp.insert_property(boa_engine::js_string!("url"), pd(JsValue::from(boa_engine::js_string!(""))));
+        // text() method returns empty string.
+        let text_fn = NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::from(boa_engine::js_string!(""))));
+        let _ = resp.insert_property(boa_engine::js_string!("text"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), text_fn.clone()).build())));
+        // json() method returns empty object.
+        let json_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
+        let _ = resp.insert_property(boa_engine::js_string!("json"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), json_fn).build())));
+        // Return a thenable (Promise-like).
+        let thenable = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let resp_ref = resp.clone();
+        let then_fn = NativeFunction::from_copy_closure_with_captures(move |_t, args: &[boa_engine::JsValue], resp_ref, ctx| {
+            let cb = args.first().cloned().unwrap_or(JsValue::undefined());
+            if let Some(cb_fn) = cb.as_object() {
+                if cb_fn.is_callable() {
+                    let _ = cb_fn.call(&JsValue::undefined(), &[JsValue::from(resp_ref.clone())], ctx);
+                }
+            }
+            Ok(JsValue::undefined())
+        }, resp_ref);
+        let _ = thenable.insert_property(boa_engine::js_string!("then"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), then_fn).build())));
+        let _ = thenable.insert_property(boa_engine::js_string!("catch"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()))).build())));
+        Ok(JsValue::from(thenable))
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("fetch"), 1, fetch_fn);
+
+    // ── CSSStyleDeclaration (caniuse: 98%+) ── Minimal stub.
+    let csssd_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
+        let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
+        let pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = obj.insert_property(boa_engine::js_string!("cssText"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let _ = obj.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
+        let _ = obj.insert_property(boa_engine::js_string!("cssFloat"), pd(JsValue::from(boa_engine::js_string!(""))));
+        let get_pv = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(boa_engine::js_string!(""))));
+        let _ = obj.insert_property(boa_engine::js_string!("getPropertyValue"), pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), get_pv).build())));
+        Ok(obj.into())
+    });
+    let _ = ctx.register_global_callable(boa_engine::js_string!("CSSStyleDeclaration"), 0, csssd_ctor);
+
+    // ── ServiceWorker / navigator.serviceWorker (caniuse: 96%+) ── Stub.
+    let sw_container = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let sw_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let _ = sw_container.insert_property(boa_engine::js_string!("controller"), sw_pd(JsValue::null()));
+    // register() returns a thenable.
+    let sw_reg = NativeFunction::from_copy_closure(|_t, _a, ctx| {
+        let thenable = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let pd3 = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+        let _ = thenable.insert_property(boa_engine::js_string!("then"), pd3(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), NativeFunction::from_copy_closure(|_t, _a, _ctx| Ok(JsValue::undefined()))).build())));
+        Ok(JsValue::from(thenable))
+    });
+    let _ = sw_container.insert_property(boa_engine::js_string!("register"), sw_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), sw_reg).build())));
+    let _ = sw_container.insert_property(boa_engine::js_string!("ready"), sw_pd(JsValue::from(boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()))));
+    if let Ok(nav_val) = ctx.global_object().get(boa_engine::js_string!("navigator"), ctx) {
+        if let Some(nav) = nav_val.as_object() {
+            let _ = nav.insert_property(boa_engine::js_string!("serviceWorker"), sw_pd(JsValue::from(sw_container)));
+        }
+    }
 }
 
 fn make_element_handle(
