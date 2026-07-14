@@ -3262,7 +3262,8 @@ fn install_dom_globals(ctx: &mut Context) {
                 "TextEvent" => "TextEvent",
                 "TouchEvent" => "TouchEvent",
                 "UIEvent" | "UIEvents" => "UIEvent",
-                "WheelEvent" => "WheelEvent",
+                // WheelEvent is NOT in the legacy createEvent table per DOM spec.
+                // It should throw NOT_SUPPORTED_ERR.
                 _ => {
                     // Unknown type → throw NOT_SUPPORTED_ERR.
                     return Err(boa_engine::JsNativeError::typ()
