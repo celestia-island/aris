@@ -4575,6 +4575,30 @@ fn install_dom_globals(ctx: &mut Context) {
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("structuredClone"), 1, sc_fn);
 
+    // ── CSS.supports / CSS.escape (caniuse: 97%+) ──
+    let css_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let css_pd = |v: JsValue| { boa_engine::property::PropertyDescriptor::builder().value(v).writable(true).enumerable(true).configurable(true).build() };
+    let css_supports = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        // Simple check: just look for basic property:value format support.
+        let prop = arg_string(args, 0);
+        let val = args.get(1).map(|_| arg_to_string(args, 1, ctx)).unwrap_or_default();
+        // Return true for common properties.
+        let known: &[&str] = &["display", "color", "width", "height", "margin", "padding", "border", "background", "font", "flex", "grid", "transform", "opacity", "position", "overflow", "visibility", "z-index", "cursor", "pointer-events", "user-select"];
+        Ok(JsValue::from(known.contains(&prop.as_str())))
+    });
+    let _ = css_obj.insert_property(boa_engine::js_string!("supports"), css_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), css_supports).build())));
+    let css_escape = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let s = arg_to_string(args, 0, ctx);
+        // Basic CSS escaping: escape special characters.
+        let escaped: String = s.chars().map(|c| match c {
+            '"' | '\'' | '\\' | '(' | ')' | '{' | '}' | ';' | ':' | ',' => format!("\\{:X} ", c as u32),
+            _ => c.to_string(),
+        }).collect();
+        Ok(JsValue::from(boa_engine::js_string!(escaped)))
+    });
+    let _ = css_obj.insert_property(boa_engine::js_string!("escape"), css_pd(JsValue::from(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), css_escape).build())));
+    let _ = ctx.global_object().insert_property(boa_engine::js_string!("CSS"), boa_engine::property::PropertyDescriptor::builder().value(JsValue::from(css_obj)).writable(true).enumerable(true).configurable(true).build());
+
     // ── ResizeObserver (caniuse: 96%+) ── Stub.
     let ro_ctor = NativeFunction::from_copy_closure(move |this, _a, ctx| {
         let obj = this.as_object().unwrap_or_else(|| boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()));
