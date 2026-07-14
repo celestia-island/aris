@@ -7589,7 +7589,10 @@ fn make_element_handle(
             None => JsValue::null(),
         };
         if !v.is_undefined() && !v.is_null() {
-            return Ok(v);
+            // For "class", empty string means attribute was removed — fall through.
+            if name != "class" || v.as_string().map_or(true, |s| !s.is_empty()) {
+                return Ok(v);
+            }
         }
         // Fallback: check id/class special cases. Only return non-null if
         // the attribute exists in the NamedNodeMap (not just className).
