@@ -82,9 +82,18 @@
     rustup component add rust-std-aarch64-unknown-linux-musl` 重装后
     再测。
 
-- **当前 aris 工作区**：0 dirty（PLAN.md 这个待 commit）。
+- **当前 aris 工作区**：0 dirty（PLAN.md 还有一个改动待 commit）。
 - **当前分支**：`dev` · 领先 `origin/dev` 1 commit（待 push）
-- **最近提交**：`8d63d80` 🗑️ Aris: drop in-tree Linebender forks — go back to crates.io parley 0.10.
+- **最近提交**：`077dc32` 🐛 Aris-render: declare required-features on all 25 bin targets.
+
+- **已知的 follow-up**（pre-existing，不在本次范围）：
+  - `offline_canvas_test.rs` 假设 `Canvas2D` 有公开 `rgba: Vec<u8>` 字段，
+    但当前 `Canvas2D` 是 Scene-recording model，没有直接 pixel access。
+    需要重写测试或给 `Canvas2D` 加 `pixels()` accessor。
+  - `aws-lc-sys 0.42` 在 Windows MSVC 上 build 失败（`stdalign_check.c`
+    缺 `stdint.h`）——只在 `--features winit`（拉 reqwest→rcgen→aws-lc-rs）
+    时触发，不在 default features 范围内。需等 aws-lc-sys 上游修，或
+    换 `rustls-tls` 走 ring。
 
 ## 0. 浏览器功能状态（2026-07-13）
 
