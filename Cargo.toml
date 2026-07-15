@@ -10,11 +10,6 @@ members = [
     "packages/abi",
     "packages/js",
     "packages/wasm",
-    # aris-internal forks of Linebender / GoogleFonts crates, kei-compatible.
-    "packages/parley",
-    "packages/fontique",
-    "packages/skrifa",
-    "packages/resource-handle",
 ]
 
 [workspace.package]
@@ -93,20 +88,8 @@ strip = "debuginfo"
 [profile.bench]
 debug = 0
 
-# skrifa / linebender_resource_handle / fontique are in-tree aris-internal
-# forks under packages/{skrifa,resource-handle,fontique}. They are workspace
-# members, but we still need [patch.crates-io] entries so that downstream
-# crates pulled from crates.io (like blitz-dom, parley) resolve to our forks
-# instead of the upstream versions.
-#
-# parley is NOT patched — we use the upstream crates.io parley 0.10 directly.
-# It depends on fontique and skrifa, which ARE patched, so the kei-compatible
-# Blob type (Arc<Vec<T>>) propagates through parley to blitz-dom automatically.
 # Patch boa_engine/parser/gc 0.21.1 to relax icu pins (~2.0 → ^2.0).
 [patch.crates-io]
-skrifa = { path = "packages/skrifa" }
-linebender_resource_handle = { path = "packages/resource-handle" }
-fontique = { path = "packages/fontique" }
 boa_engine = { path = "patches/boa_engine" }
 boa_parser = { path = "patches/boa_parser" }
 boa_gc = { path = "patches/boa_gc" }
