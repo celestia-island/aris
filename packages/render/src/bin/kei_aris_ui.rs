@@ -9,6 +9,7 @@
 // The UI is drawn programmatically (header bar, address bar, cards)
 // into an aris_render::Frame, then presented via FbDevBackend::present
 // which converts RGBA to BGRX and writes to the framebuffer.
+#![cfg(unix)] // Unix-only: /dev/fb0 + FbDevBackend (gated in aris_render::lib).
 fn main() {
     aris_render::init_logging();
     tracing::info!("kei_aris_ui: starting (aris-render fbdev path, no Vello)");

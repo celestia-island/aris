@@ -123,3 +123,141 @@ winit = [
     "dep:serde_json",
     "dep:image",
 ]
+
+# Bin targets. Each bin declares `required-features` so that
+# `cargo check --workspace --bins` (without per-bin features) automatically
+# skips them. Run a specific bin with the explicit feature set, e.g.:
+#   cargo run -p aris-render --features "winit js" --bin aris_browser
+#   cargo run -p aris-render --features "winit js" --bin conformance_test
+#   cargo run -p aris-render --features "winit js webgl" --bin offline_webgl_test
+# kei_* bins additionally require #[cfg(unix)] gate (file-level) since they
+# use libc::{ioctl,fcntl,poll,AF_INET,sockaddr_in,...} that don't exist on Windows.
+[[bin]]
+name = "aris_browser"
+path = "src/bin/aris_browser.rs"
+required-features = ["winit"]
+
+[[bin]]
+name = "conformance_test"
+path = "src/bin/conformance_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_aris_ui"
+path = "src/bin/kei_aris_ui.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_desktop"
+path = "src/bin/kei_desktop.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_fbtest"
+path = "src/bin/kei_fbtest.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_minimal"
+path = "src/bin/kei_minimal.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_tty"
+path = "src/bin/kei_tty.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_ui"
+path = "src/bin/kei_ui.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_canvas_js_test"
+path = "src/bin/offline_canvas_js_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_canvas_test"
+path = "src/bin/offline_canvas_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_click_test"
+path = "src/bin/offline_click_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_find_test"
+path = "src/bin/offline_find_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_history_test"
+path = "src/bin/offline_history_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_listener_test"
+path = "src/bin/offline_listener_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_onclick_test"
+path = "src/bin/offline_onclick_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_svg_test"
+path = "src/bin/offline_svg_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_timer_test"
+path = "src/bin/offline_timer_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_webgl_test"
+path = "src/bin/offline_webgl_test.rs"
+required-features = ["winit", "js", "webgl"]
+
+[[bin]]
+name = "offscreen_chrome"
+path = "src/bin/offscreen_chrome.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "prerender_cursor"
+path = "src/bin/prerender_cursor.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_js_demo"
+path = "src/bin/render_js_demo.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_lagrange"
+path = "src/bin/render_lagrange.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_test"
+path = "src/bin/render_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_window"
+path = "src/bin/render_window.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_window_demo"
+path = "src/bin/render_window_demo.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "wpt_runner"
+path = "src/bin/wpt_runner.rs"
+required-features = ["winit", "js"]
