@@ -42,6 +42,50 @@
   - 详细报告见 `.amphoreus/RUNS/aris/build-errors.md`
 - **agent id 命名**：aris-charlie（per 5 仓优先级顺序第一个空 P0 仓 aris 的第一个认领者）
 
+## Refresh log 2026-07-15 (跟进：放弃 in-tree fork + gitignore 清理 + arona 回滚)
+
+- **架构决策：放弃 in-tree Linebender fork，回到 crates.io parley 0.10** ✅：
+  - **commit `e123d1d`**（🧪 中间方案尝试）：保留 4 个 in-tree fork，
+    但把 `[package] name` 改回 upstream 原名，并加 `[patch.crates-io]`。
+  - **commit `8d63d80`**（🗑️ 最终方案）：完全删除 4 个 in-tree fork 目录
+    （`packages/{parley,fontique,skrifa,resource-handle}/` 共 125 个文件），
+    移除 workspace members 和 `[patch.crates-io]` entry，让 `aris-render`
+    直接依赖 crates.io parley 0.10 / linebender_resource_handle / fontique。
+  - 结论：crates.io `parley 0.10` 内部已经 re-export `fontique` 子模块，
+    不需要 in-tree facade；kei 字体 NULL-deref 防护可以放在
+    `aris-render/src/lib.rs:125`（"skip DOM/Vello entirely" guard），
+    不需要单独 fork Blob 类型。
+  - 验证：`cargo check -p aris-render --lib --features render` → 0 errors。
+
+- **构建产物清理** ✅：
+  - commit `40e7ef6`（🗑️ Aris: gitignore fixture build artifacts + remove tracked ones.）
+  - `tests/fixtures/kei_desktop.wasm`、`kei_desktop_1280x800.rgba`、
+    `kei_desktop_rendered.html` 从 git 里移除（生成产物，不该入树）。
+  - `.gitignore` 加了 `tests/fixtures/*.{wasm,rgba,html,jpg}` 规则，
+    以及 `patches/*/target/` 规则。
+
+- **arona 脏文件回滚** ✅：
+  - `cd arona && git checkout HEAD -- .` 回滚 200+ 脏文件，
+    只剩未跟踪的 `res/prompts/soul/demiurge.md`（entelecheia 生成的）。
+  - 脏文件全是 entelecheia-alpha agent 之前跑 build 或 sed 留下的，
+    内容与 HEAD 一致，确认可安全回滚。
+
+- **aris-abi Linux 兼容性** ⏳（待修）：
+  - Windows host 上 `cargo check --workspace --exclude aris-abi` 通过，
+    但 `--include aris-abi` 仍失败（Unix-only 代码 `libc::ioctl`、
+    `std::os::fd`、`File::into_raw_fd` 缺 `#[cfg(unix)]` gate）。
+  - 计划：给 `packages/abi/src/lib.rs` 顶部加 `#![cfg(unix)]`，
+    或者在 `Cargo.toml` 用 `target.` conditional dep。
+  - WSL 里 rust toolchain 有 `rust-std-aarch64-unknown-linux-musl` 组件
+    冲突（`Scrt1.o` conflict），暂时无法在 WSL 验证 Linux 端。
+    需要 `rustup component remove rust-std-aarch64-unknown-linux-musl &&
+    rustup component add rust-std-aarch64-unknown-linux-musl` 重装后
+    再测。
+
+- **当前 aris 工作区**：0 dirty（PLAN.md 这个待 commit）。
+- **当前分支**：`dev` · 领先 `origin/dev` 1 commit（待 push）
+- **最近提交**：`8d63d80` 🗑️ Aris: drop in-tree Linebender forks — go back to crates.io parley 0.10.
+
 ## 0. 浏览器功能状态（2026-07-13）
 
 aris_browser 现在是一个功能完整的桌面浏览器：
