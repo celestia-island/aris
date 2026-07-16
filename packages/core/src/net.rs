@@ -306,8 +306,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn which_finds_common_binary() {
-        // `ip` may not be installed in CI, but `sh`/`ls` almost always are.
         assert!(which("ls").is_some() || which("sh").is_some());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn which_finds_common_binary() {
+        assert!(which("cmd.exe").is_some() || which("powershell.exe").is_some());
     }
 }

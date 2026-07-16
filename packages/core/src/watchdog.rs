@@ -125,12 +125,11 @@ impl WatchdogGuard {
         if !self.armed {
             return;
         }
-        if let Some(m) = self.file.take() {
-            if let Ok(mut f) = m.into_inner() {
-                if let Err(e) = f.write_all(&[WATCHDOG_DISABLE_MAGIC]) {
-                    warn!(error = %e, "failed to write watchdog disable magic");
-                }
-            }
+        if let Some(m) = self.file.take()
+            && let Ok(mut f) = m.into_inner()
+            && let Err(e) = f.write_all(&[WATCHDOG_DISABLE_MAGIC])
+        {
+            warn!(error = %e, "failed to write watchdog disable magic");
         }
         self.armed = false;
     }
@@ -145,12 +144,11 @@ impl Drop for WatchdogGuard {
         // the magic 'V' byte. If that fails the kernel will reboot
         // when the fd closes — which is the safe default for a
         // supervisor that died without acknowledging the watchdog.
-        if let Some(ref m) = self.file {
-            if let Ok(mut f) = m.lock() {
-                if let Err(e) = f.write_all(&[WATCHDOG_DISABLE_MAGIC]) {
-                    warn!(error = %e, "watchdog magic-close write failed; board will reboot");
-                }
-            }
+        if let Some(ref m) = self.file
+            && let Ok(mut f) = m.lock()
+            && let Err(e) = f.write_all(&[WATCHDOG_DISABLE_MAGIC])
+        {
+            warn!(error = %e, "watchdog magic-close write failed; board will reboot");
         }
     }
 }

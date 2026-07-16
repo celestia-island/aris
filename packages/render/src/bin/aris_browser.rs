@@ -46,31 +46,32 @@ fn main() {
 }
 
 fn start_page() -> String {
-    "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\">\
-     <title>aris — new tab</title>\
-     <style>\
-     body { margin:0; background:#1a1b26; font-family:system-ui,sans-serif; color:#a9b1d6; }\
-     .wrap { max-width:640px; margin:80px auto; padding:0 24px; text-align:center; }\
-     h1 { color:#7aa2f7; font-size:42px; margin:0 0 8px; }\
-     p.sub { color:#565f89; margin:0 0 32px; }\
-     .bookmarks { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }\
-     a.card { display:block; background:#24283b; color:#c0caf5; text-decoration:none;\
-              padding:16px; border-radius:10px; transition:background .15s; }\
-     a.card:hover { background:#2f344d; }\
-     .card .t { color:#7dcfff; font-weight:600; }\
-     .card .d { color:#565f89; font-size:13px; margin-top:4px; }\
-     .hint { color:#565f89; font-size:13px; margin-top:32px; }\
-     kbd { background:#24283b; padding:2px 6px; border-radius:4px; color:#7dcfff; }\
-     </style></head><body>\
-     <div class=\"wrap\">\
-       <h1>aris</h1>\
-       <p class=\"sub\">a browser engine built on servo's pure-Rust front-end</p>\
-       <div class=\"bookmarks\">\
-         <a class=\"card\" href=\"https://example.com\"><span class=\"t\">example.com</span><div class=\"d\">test page</div></a>\
-         <a class=\"card\" href=\"about:about\"><span class=\"t\">about:about</span><div class=\"d\">aris info</div></a>\
-       </div>\
-       <p class=\"hint\">Type a URL or search in the address bar, or press <kbd>Ctrl+L</kbd>.</p>\
-     </div>\
-     </body></html>"
-        .to_string()
+    r#"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<title>aris — new tab</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1e1e2e;color:#cdd6f4;font-family:system-ui,Segoe UI,DejaVu Sans,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh}
+.wrap{max-width:600px;text-align:center;padding:40px 24px}
+.logo{font-size:64px;font-weight:900;color:#cba6f7;letter-spacing:-2px;margin-bottom:4px}
+.sub{color:#585b70;font-size:15px;margin-bottom:36px}
+.bookmarks{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
+a.card{display:block;background:#313244;color:#cdd6f4;text-decoration:none;padding:14px 20px;border-radius:8px;min-width:160px;text-align:left}
+a.card:hover{background:#45475a}
+.card .t{color:#89b4fa;font-weight:600;font-size:15px;display:block}
+.card .d{color:#6c7086;font-size:12px;margin-top:3px}
+.hint{margin-top:36px;color:#585b70;font-size:13px}
+kbd{background:#313244;padding:2px 6px;border-radius:4px;color:#89dceb;font-size:12px}
+</style></head><body>
+<div class="wrap">
+  <div class="logo">aris</div>
+  <p class="sub">Pure-Rust browser engine · Blitz + Stylo + Vello</p>
+  <div class="bookmarks">
+    <a class="card" href="https://example.com"><span class="t">example.com</span><span class="d">test page</span></a>
+    <a class="card" href="about:about"><span class="t">about:about</span><span class="d">engine info</span></a>
+    <a class="card" href="https://info.cern.ch"><span class="t">info.cern.ch</span><span class="d">first website</span></a>
+    <a class="card" href="file:///"><span class="t">file:///</span><span class="d">local files</span></a>
+  </div>
+  <p class="hint">Type a URL or search, or press <kbd>Ctrl+L</kbd> for address bar</p>
+</div>
+</body></html>"#.to_string()
 }

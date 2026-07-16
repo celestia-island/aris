@@ -2,8 +2,8 @@
 """QEMU desktop launcher for aris HMI testing.
 
 Boots a Linux kernel + aris rootfs in QEMU with virtio-gpu display,
-launching the HMI kiosk browser (WebKitGTK/Cogs or Servo) pointed at
-the evernight dashboard.
+launching the HMI kiosk browser (Blitz + Vello CPU, fbdev backend)
+pointed at the evernight dashboard.
 
 Usage:
     python3 scripts/qemu_desktop.py [board] [--kernel-source linux|kei]
@@ -12,12 +12,14 @@ By default uses the Linux kernel backend (Phase 1). Use --kernel-source kei
 for the kei kernel backend (Phase 2+, experimental).
 
 The script reads the board config from configs/<board>.toml to determine:
-  - Display resolution and browser engine
+  - Display resolution and kiosk URL
   - QEMU machine type and CPU
   - evernight features to compile
 
-If the browser engine is "webkitgtk", the rootfs must contain cogs + libwebkitgtk
-(installed via build_browser.py). If "servo", servo-browser must be present.
+The rendering engine is Blitz + Vello CPU rendering directly to /dev/fb0
+via virtio-gpu. No X11/Wayland compositor required. The aris kiosk binary
+(kei_fbtest or similar) runs inside the VM and writes RGBA frames to the
+framebuffer.
 """
 
 import argparse

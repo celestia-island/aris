@@ -5,23 +5,24 @@ Implements the "Chromebook-style local HMI" rendering path. The gateway
 device renders its own dashboard on an attached screen using a browser
 engine, rather than only serving a web page to a host browser.
 
-Three engines are supported, selected by ``configs/<board>.toml``::
+Engines are selected by ``configs/<board>.toml``::
 
     [display]
-    engine = "webkitgtk" | "servo" | "cef" | "none"
+    engine = "blitz-vello" | "webkitgtk" | "servo" | "cef" | "none"
 
 Acquisition strategy per engine:
 
+  * **blitz-vello** (default) — The browser is built as part of
+    ``aris-render`` (Blitz DOM + Vello CPU rasterization). Cross-compile
+    via ``cargo zigbuild --target aarch64-unknown-linux-musl``. No
+    external binary or system library needed; renders directly to
+    ``/dev/fb0`` (virtio-gpu framebuffer).
   * **webkitgtk** — Install the prebuilt arm64 ``libwebkitgtk`` + ``cogs``
     (or ``epiphany``) packages from Debian/Ubuntu arm64 repos via QEMU user
-    emulation. No source compilation. Fastest path; good CSS/JS compat.
+    emulation. No source compilation. (Legacy; replaced by blitz-vello.)
   * **servo** — Cross-compile from the Servo source (Rust,
-    ``aarch64-unknown-linux-gnu`` target). Small footprint but longer build
-    (~30 min). No official prebuilt aarch64 binaries exist.
-  * **cef** — No official prebuilt aarch64 Linux binary exists (Spotify CEF
-    builds only cover linux64). Must build from source (~6-12h, ~100GB disk).
-    This script downloads the CEF source bootstrap but defers the actual
-    build to a separate, long-running step.
+    ``aarch64-unknown-linux-gnu`` target). (Legacy.)
+  * **cef** — No official prebuilt aarch64 Linux binary exists.
 
 The resulting browser binary + its runtime libraries are placed in
 ``output/<board>/rootfs/usr/bin/`` and ``rootfs/usr/lib/`` for the rootfs
@@ -30,7 +31,7 @@ assembler to pick up.
 Usage::
 
     python3 scripts/build_browser.py [board]
-    python3 scripts/build_browser.py nanopi-r3s
+    python3 scripts/build_browser.py qemu-hmi
 """
 from __future__ import annotations
 
@@ -190,6 +191,51 @@ def build_cef(arch: str, rootfs: Path) -> bool:
     return False
 
 
+def build_blitz_vello(arch: str, rootfs: Path) -> bool:
+    """Cross-compile aris kiosk binary (Blitz + Vello CPU, fbdev backend).
+
+    Builds ``aris-render`` with the ``fbdev`` feature via cargo zigbuild.
+    The resulting binary renders HTML/CSS directly to /dev/fb0 without
+    requiring X11, Wayland, or any external browser engine.
+
+    Prerequisites:
+      - cargo-zigbuild installed (cargo install cargo-zigbuild)
+      - zig installed and in PATH
+    """
+    rust_target = {
+        "aarch64": "aarch64-unknown-linux-musl",
+        "x86_64": "x86_64-unknown-linux-musl",
+    }.get(arch)
+    if not rust_target:
+        cf.fail(f"  Unsupported arch for blitz-vello: {arch}")
+        return False
+
+    cf.step(f"[blitz-vello] 交叉编译 aris kiosk ({rust_target})")
+    cf.info("  Blitz + Vello CPU → /dev/fb0 (fbdev backend)")
+
+    r = subprocess.run(
+        ["cargo", "zigbuild", "--target", rust_target, "--release",
+         "-p", "aris-render", "--no-default-features",
+         "--features", "fbdev",
+         "--bin", "kei_fbtest"],
+        cwd=PROJECT_ROOT,
+    )
+    if r.returncode != 0:
+        cf.fail("  aris-render fbdev 编译失败")
+        return False
+
+    binary = PROJECT_ROOT / "target" / rust_target / "release" / "kei_fbtest"
+    if binary.exists():
+        dest = rootfs / "usr" / "bin" / "aris-kiosk"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binary, dest)
+        cf.ok(f"  aris-kiosk → /usr/bin/aris-kiosk")
+        return True
+
+    cf.fail("  kei_fbtest 二进制未找到")
+    return False
+
+
 def generate_init_script(engine: str, kiosk_url: str, extra_args: str, rootfs: Path) -> None:
     """Write the /etc/init.d/S99hmi script that launches the kiosk browser."""
     init_dir = rootfs / "etc" / "init.d"
@@ -197,6 +243,7 @@ def generate_init_script(engine: str, kiosk_url: str, extra_args: str, rootfs: P
     init_script = init_dir / "S99hmi"
 
     binary_map = {
+        "blitz-vello": "/usr/bin/aris-kiosk",
         "webkitgtk": "/usr/bin/cogs",
         "servo": "/usr/bin/servo-browser",
         "cef": "/usr/bin/cefsimple",
@@ -205,8 +252,9 @@ def generate_init_script(engine: str, kiosk_url: str, extra_args: str, rootfs: P
     if not binary:
         return
 
-    # Cogs accepts --url; Servo accepts a positional URL; cefsimple needs more setup.
-    if engine == "webkitgtk":
+    if engine == "blitz-vello":
+        cmd = f'{binary} --url={kiosk_url}'
+    elif engine == "webkitgtk":
         cmd = f'{binary} --url={kiosk_url} {extra_args}'
     elif engine == "servo":
         cmd = f'{binary} {kiosk_url} {extra_args}'
@@ -260,6 +308,7 @@ def main() -> int:
     (rootfs / "usr" / "bin").mkdir(parents=True, exist_ok=True)
 
     builders = {
+        "blitz-vello": build_blitz_vello,
         "webkitgtk": build_webkitgtk,
         "servo": build_servo,
         "cef": build_cef,

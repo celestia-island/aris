@@ -23,6 +23,59 @@
   2. **Linebender / GoogleFonts 长期方案 → 已落地**：原 `celestia/patches/{fontique,linebender-resource-handle,skrifa}/` 全部迁移到 `aris/packages/{fontique,skrifa,resource-handle}/`，新增 `aris/packages/parley/` 极简 FontContext facade。**aris 仓完全自维护**，不再依赖 celestia-island 上的独立 fork 仓。celestia 顶层 `patches/` 目录下的 3 个 Linebender 仓已删除；aris 顶层 `patches/boa_*` 保留。
   3. **boA 0.21.1 ICU pin 修复**（仓内 `patches/boa_*`）维持现状。
 
+## Refresh log 2026-07-15 (桌面浏览器实测)
+
+- **aris_browser 在 Windows 桌面成功启动运行** ✅
+- **离线渲染管线端到端验证** ✅
+- reqwest feature 修正：`rustls-tls-no-provider` → `rustls-tls`（`-no-provider` 导致运行时 No provider set panic）
+
+### 实测结果
+
+| Binary | 功能 | 结果 |
+|--------|------|------|
+| `aris_browser` | 完整桌面浏览器（winit+softbuffer 窗口） | ✅ 启动运行正常 |
+| `offscreen_chrome` | 无窗口渲染浏览器外壳+网页→PNG | ✅ 输出 800x600 PNG |
+| `render_test` | HTML→CSS→布局→Vello CPU→PPM | ✅ 480000 non-black pixels |
+| `offline_timer_test` | JS setTimeout 执行 | ✅ timer fired |
+| `offline_canvas_test` | Canvas2D Scene 模型 | ✅ |
+
+### 渲染管线工作流
+
+```
+HTML 字符串
+  → html5ever (HTML 解析)
+  → stylo (CSS 级联)
+  → taffy (Flexbox/Grid 布局)
+  → parley (文字排版/shaping)
+  → vello_cpu (CPU 光栅化)
+  → RGBA pixel buffer
+  → winit + softbuffer (桌面窗口)
+  或 → PNG/PPM (离线/headless)
+  或 → /dev/fb0 mmap (嵌入式 kei)
+```
+
+### reqwest 教训
+
+`rustls-tls-no-provider` 不会自动安装 TLS crypto provider，导致运行时报 `No provider set`。桌面端应使用 `rustls-tls`。
+
+### 字体渲染修复
+
+`winit_backend::build_doc()` 之前没有注入 `font_ctx`，blitz-dom 默认字体上下文在 Windows 上可能无法发现系统字体（fontconfig 不存在，fontique 的 DirectWrite 路径未经充分验证）。现在显式注入 `new_font_context()`：`system_fonts: true` + 嵌入式 DejaVu Sans 兜底。
+
+### 开始页重写
+
+Catppuccin Mocha 配色、flexbox 居中、4 个书签。去掉了 blitz-dom 可能不支持 CSS Grid 和 transition。
+
+### 其他修复
+
+- `offline_canvas_test.rs` — 适配 Canvas2D Scene-recording 模型
+- aris-abi `#[cfg(unix)]` gate — Windows 编译通过
+- Clippy fixes：`collapsible_if`、`while_let_loop`、`manual_checked_ops`、`if_same_then_else`
+- Test fix：`which_finds_common_binary` 拆为 `#[cfg(unix)]`/`#[cfg(windows)]`
+- Reqwest feature：`rustls-tls-no-provider` → `rustls-tls`
+
+---
+
 ## Refresh log 2026-07-15 (peer fork agent aris-charlie 实测)
 
 - **commit `05679dc`** 修复了 7c445f6 引入的 3 处 manifest-level bug：
