@@ -28,8 +28,14 @@ anyrender_vello_cpu = { version = "0.14", optional = true }
 kurbo = "0.13"
 peniko = "0.6"
 # For embedded font registration (render_html_with_font).
+# All font stack crates come from crates.io (no local forks).
 linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.10", default-features = false, features = ["std"], optional = true }
+parley = { version = "0.10", default-features = false, features = [
+    "std",
+], optional = true }
+fontique = { version = "0.10", default-features = false, features = [
+    "std",
+], optional = true }
 
 # Boa JS engine (optional)
 aris-js = { path = "../js", optional = true }
@@ -46,7 +52,13 @@ raw-window-handle = { version = "0.6", optional = true }
 # browser, not for the headless/fbdev kiosk renderer). Kept optional so musl
 # cross-compile and kei fbdev builds stay slim.
 url = { version = "2", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "cookies"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+    "gzip",
+    "cookies",
+], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 bytes = { version = "1", optional = true }
 http = { version = "1", optional = true }
 # keyboard-types is a transitive dep of blitz-traits; we need it directly to
@@ -55,7 +67,11 @@ keyboard-types = { version = "0.7", optional = true }
 # Session persistence (history save/load).
 serde_json = { version = "1", optional = true }
 # Favicon image decoding.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico"], optional = true }
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "ico",
+], optional = true }
 
 # Dev-only: PNG encoding for the offscreen_chrome test binary.
 png = { version = "0.17", optional = true }
@@ -64,7 +80,9 @@ wgpu = { version = "30", optional = true }
 naga = { version = "30", features = ["wgsl-out", "glsl-in"], optional = true }
 pollster = { version = "0.4", optional = true }
 # WebRTC support (str0m = pure Rust sans-IO WebRTC, with pure Rust crypto).
-str0m = { version = "0.21", default-features = false, features = ["rust-crypto"], optional = true }
+str0m = { version = "0.21", default-features = false, features = [
+    "rust-crypto",
+], optional = true }
 
 [features]
 default = ["desktop", "render"]
@@ -72,7 +90,18 @@ default = ["desktop", "render"]
 # Use: cargo build --no-default-features --features fbdev
 fbdev = []
 # HTML rendering engine (Blitz DOM + Vello CPU + parley fonts).
-render = ["dep:blitz-dom", "dep:blitz-paint", "dep:blitz-traits", "dep:blitz-html", "dep:anyrender", "dep:anyrender_vello_cpu", "dep:linebender_resource_handle", "dep:parley", "dep:keyboard-types", "dep:png"]
+render = [
+    "dep:blitz-dom",
+    "dep:blitz-paint",
+    "dep:blitz-traits",
+    "dep:blitz-html",
+    "dep:anyrender",
+    "dep:anyrender_vello_cpu",
+    "dep:linebender_resource_handle",
+    "dep:parley",
+    "dep:keyboard-types",
+    "dep:png",
+]
 # Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
 desktop = ["blitz-dom/system_fonts", "blitz-dom/svg"]
@@ -84,4 +113,152 @@ webgl = ["dep:wgpu", "dep:naga", "dep:pollster"]
 webrtc = ["dep:str0m"]
 # Desktop browser output via winit + softbuffer (Windows/Linux/macOS), with
 # a full browser chrome: address bar, back/forward, HTTP networking.
-winit = ["dep:winit", "dep:softbuffer", "dep:raw-window-handle", "dep:url", "dep:reqwest", "dep:bytes", "dep:http", "dep:serde_json", "dep:image"]
+winit = [
+    "dep:winit",
+    "dep:softbuffer",
+    "dep:raw-window-handle",
+    "dep:url",
+    "dep:reqwest",
+    "dep:bytes",
+    "dep:http",
+    "dep:serde_json",
+    "dep:image",
+]
+
+# Bin targets. Each bin declares `required-features` so that
+# `cargo check --workspace --bins` (without per-bin features) automatically
+# skips them. Run a specific bin with the explicit feature set, e.g.:
+#   cargo run -p aris-render --features "winit js" --bin aris_browser
+#   cargo run -p aris-render --features "winit js" --bin conformance_test
+#   cargo run -p aris-render --features "winit js webgl" --bin offline_webgl_test
+# kei_* bins additionally require #[cfg(unix)] gate (file-level) since they
+# use libc::{ioctl,fcntl,poll,AF_INET,sockaddr_in,...} that don't exist on Windows.
+[[bin]]
+name = "aris_browser"
+path = "src/bin/aris_browser.rs"
+required-features = ["winit"]
+
+[[bin]]
+name = "conformance_test"
+path = "src/bin/conformance_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_aris_ui"
+path = "src/bin/kei_aris_ui.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_desktop"
+path = "src/bin/kei_desktop.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_fbtest"
+path = "src/bin/kei_fbtest.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_minimal"
+path = "src/bin/kei_minimal.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_tty"
+path = "src/bin/kei_tty.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "kei_ui"
+path = "src/bin/kei_ui.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_canvas_js_test"
+path = "src/bin/offline_canvas_js_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_canvas_test"
+path = "src/bin/offline_canvas_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_click_test"
+path = "src/bin/offline_click_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_find_test"
+path = "src/bin/offline_find_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_history_test"
+path = "src/bin/offline_history_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_listener_test"
+path = "src/bin/offline_listener_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_onclick_test"
+path = "src/bin/offline_onclick_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_svg_test"
+path = "src/bin/offline_svg_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_timer_test"
+path = "src/bin/offline_timer_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "offline_webgl_test"
+path = "src/bin/offline_webgl_test.rs"
+required-features = ["winit", "js", "webgl"]
+
+[[bin]]
+name = "offscreen_chrome"
+path = "src/bin/offscreen_chrome.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "prerender_cursor"
+path = "src/bin/prerender_cursor.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_js_demo"
+path = "src/bin/render_js_demo.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_lagrange"
+path = "src/bin/render_lagrange.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_test"
+path = "src/bin/render_test.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_window"
+path = "src/bin/render_window.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "render_window_demo"
+path = "src/bin/render_window_demo.rs"
+required-features = ["winit", "js"]
+
+[[bin]]
+name = "wpt_runner"
+path = "src/bin/wpt_runner.rs"
+required-features = ["winit", "js"]

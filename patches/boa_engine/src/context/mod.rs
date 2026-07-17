@@ -289,6 +289,30 @@ impl Context {
             .constructor(true)
             .build();
 
+        // For constructors, create a proper .prototype object so that
+        // new Constructor() creates objects with the correct prototype.
+        let proto = boa_engine::object::JsObject::with_object_proto(self.intrinsics());
+        let function_val: JsValue = function.clone().into();
+        let _ = proto.insert_property(
+            boa_engine::js_string!("constructor"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(function_val)
+                .writable(true)
+                .enumerable(false)
+                .configurable(true)
+                .build(),
+        );
+        let function_obj = function.clone();
+        let _ = function_obj.insert_property(
+            boa_engine::js_string!("prototype"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(proto)
+                .writable(true)
+                .enumerable(false)
+                .configurable(false)
+                .build(),
+        );
+
         self.global_object().define_property_or_throw(
             name,
             PropertyDescriptor::builder()

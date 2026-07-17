@@ -320,6 +320,24 @@ struct FindState {
     caret_blink: bool,
 }
 
+/// Build a FontContext that registers the embedded DejaVu Sans as a
+/// guaranteed fallback, while still allowing blitz-dom's system_fonts
+/// discovery to add platform fonts (DirectWrite on Windows, fontconfig
+/// on Linux, CoreText on macOS).
+fn new_font_context() -> parley::FontContext {
+    use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
+    let mut font_ctx = parley::FontContext {
+        source_cache: SourceCache::new_shared(),
+        collection: Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: true,
+        }),
+    };
+    let blob = Blob::new(std::sync::Arc::new(crate::EMBEDDED_FONT.to_vec()));
+    font_ctx.collection.register_fonts(blob, None);
+    font_ctx
+}
+
 impl App {
     /// Window size in CSS logical px.
     fn css_size(&self) -> (f32, f32) {
@@ -363,6 +381,7 @@ impl App {
             net_provider: Some(net),
             navigation_provider: Some(nav),
             shell_provider: Some(shell),
+            font_ctx: Some(new_font_context()),
             ..Default::default()
         };
         if let Some(url) = &self.active_tab().current_url {

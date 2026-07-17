@@ -2,12 +2,21 @@
 #
 # This board config is used for Phase 1 of the desktop system roadmap:
 # validating the HMI kiosk browser on a standard Linux kernel in QEMU
-# before porting to kei. It uses the webkitgtk engine (Cogs browser)
-# which has prebuilt arm64 packages available via apt.
+# before porting to kei. The rendering engine is now Blitz + Vello CPU
+# (replacing the earlier WebKitGTK/Cogs approach).
 #
 # Usage:
 #   just build-board qemu-hmi --kernel-source linux
 #   python3 scripts/qemu_desktop.py qemu-hmi
+#
+# Architecture:
+#   aris_browser (Blitz + Vello CPU, fbdev backend) → /dev/fb0
+#   virtio-gpu exposes /dev/fb0 → QEMU SDL/GTK window
+#
+# Cross-compile target for aarch64:
+#   cargo zigbuild --target aarch64-unknown-linux-musl --release
+#       -p aris-render --features "fbdev" --bin kei_fbtest
+#   (requires cargo-zigbuild + zig installed)
 
 name = "qemu-hmi"
 arch = "aarch64"
@@ -38,12 +47,13 @@ entelecheia_server = "ws://entelecheia.local:8443/api/ws"
 [usb_gadget]
 enabled = false
 
-# Local HMI display — use WebKitGTK (best prebuilt arm64 availability)
+# Local HMI display — Blitz + Vello CPU rendering to /dev/fb0.
+# The aris kiosk binary renders directly to the framebuffer provided
+# by virtio-gpu, no X11/Wayland compositor required.
 [display]
-engine = "webkitgtk"
+engine = "blitz-vello"
 resolution = [1280, 800]
 kiosk_url = "http://127.0.0.1:8080/"
-extra_args = "--disable-gpu"
 
 # QEMU-specific configuration
 [qemu]
@@ -51,7 +61,8 @@ machine = "virt"
 cpu = "cortex-a72"
 smp = 2
 display = "sdl"
-# Extra QEMU devices for HMI testing
+# Extra QEMU devices for HMI testing.
+# virtio-gpu-device provides /dev/fb0 for the aris fbdev backend.
 devices = [
     "virtio-gpu-device",
     "virtio-keyboard-device",

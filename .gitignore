@@ -28,3 +28,25 @@ packages/js/target/
 /celestia-devtools.just
 .wpt/
 patches/boa_engine_021/target/
+
+# WPT 测试集，按需克隆（见 scripts/fetch_wpt.py / `just pull wpt`），不纳入版本控制
+/tests/wpt/wpt-master/
+
+# ── 构建产物 / fixture 快照 ────────────────────────────────────
+#
+# tests/fixtures/ 下的 wasm / rgba / html 是 prerender_pixels 等
+# 脚本的生成产物，不该入树。
+# 有需要本地自己构建（just build fixtures），通过 CI 里也会重新跑。
+# 保留 create_fixtures.sh / cursor_*.bgra / *.png 等源素材。
+/tests/fixtures/*.wasm
+/tests/fixtures/*.rgba
+/tests/fixtures/*.html
+/tests/fixtures/*.jpg
+
+# 顶层 kei_desktop.html 是 PPM 格式的样例图像（文件名误导），保留在树里。
+# （如果未来改为生成产物，再添加到 ignore）
+
+# patches/ 下的各 crate 的构建目录
+patches/boa_engine/target/
+patches/boa_parser/target/
+patches/boa_gc/target/

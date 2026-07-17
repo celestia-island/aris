@@ -140,11 +140,7 @@ fn extract_script_blocks(html: &str) -> Vec<String> {
     let mut scripts = Vec::new();
     let mut remaining = html;
 
-    loop {
-        let open = match remaining.find("<script") {
-            Some(pos) => pos,
-            None => break,
-        };
+    while let Some(open) = remaining.find("<script") {
         remaining = &remaining[open..];
 
         let tag_end = match remaining.find('>') {

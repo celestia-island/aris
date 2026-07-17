@@ -2,7 +2,151 @@
 
 > 本文件于 **2026-07-13** 更新，记录项目当前状态、近期进展与后续计划。
 > 定位已于 2026-07-10 变更为「基于 servo 的浏览器引擎」——详见第 6 节。
+> **2026-07-14 刷新记录**：PLAN.md 顶部加 §"Refresh log 2026-07-14"；其他章节保留原貌。
 > 原有工业网关发行版计划已保留于文末「既有详细计划（存档）」。
+
+## Refresh log 2026-07-14
+
+- **当前分支**：`dev` · 领先 `origin/dev` 1 commit
+- **最近提交**：`🐛 Aris: align in-tree Linebender fork manifest (7c445f6 follow-up).` (`05679dc`)
+- **未提交改动**（4 项，与 2026-07-14 早些时候一致 — arona agent 积累的 wasm/fixture 改动，本轮不 commit）：
+
+  ```
+   M packages/wasm/src/bin/prerender_pixels.rs
+   M tests/fixtures/kei_desktop.wasm
+   M tests/fixtures/kei_desktop_1280x800.rgba
+   M tests/fixtures/kei_desktop_rendered.html
+  ```
+
+- **后续动作**：
+  1. `prerender_pixels.rs` 和 `tests/fixtures/*` 的脏改动**保留未提交**（本轮仅做 Linebender 迁移；那些 wasm/fixture 改动是 arona agent 之前积累的，按独立 commit 节奏走，不混入）。
+  2. **Linebender / GoogleFonts 长期方案 → 已落地**：原 `celestia/patches/{fontique,linebender-resource-handle,skrifa}/` 全部迁移到 `aris/packages/{fontique,skrifa,resource-handle}/`，新增 `aris/packages/parley/` 极简 FontContext facade。**aris 仓完全自维护**，不再依赖 celestia-island 上的独立 fork 仓。celestia 顶层 `patches/` 目录下的 3 个 Linebender 仓已删除；aris 顶层 `patches/boa_*` 保留。
+  3. **boA 0.21.1 ICU pin 修复**（仓内 `patches/boa_*`）维持现状。
+
+## Refresh log 2026-07-15 (桌面浏览器实测)
+
+- **aris_browser 在 Windows 桌面成功启动运行** ✅
+- **离线渲染管线端到端验证** ✅
+- reqwest feature 修正：`rustls-tls-no-provider` → `rustls-tls`（`-no-provider` 导致运行时 No provider set panic）
+
+### 实测结果
+
+| Binary | 功能 | 结果 |
+|--------|------|------|
+| `aris_browser` | 完整桌面浏览器（winit+softbuffer 窗口） | ✅ 启动运行正常 |
+| `offscreen_chrome` | 无窗口渲染浏览器外壳+网页→PNG | ✅ 输出 800x600 PNG |
+| `render_test` | HTML→CSS→布局→Vello CPU→PPM | ✅ 480000 non-black pixels |
+| `offline_timer_test` | JS setTimeout 执行 | ✅ timer fired |
+| `offline_canvas_test` | Canvas2D Scene 模型 | ✅ |
+
+### 渲染管线工作流
+
+```
+HTML 字符串
+  → html5ever (HTML 解析)
+  → stylo (CSS 级联)
+  → taffy (Flexbox/Grid 布局)
+  → parley (文字排版/shaping)
+  → vello_cpu (CPU 光栅化)
+  → RGBA pixel buffer
+  → winit + softbuffer (桌面窗口)
+  或 → PNG/PPM (离线/headless)
+  或 → /dev/fb0 mmap (嵌入式 kei)
+```
+
+### reqwest 教训
+
+`rustls-tls-no-provider` 不会自动安装 TLS crypto provider，导致运行时报 `No provider set`。桌面端应使用 `rustls-tls`。
+
+### 字体渲染修复
+
+`winit_backend::build_doc()` 之前没有注入 `font_ctx`，blitz-dom 默认字体上下文在 Windows 上可能无法发现系统字体（fontconfig 不存在，fontique 的 DirectWrite 路径未经充分验证）。现在显式注入 `new_font_context()`：`system_fonts: true` + 嵌入式 DejaVu Sans 兜底。
+
+### 开始页重写
+
+Catppuccin Mocha 配色、flexbox 居中、4 个书签。去掉了 blitz-dom 可能不支持 CSS Grid 和 transition。
+
+### 其他修复
+
+- `offline_canvas_test.rs` — 适配 Canvas2D Scene-recording 模型
+- aris-abi `#[cfg(unix)]` gate — Windows 编译通过
+- Clippy fixes：`collapsible_if`、`while_let_loop`、`manual_checked_ops`、`if_same_then_else`
+- Test fix：`which_finds_common_binary` 拆为 `#[cfg(unix)]`/`#[cfg(windows)]`
+- Reqwest feature：`rustls-tls-no-provider` → `rustls-tls`
+
+---
+
+## Refresh log 2026-07-15 (peer fork agent aris-charlie 实测)
+
+- **commit `05679dc`** 修复了 7c445f6 引入的 3 处 manifest-level bug：
+  1. `aris/packages/render/Cargo.toml` `render` feature 引用了未声明的 `dep:linebender_resource_handle` / `dep:parley`（lib name 而非 dep key），已改为 `dep:aris-resource-handle` / `dep:aris-parley`。
+  2. `aris/Cargo.toml` `[patch.crates-io]` 仍指向已删除的 `../patches/{skrifa,linebender-resource-handle,fontique}`，已删除这 3 条 stale entry。
+  3. `aris/packages/fontique/Cargo.toml` 中 `aris-resource-handle` 内联 dep 没有 section header，被 cargo 误归到 `[dependencies.hashbrown]`，已加 `[dependencies.aris-resource-handle]` section。
+- **`cargo check --workspace --exclude aris-abi` 结果**：
+  - ✅ `aris-resource-handle`（14 doc-warnings，upstream 风格，pre-existing）
+  - ✅ `aris-fontique`（无 error；1 stray key warning 已修）
+  - ✅ `aris-skrifa`（无 error）
+  - ✅ `aris-parley`（空 lib OK，编译通过 — 但 facade 未实现，见 BLOCK）
+  - ❌ `aris-render`（6 E0432，根因是 `aris-parley/src/lib.rs` 空文件）
+  - ⏭ `aris-abi`（Windows host 下 `std::os::fd` / `libc::ioctl` / `File::into_raw_fd` 解析失败，pre-existing，Unix-only code 缺 `#[cfg(unix)]` gate）
+- **BLOCK (待 langyo 决策)**：aris-parley 的 "极简 FontContext facade" 在 7c445f6 没说实现，src/lib.rs 是 0 字节文件。aris-render 已经 `use parley::FontContext; use parley::fontique::{Collection, CollectionOptions, SourceCache}`，需要 facade 实现：
+  - `parley::FontContext` struct（包装 aris-fontique 的 SourceCache + Collection）
+  - `parley::fontique` module（re-export aris-fontique 的 Collection / CollectionOptions / SourceCache）
+  - 详细报告见 `.amphoreus/RUNS/aris/build-errors.md`
+- **agent id 命名**：aris-charlie（per 5 仓优先级顺序第一个空 P0 仓 aris 的第一个认领者）
+
+## Refresh log 2026-07-15 (跟进：放弃 in-tree fork + gitignore 清理 + arona 回滚)
+
+- **架构决策：放弃 in-tree Linebender fork，回到 crates.io parley 0.10** ✅：
+  - **commit `e123d1d`**（🧪 中间方案尝试）：保留 4 个 in-tree fork，
+    但把 `[package] name` 改回 upstream 原名，并加 `[patch.crates-io]`。
+  - **commit `8d63d80`**（🗑️ 最终方案）：完全删除 4 个 in-tree fork 目录
+    （`packages/{parley,fontique,skrifa,resource-handle}/` 共 125 个文件），
+    移除 workspace members 和 `[patch.crates-io]` entry，让 `aris-render`
+    直接依赖 crates.io parley 0.10 / linebender_resource_handle / fontique。
+  - 结论：crates.io `parley 0.10` 内部已经 re-export `fontique` 子模块，
+    不需要 in-tree facade；kei 字体 NULL-deref 防护可以放在
+    `aris-render/src/lib.rs:125`（"skip DOM/Vello entirely" guard），
+    不需要单独 fork Blob 类型。
+  - 验证：`cargo check -p aris-render --lib --features render` → 0 errors。
+
+- **构建产物清理** ✅：
+  - commit `40e7ef6`（🗑️ Aris: gitignore fixture build artifacts + remove tracked ones.）
+  - `tests/fixtures/kei_desktop.wasm`、`kei_desktop_1280x800.rgba`、
+    `kei_desktop_rendered.html` 从 git 里移除（生成产物，不该入树）。
+  - `.gitignore` 加了 `tests/fixtures/*.{wasm,rgba,html,jpg}` 规则，
+    以及 `patches/*/target/` 规则。
+
+- **arona 脏文件回滚** ✅：
+  - `cd arona && git checkout HEAD -- .` 回滚 200+ 脏文件，
+    只剩未跟踪的 `res/prompts/soul/demiurge.md`（entelecheia 生成的）。
+  - 脏文件全是 entelecheia-alpha agent 之前跑 build 或 sed 留下的，
+    内容与 HEAD 一致，确认可安全回滚。
+
+- **aris-abi Linux 兼容性** ⏳（待修）：
+  - Windows host 上 `cargo check --workspace --exclude aris-abi` 通过，
+    但 `--include aris-abi` 仍失败（Unix-only 代码 `libc::ioctl`、
+    `std::os::fd`、`File::into_raw_fd` 缺 `#[cfg(unix)]` gate）。
+  - 计划：给 `packages/abi/src/lib.rs` 顶部加 `#![cfg(unix)]`，
+    或者在 `Cargo.toml` 用 `target.` conditional dep。
+  - WSL 里 rust toolchain 有 `rust-std-aarch64-unknown-linux-musl` 组件
+    冲突（`Scrt1.o` conflict），暂时无法在 WSL 验证 Linux 端。
+    需要 `rustup component remove rust-std-aarch64-unknown-linux-musl &&
+    rustup component add rust-std-aarch64-unknown-linux-musl` 重装后
+    再测。
+
+- **当前 aris 工作区**：0 dirty（PLAN.md 还有一个改动待 commit）。
+- **当前分支**：`dev` · 领先 `origin/dev` 1 commit（待 push）
+- **最近提交**：`077dc32` 🐛 Aris-render: declare required-features on all 25 bin targets.
+
+- **已知的 follow-up**（pre-existing，不在本次范围）：
+  - `offline_canvas_test.rs` 假设 `Canvas2D` 有公开 `rgba: Vec<u8>` 字段，
+    但当前 `Canvas2D` 是 Scene-recording model，没有直接 pixel access。
+    需要重写测试或给 `Canvas2D` 加 `pixels()` accessor。
+  - `aws-lc-sys 0.42` 在 Windows MSVC 上 build 失败（`stdalign_check.c`
+    缺 `stdint.h`）——只在 `--features winit`（拉 reqwest→rcgen→aws-lc-rs）
+    时触发，不在 default features 范围内。需等 aws-lc-sys 上游修，或
+    换 `rustls-tls` 走 ring。
 
 ## 0. 浏览器功能状态（2026-07-13）
 
@@ -79,20 +223,24 @@ Modbus TCP sim (:5020)
 ```
 
 **验证结果（sensor-poll 端）**：
+
 - `Device registered on server node_id=ignition-test-01` ✅
 - `Telemetry sent to gateway`（每 2 s 循环）✅
 
 **验证结果（evernight-server 端）**：
+
 - `Device registered node_id=ignition-test-01 stations=1` ✅
 - `Telemetry received node_id=ignition-test-01`（持续接收）✅
 - `Device unregistered`（断连时正常清理）✅
 
 **发现并修复的问题**：
+
 1. sensor-poll 默认数据目录 `/var/lib/evernight/sensor` 非 root 不可写 → 注入 `SENSOR_DATA_DIR` 环境变量
 2. Modbus TCP 模拟器 MBAP 帧解析错误 → 重写为正确的 7-byte header + length-based framing
 3. `EntelecheiaTriggerSink` Unix socket 转发失败为非致命（仅 WARN），不影响 gateway 遥测路径
 
 ### 核心驱动实现（2026-07-04）
+
 - `led.rs`：GPIO LED 控制（sysfs /sys/class/gpio）
 - `watchdog.rs`：/dev/watchdog ioctl WDIOC_KEEPALIVE 喂狗
 - `net.rs`：网络接口 netlink 配置
@@ -112,17 +260,20 @@ Modbus TCP sim (:5020)
 ## 5. 后续计划
 
 ### 短期（本周）
+
 1. **aarch64 交叉编译验证**——安装 `aarch64-unknown-linux-musl` target，构建 evernight gateway profile 二进制，替换 `tests/fixtures/` 中的 stub
 2. **QEMU arm64 点火测试**——安装 `qemu-system-aarch64`，运行 `just qemu-ignition-linux`（Linux baseline）和 `just qemu-ignition-kei`（kei 内核）
 3. **kei 内核联调**——在 QEMU virt (cortex-a55/a72) 上启动 kei，验证 initramfs → evernight 启动序列
 4. 提交本轮 ignition_test.py 修复
 
 ### 中期
+
 1. 推进 M1.3 evernight 交叉编译里程碑（gateway profile feature set）
 2. 收敛 M2 ARM64 Hardening 遗留项（FDT 内存解析、GICv3 驱动）
 3. 固化启动与健康检查流程（aris-core supervisor 生命周期管理）
 
 ### 长期
+
 1. M1.5 OTA 双分区升级流程
 2. M2.4 在 NanoPi R3S 上运行 kei + evernight 全栈
 
@@ -158,6 +309,7 @@ celestia-island/
 ```
 
 **关键变化**：
+
 - aris 从"发行版组装器"升级为"系统中间件层"
 - evernight 成为产出可部署镜像的发行版（从 aris 迁入 OTA、板级配置、init 脚本）
 - Servo 不 vendor 也不 fork——用 Blitz + 独立 crate 组装渲染管线
@@ -205,6 +357,7 @@ celestia-island/
 | 显示后端 | /dev/fb0 mmap | vello_cpu 输出 RGBA → memcpy 到 fb0，无需 DRM/Wayland |
 
 **避免使用**：
+
 - ❌ `mozjs` / SpiderMonkey — Boa 替代
 - ❌ `webrender` + SWGL — SWGL 是 C++，非纯 Rust
 - ❌ Servo `components/script` — SpiderMonkey 耦合层，整个替换
@@ -251,6 +404,7 @@ aris/
 保留在 aris 的组件：PID 1 监督器、LED/watchdog/网络/USB、board/（设备树/U-Boot）、build_browser.py、渲染管线、ABI 兼容层。
 
 evernight 需改造为 Cargo workspace：
+
 ```toml
 [workspace]
 members = [
@@ -263,6 +417,7 @@ members = [
 ### 6.5 tairitsu ↔ aris 渲染管线对接
 
 **数据流**：
+
 ```
 tairitsu WASM 组件（Wasmtime 执行）
   → VDOM diff → DOM ops（create_element, set_style, append_child...）
@@ -275,23 +430,27 @@ tairitsu WASM 组件（Wasmtime 执行）
 ```
 
 **两种模式**：
+
 1. **SSR 模式**（简单，阶段 1）：tairitsu SSR 生成 HTML 字符串 → blitz-dom 解析 → 渲染
 2. **交互模式**（完整，阶段 4）：tairitsu WASM 组件实时通过 WIT 发送 DOM ops → blitz-dom 增量更新
 
 ### 6.6 实施阶段
 
 #### 阶段 1：aris Linux kiosk 验证（~1-2 周）
+
 - 创建带显示的 QEMU 板子配置（`configs/qemu-hmi.toml`）
 - 在 aris Linux 后端（标准 Linux 内核）上用 WebKitGTK/Cogs 验证 kiosk 浏览器
 - 截图确认 evernight dashboard 渲染
 - 验证 `build_browser.py` 的 webkitgtk 路径
 
 #### 阶段 2：kei syscall + fbdev 补全（~3-5 天）
+
 - kei 补全 `/dev/fb0` mmap 支持（Blit 后端目前返回 ENODEV）
 - 补全缺失 syscall（SYSV shm、posix_spawn fallback）
 - 在 kei QEMU 上验证 `/dev/fb0` mmap 写入 → SDL 窗口显示
 
 #### 阶段 3：Blitz 渲染管线集成（~2-4 周）
+
 - 创建 `aris/packages/render/`
 - 集成 blitz-dom + blitz-renderer-vello（vello_cpu 后端）
 - 实现 `/dev/fb0` mmap 后端
@@ -299,6 +458,7 @@ tairitsu WASM 组件（Wasmtime 执行）
 - 截图确认网页渲染
 
 #### 阶段 4：Boa JS + Wasmtime + WIT host（~4-8 周）
+
 - 集成 boa_engine 处理页面内 JS
 - 集成 wasmtime 执行 tairitsu WASM 组件
 - 实现 tairitsu `browser-full.wit` 的 Rust host adapter
@@ -306,11 +466,13 @@ tairitsu WASM 组件（Wasmtime 执行）
 - 在 kei QEMU 上端到端验证
 
 #### 阶段 5：evernight 迁移 + 发行版组装（~2-4 周）
+
 - 从 aris 迁出 OTA、板级配置、init 脚本到 evernight
 - evernight 改造为 Cargo workspace
 - 产出完整的 kei + aris + evernight 部署镜像
 
 #### 阶段 6：Linux ABI 完整兼容层（~2-3 月）
+
 - 实现 gcompat 级别的 ABI 兼容库
 - 支持标准 Linux arm64 二进制（.deb 包）直接运行
 - /proc、/sys 模拟
@@ -318,6 +480,7 @@ tairitsu WASM 组件（Wasmtime 执行）
 - 包管理器集成（apk 或 pkgsrc）
 
 #### 阶段 7：Wayland/DRM 最小实现（远期，按需）
+
 - 如果需要窗口管理或多窗口
 - 实现 kei 的 DRM 框架（/dev/dri/）
 - 移植 cage（最小 Wayland compositor）
@@ -365,12 +528,14 @@ Build a Linux-standard (LSB-compatible) distribution that ships a desktop enviro
 Target: boot, run evernight, talk to entelecheia.
 
 ### M1.1 — Board Bring-up
+
 - Buildroot-style slim rootfs (musl + busybox)
 - Linux 6.x kernel with RK3566 BSP
 - U-Boot with verified boot
 - Target board: NanoPi R3S (RK3566, dual GbE)
 
 ### M1.2 — Core Drivers
+
 - [x] Dual Gigabit Ethernet (stmmac/rk_gmac) — WAN/LAN routing
 - [ ] UART (debug + serial devices)
 - [ ] GPIO (status LEDs, digital I/O)
@@ -380,11 +545,13 @@ Target: boot, run evernight, talk to entelecheia.
 - [ ] Hardware watchdog (RK3566 WDT)
 
 ### M1.3 — evernight Cross-compile
+
 - Target: `aarch64-unknown-linux-musl`
 - Features: `hardware, protocol, serial, sensor, s7comm, ethercat, can, bin, api, vault, manifest`
 - Excluded: `screen, webrtc, remote-ssh, remote-vnc, remote-rdp, container, k8s, libvirt, vm, compile-bridge`
 
 ### M1.4 — Firmware Integration
+
 - aris-core supervisor manages evernight daemon lifecycle
 - Startup sequence: net init → evernight start → device.register → entelecheia join
 - Health check + auto-restart via watchdog
@@ -393,11 +560,13 @@ Target: boot, run evernight, talk to entelecheia.
 - [ ] aris-core supervisor lifecycle management
 
 ### M1.5 — OTA Update
+
 - Dual A/B partition layout
 - Firmware package: kernel + dtb + rootfs squashfs + verity hash
 - Update flow: download → verify → set boot flag → reboot → fallback on failure
 
 ### M1.6 — Production Readiness
+
 - Build reproducibility (deterministic image hash)
 - Secure boot chain (U-Boot verified boot)
 - Provisioning: unique device identity, TLS client cert
@@ -407,16 +576,19 @@ Target: boot, run evernight, talk to entelecheia.
 
 > **Key**: ARM64 support is already under active development.
 > PR asterinas/asterinas#3270 by @wanywhn is nearly ready.
-> We track the fork: https://github.com/wanywhn/asterinas (branch: `arm64-support`).
+> We track the fork: <https://github.com/wanywhn/asterinas> (branch: `arm64-support`).
 
 ### M2.1 — Adopt ARM64 Fork
+
 - Use `wanywhn/asterinas` `arm64-support` branch as development baseline
 - Includes: GICv3, ARM MMU setup, UART console, basic device tree for aarch64
 - Once merged into mainline, switch to official asterinas/asterinas
 - Track PR #3270 status weekly
 
 ### M2.2 — RK3566 Board Support for Asterinas
+
 Add board-specific drivers on top of the arm64-support base:
+
 - Rockchip GPIO/pinctrl driver
 - stmmac Ethernet driver (DW GMAC / RK GMAC)
 - DW SPI / DW I2C master drivers
@@ -424,15 +596,18 @@ Add board-specific drivers on top of the arm64-support base:
 - Device tree support (ostd dtb parsing)
 
 ### M2.3 — aris Asterinas Kernel Module
+
 - `kernel/asterinas/` directory with cargo-osdk project
 - Reuse Linux device tree bindings
 
 ### M2.4 — Parity Validation
+
 - Boot Asterinas on NanoPi R3S
 - Run evernight, verify all protocol features
 - Performance benchmark vs Linux baseline
 
 ### M2.5 — Production Rollout
+
 - OTA push Asterinas kernel to deployed devices
 - Fallback to Linux kernel on boot failure
 
@@ -448,17 +623,20 @@ Add board-specific drivers on top of the arm64-support base:
 ## evernight Feature Flags per Target
 
 ### Gateway Profile (aarch64, headless, < 2GB RAM)
+
 ```
 hardware, protocol, serial, sensor, s7comm, ethercat, can,
 bin, api, vault, manifest, scripting
 ```
 
 ### Minimal Profile (armv7l, < 512MB RAM)
+
 ```
 hardware, protocol, serial, sensor, bin, api, manifest
 ```
 
 ### Full Profile (x86_64, >= 4GB RAM)
+
 ```
 full (all features)
 ```
@@ -494,4 +672,3 @@ scripts/build.sh              # Main build orchestrator
 3. **A/B partition layout** — mandatory for all boards, safe OTA
 4. **musl static linking** — single binary, no libc ABI issues
 5. **Verified boot everywhere** — from U-Boot through kernel to rootfs
-

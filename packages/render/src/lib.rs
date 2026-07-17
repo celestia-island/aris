@@ -41,7 +41,7 @@ use anyrender::ImageRenderer;
 /// Embedded fallback font for headless/fbdev builds where `system_fonts` is off.
 /// DejaVu Sans (latin-400) — SIL-compatible open-source license.
 #[cfg(feature = "render")]
-const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/font.ttf");
+pub(crate) const EMBEDDED_FONT: &[u8] = include_bytes!("../assets/font.ttf");
 
 /// Initialize structured logging with timestamps and levels.
 ///
@@ -229,12 +229,8 @@ fn fill_fallback(rgba: &mut [u8], width: u32, height: u32) {
             let idx = (y * width as usize + x) * 4;
             let (r, g, b) = if y < 60 {
                 (0x61, 0xAF, 0xEF) // blue header
-            } else if (80..160).contains(&y) {
-                (0x21, 0x25, 0x2B) // card 1
-            } else if (180..260).contains(&y) {
-                (0x21, 0x25, 0x2B) // card 2
-            } else if (280..360).contains(&y) {
-                (0x21, 0x25, 0x2B) // card 3
+            } else if (80..160).contains(&y) || (180..260).contains(&y) || (280..360).contains(&y) {
+                (0x21, 0x25, 0x2B) // cards
             } else {
                 (0x28, 0x2C, 0x34) // dark bg
             };
