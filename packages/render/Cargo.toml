@@ -74,7 +74,7 @@ image = { version = "0.25", default-features = false, features = [
 ], optional = true }
 
 # Dev-only: PNG encoding for the offscreen_chrome test binary.
-png = { version = "0.17", optional = true }
+png = { version = "0.18", optional = true }
 # WebGL rendering backend (wgpu + naga for GLSL→WGSL translation).
 wgpu = { version = "30", optional = true }
 naga = { version = "30", features = ["wgsl-out", "glsl-in"], optional = true }
