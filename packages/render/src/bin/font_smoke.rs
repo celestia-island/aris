@@ -36,9 +36,7 @@ fn main() {
         "system-ui-nonexistent".into(),
     ];
     for probe in probes {
-        let mut query = font_ctx
-            .collection
-            .query(&mut font_ctx.source_cache);
+        let mut query = font_ctx.collection.query(&mut font_ctx.source_cache);
         query.set_families([probe]);
         let mut hits = 0usize;
         query.matches_with(|_font| {
