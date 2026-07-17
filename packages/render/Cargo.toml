@@ -18,7 +18,7 @@ memmap2 = "0.9"
 # fontconfig dependency can't cross-compile, so we only enable it on desktop.
 # These are optional so fbdev-only builds (kei_fbtest) stay slim and avoid
 # pulling in heavy musl-incompatible runtime deps.
-blitz-dom = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
+blitz-dom = { version = "=0.3.0-beta.1", default-features = false, optional = true }
 blitz-paint = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
 blitz-traits = { version = "=0.3.0-alpha.6", optional = true }
 blitz-html = { version = "=0.3.0-alpha.6", optional = true }
