@@ -101,7 +101,8 @@ fn run_tests() {
         // Strip "use strict" from external scripts so var declarations stay global.
         // Also convert top-level "var X" to "globalThis.X" to work around Boa's
         // eval scoping (var in eval creates local vars, not globals).
-        let processed_scripts: Vec<String> = scripts.iter()
+        let processed_scripts: Vec<String> = scripts
+            .iter()
             .map(|s| {
                 let s = s.replace("\"use strict\"", "").replace("'use strict'", "");
                 // For top-level var declarations of known global variables from common.js,

@@ -31,8 +31,7 @@ const H: usize = 800;
 ///
 /// This is the FULL aris-render output: tairitsu rsx! → Wasmtime SSR → HTML
 /// → Blitz DOM + Stylo CSS + Taffy layout + Vello CPU rasterization → RGBA.
-const DESKTOP_RGBA: &[u8] =
-    include_bytes!("../../../../tests/fixtures/kei_desktop_1200x800.rgba");
+const DESKTOP_RGBA: &[u8] = include_bytes!("../../../../tests/fixtures/kei_desktop_1200x800.rgba");
 
 fn main() {
     let log = |m: &[u8]| unsafe {

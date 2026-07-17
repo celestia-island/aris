@@ -54,10 +54,6 @@ pub fn render_component(
     wasm_bytes: &[u8],
     config: &aris_render::RenderConfig,
 ) -> Result<aris_render::Frame> {
-    let html = render_component_to_html(
-        wasm_bytes,
-        config.width as i32,
-        config.height as i32,
-    )?;
+    let html = render_component_to_html(wasm_bytes, config.width as i32, config.height as i32)?;
     aris_render::render_html(&html, config)
 }

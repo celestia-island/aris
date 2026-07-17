@@ -28,14 +28,20 @@ impl ProcSysEmulator {
         files.insert("/proc/cpuinfo".to_string(), generate_cpuinfo());
         files.insert("/proc/meminfo".to_string(), generate_meminfo());
         files.insert("/proc/uptime".to_string(), "0.00 0.00\n".to_string());
-        files.insert("/proc/loadavg".to_string(), "0.00 0.00 0.00 1/1 1\n".to_string());
+        files.insert(
+            "/proc/loadavg".to_string(),
+            "0.00 0.00 0.00 1/1 1\n".to_string(),
+        );
         files.insert("/proc/version".to_string(), generate_version());
 
         // /proc/self
         files.insert("/proc/self/status".to_string(), generate_process_status());
 
         // /sys entries
-        files.insert("/sys/class/net/eth0/operstate".to_string(), "up\n".to_string());
+        files.insert(
+            "/sys/class/net/eth0/operstate".to_string(),
+            "up\n".to_string(),
+        );
 
         Self { files }
     }
@@ -88,8 +94,7 @@ fn generate_meminfo() -> String {
 }
 
 fn generate_version() -> String {
-    "Linux version 6.12.0-kei (kei@celestia) (Rust OS kernel, Asterinas fork)\n"
-        .to_string()
+    "Linux version 6.12.0-kei (kei@celestia) (Rust OS kernel, Asterinas fork)\n".to_string()
 }
 
 fn generate_process_status() -> String {
