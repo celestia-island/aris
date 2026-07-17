@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Browser shell services — networking, navigation, and history.
 //!
 //! This module wires the three `blitz_traits` providers that turn a static

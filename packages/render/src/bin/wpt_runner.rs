@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! W3C web-platform-tests batch runner for aris.
 //
 // Loads real WPT test HTML files, injects a minimal testharness.js shim,

@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Minimal /proc and /sys emulation for kei.
 //!
 //! kei does not implement procfs or sysfs. Standard Linux binaries

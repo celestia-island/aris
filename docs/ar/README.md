@@ -6,7 +6,7 @@
 
 <div align="center">
 
-[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](../../LICENSE)
+[![License: SySL-1.0](https://img.shields.io/badge/License-SySL--1.0-blue.svg)](https://sysl.celestia.world)
 [![Checks](https://img.shields.io/github/actions/workflow/status/celestia-island/aris/ci.yml)](https://github.com/celestia-island/aris/actions/workflows/ci.yml)
 
 </div>
@@ -93,4 +93,4 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## الترخيص
 
-Business Source License 1.1 (BUSL-1.1). يتحول إلى SySL-1.0 أو Apache-2.0 في 2030-01-01. انظر [LICENSE](../../LICENSE).
+SySL-1.0 (Synthetic Source License). انظر [LICENSE](../../LICENSE) أو [موقع SySL](https://sysl.celestia.world).

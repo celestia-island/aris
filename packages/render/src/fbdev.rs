@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Linux framebuffer device (`/dev/fb0`) backend.
 //!
 //! Provides direct pixel output to the Linux/kei framebuffer via mmap.

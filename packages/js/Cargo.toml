@@ -3,7 +3,7 @@ name = "aris-js"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "Boa JS engine integration for aris HMI"
 
 [dependencies]

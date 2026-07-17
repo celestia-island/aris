@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! aris-wasm — WASM Component Model host for the aris browser.
 //!
 //! This crate embeds [`tairitsu_ssr`] (built on Wasmtime) to execute

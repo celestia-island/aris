@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! User-space /dev/fb0 driver for kei's Blit-backed framebuffer.
 //!
 //! On kei, `/dev/fb0` is backed by virtio-gpu DMA buffer. The kernel

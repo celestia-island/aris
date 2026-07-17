@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! aris-abi — Linux ABI compatibility layer for the kei kernel.
 //!
 //! Provides user-space fallbacks for Linux features that kei does not

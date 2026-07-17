@@ -6,7 +6,7 @@
 
 <div align="center">
 
-[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](../../LICENSE)
+[![License: SySL-1.0](https://img.shields.io/badge/License-SySL--1.0-blue.svg)](https://sysl.celestia.world)
 [![Checks](https://img.shields.io/github/actions/workflow/status/celestia-island/aris/ci.yml)](https://github.com/celestia-island/aris/actions/workflows/ci.yml)
 
 </div>
@@ -93,4 +93,4 @@ Consulte la [visión general de arquitectura](./architecture/overview.md).
 
 ## Licencia
 
-Business Source License 1.1 (BUSL-1.1). Se convierte a SySL-1.0 o Apache-2.0 el 2030-01-01. Ver [LICENSE](../../LICENSE).
+SySL-1.0 (Synthetic Source License). Ver [LICENSE](../../LICENSE) o el [sitio de SySL](https://sysl.celestia.world).

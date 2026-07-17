@@ -3,7 +3,7 @@ name = "aris-render"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "HTML/CSS rendering pipeline for aris HMI — Blitz + Vello CPU + /dev/fb0"
 
 [dependencies]
