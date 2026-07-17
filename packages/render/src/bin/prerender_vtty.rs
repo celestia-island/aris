@@ -152,10 +152,10 @@ body {{ padding:20px 24px; color:#d6d6d6;
 #[cfg(feature = "render")]
 fn save_png(path: &str, width: u32, height: u32, rgba: &[u8]) {
     use std::io::BufWriter;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).expect("create output dir");
-        }
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create output dir");
     }
     let file = std::fs::File::create(path).expect("create png");
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
