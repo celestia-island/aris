@@ -20,7 +20,7 @@ memmap2 = "0.9"
 # pulling in heavy musl-incompatible runtime deps.
 blitz-dom = { version = "=0.3.0-beta.1", default-features = false, optional = true }
 blitz-paint = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
-blitz-traits = { version = "=0.3.0-alpha.6", optional = true }
+blitz-traits = { version = "=0.3.0-beta.1", optional = true }
 blitz-html = { version = "=0.3.0-alpha.6", optional = true }
 anyrender = { version = "0.11", optional = true }
 anyrender_vello_cpu = { version = "0.14", optional = true }
