@@ -33,7 +33,7 @@ linebender_resource_handle = { version = "0.1", optional = true }
 parley = { version = "0.10", default-features = false, features = [
     "std",
 ], optional = true }
-fontique = { version = "0.10", default-features = false, features = [
+fontique = { version = "0.11", default-features = false, features = [
     "std",
 ], optional = true }
 
