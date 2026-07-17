@@ -30,7 +30,7 @@ peniko = "0.6"
 # For embedded font registration (render_html_with_font).
 # All font stack crates come from crates.io (no local forks).
 linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.10", default-features = false, features = [
+parley = { version = "0.11", default-features = false, features = [
     "std",
 ], optional = true }
 fontique = { version = "0.10", default-features = false, features = [
