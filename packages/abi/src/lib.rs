@@ -20,19 +20,20 @@
 //! kei kernel syscall ABI
 //! ```
 
-#![cfg(unix)] // aris-abi is a Linux-only ABI compat layer. Skip entirely on
-               // non-unix hosts (Windows, WASM, etc.) so `cargo check
-               // --workspace` stays green on Windows dev machines.
-               // Linux build environments (and kei/musl cross-compile) are
-               // unaffected.
+#![cfg(unix)]
+// aris-abi is a Linux-only ABI compat layer. Skip entirely on
+// non-unix hosts (Windows, WASM, etc.) so `cargo check
+// --workspace` stays green on Windows dev machines.
+// Linux build environments (and kei/musl cross-compile) are
+// unaffected.
 #![allow(dead_code)]
 
-pub mod syscall_shim;
-pub mod fbdev_mmap;
 pub mod drm_translate;
+pub mod fbdev_mmap;
 pub mod proc_sys;
+pub mod syscall_shim;
 
-pub use syscall_shim::SyscallShim;
-pub use fbdev_mmap::FbDevMmap;
 pub use drm_translate::DrmToFbdev;
+pub use fbdev_mmap::FbDevMmap;
 pub use proc_sys::ProcSysEmulator;
+pub use syscall_shim::SyscallShim;
