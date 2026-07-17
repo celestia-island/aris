@@ -81,10 +81,14 @@ impl DrmToFbdev {
             drm_ioctls::DRM_IOCTL_GET_CAP => TranslationResult::Success { bytes_written: 0 },
 
             // Mode resources — report a single CRTC, connector, encoder
-            drm_ioctls::DRM_IOCTL_MODE_GETRESOURCES => TranslationResult::Success { bytes_written: 0 },
+            drm_ioctls::DRM_IOCTL_MODE_GETRESOURCES => {
+                TranslationResult::Success { bytes_written: 0 }
+            }
 
             // Connector info — report connected, with fb resolution
-            drm_ioctls::DRM_IOCTL_MODE_GETCONNECTOR => TranslationResult::Success { bytes_written: 0 },
+            drm_ioctls::DRM_IOCTL_MODE_GETCONNECTOR => {
+                TranslationResult::Success { bytes_written: 0 }
+            }
 
             // CRTC info — report active at fb resolution
             drm_ioctls::DRM_IOCTL_MODE_GETCRTC => TranslationResult::Success { bytes_written: 0 },
@@ -106,7 +110,9 @@ impl DrmToFbdev {
             drm_ioctls::DRM_IOCTL_MODE_MAP_DUMB => TranslationResult::Success { bytes_written: 0 },
 
             // Destroy dumb buffer — remove from handle table
-            drm_ioctls::DRM_IOCTL_MODE_DESTROY_DUMB => TranslationResult::Success { bytes_written: 0 },
+            drm_ioctls::DRM_IOCTL_MODE_DESTROY_DUMB => {
+                TranslationResult::Success { bytes_written: 0 }
+            }
 
             // Add framebuffer — return handle 1 (single fbdev scanout)
             drm_ioctls::DRM_IOCTL_MODE_ADDFB => TranslationResult::Success { bytes_written: 0 },

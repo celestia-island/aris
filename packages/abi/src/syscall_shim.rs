@@ -89,6 +89,9 @@ impl SyscallShim {
             .read(true)
             .write(true)
             .create(true)
+            // Existing segments keep their contents (SYSV shm semantics);
+            // set_len below sizes the segment either way.
+            .truncate(false)
             .open(&path)?;
         file.set_len(size as u64)?;
         // Return a synthetic shmid (use file descriptor as ID)

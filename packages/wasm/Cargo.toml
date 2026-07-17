@@ -13,7 +13,10 @@ aris-render = { path = "../render" }
 # tairitsu-ssr provides render_to_html(): a synchronous, non-tokio host that
 # loads a WASM Component (wasm32-wasip2), instantiates it with the
 # tairitsu-browser:full WIT world, calls lifecycle::start, and returns the
-# rendered body HTML string. We depend on the local source tree so the whole
-# stack (wasmtime, wasi, wit-bindgen) uses one consistent version.
-# Path: packages/wasm → packages → aris → celestia → tairitsu
-tairitsu-ssr = { path = "../../../tairitsu/packages/ssr" }
+# rendered body HTML string. Fetched from the tairitsu repo so standalone
+# checkouts and CI resolve; pinned by rev for reproducibility (bump manually
+# when tairitsu needs to move). For local tairitsu development, override in
+# ~/.cargo/config.toml:
+#   [patch.'https://github.com/celestia-island/tairitsu.git']
+#   tairitsu-ssr = { path = "<celestia>/tairitsu/packages/ssr" }
+tairitsu-ssr = { git = "https://github.com/celestia-island/tairitsu.git", rev = "6e5cbc722c02e045064fbb1c6d65c7cec13c69d0" }

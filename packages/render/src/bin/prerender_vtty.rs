@@ -52,20 +52,68 @@ fn main() {
 fn vtty_console_html() -> String {
     // (timestamp, subsystem, message) — timestamps follow kernel printk format.
     let lines: &[(&str, &str, &str)] = &[
-        ("    0.000000", "kei", "booting kernel 0.1.0 (asterinas fork) on qemu-virt aarch64"),
-        ("    0.000000", "kei", "machine: linux,dummy-virt — cortex-a72, 1 cpu, 2048 MiB"),
-        ("    0.000214", "ostd", "memory: buddy allocator online, 2048 MiB managed"),
-        ("    0.000391", "ostd", "trap: exception vectors installed (VBAR_EL1)"),
-        ("    0.000522", "gicv3", "distributor + redistributor online, 256 INTIDs"),
-        ("    0.000846", "timer", "arch timer PPI 30 armed @ 62.5 MHz"),
+        (
+            "    0.000000",
+            "kei",
+            "booting kernel 0.1.0 (asterinas fork) on qemu-virt aarch64",
+        ),
+        (
+            "    0.000000",
+            "kei",
+            "machine: linux,dummy-virt — cortex-a72, 1 cpu, 2048 MiB",
+        ),
+        (
+            "    0.000214",
+            "ostd",
+            "memory: buddy allocator online, 2048 MiB managed",
+        ),
+        (
+            "    0.000391",
+            "ostd",
+            "trap: exception vectors installed (VBAR_EL1)",
+        ),
+        (
+            "    0.000522",
+            "gicv3",
+            "distributor + redistributor online, 256 INTIDs",
+        ),
+        (
+            "    0.000846",
+            "timer",
+            "arch timer PPI 30 armed @ 62.5 MHz",
+        ),
         ("    0.001208", "virtio-mmio", "probing 8 device slots"),
-        ("    0.001355", "virtio-net", "eth0 up — 10.0.2.15/24 gw 10.0.2.2"),
-        ("    0.001402", "virtio-gpu", "scanout 0 → 1280x800, registered as /dev/fb0"),
+        (
+            "    0.001355",
+            "virtio-net",
+            "eth0 up — 10.0.2.15/24 gw 10.0.2.2",
+        ),
+        (
+            "    0.001402",
+            "virtio-gpu",
+            "scanout 0 → 1280x800, registered as /dev/fb0",
+        ),
         ("    0.002108", "smp", "1 processor online (BSP)"),
-        ("    0.002544", "initramfs", "unpacked cpio archive, /init found"),
-        ("    0.003012", "kei", "syscall table ready — 318 syscalls wired"),
-        ("    0.003290", "kei", "gateway mode — ws json-rpc listening on 0.0.0.0:8423"),
-        ("    0.003311", "vtty", "aris-render console active on /dev/fb0 (1280x800)"),
+        (
+            "    0.002544",
+            "initramfs",
+            "unpacked cpio archive, /init found",
+        ),
+        (
+            "    0.003012",
+            "kei",
+            "syscall table ready — 318 syscalls wired",
+        ),
+        (
+            "    0.003290",
+            "kei",
+            "gateway mode — ws json-rpc listening on 0.0.0.0:8423",
+        ),
+        (
+            "    0.003311",
+            "vtty",
+            "aris-render console active on /dev/fb0 (1280x800)",
+        ),
         ("    0.003402", "kei", "boot complete in 3.40 ms"),
     ];
 
@@ -104,10 +152,10 @@ body {{ padding:20px 24px; color:#d6d6d6;
 #[cfg(feature = "render")]
 fn save_png(path: &str, width: u32, height: u32, rgba: &[u8]) {
     use std::io::BufWriter;
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).expect("create output dir");
-        }
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).expect("create output dir");
     }
     let file = std::fs::File::create(path).expect("create png");
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);

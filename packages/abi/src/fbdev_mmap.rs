@@ -43,8 +43,13 @@ impl FbDevMmap {
         let file = OpenOptions::new().read(true).write(true).open(path)?;
 
         let mut vscreeninfo = FbVarScreenInfo {
-            xres: 0, yres: 0, xres_virtual: 0, yres_virtual: 0,
-            xoffset: 0, yoffset: 0, bits_per_pixel: 0,
+            xres: 0,
+            yres: 0,
+            xres_virtual: 0,
+            yres_virtual: 0,
+            xoffset: 0,
+            yoffset: 0,
+            bits_per_pixel: 0,
             _rest: [0; 160 - 7 * 4],
         };
 
@@ -66,14 +71,16 @@ impl FbDevMmap {
         let stride = (width * (bpp / 8)) as usize;
 
         // Try mmap for direct pixel access.
-        let mmap = unsafe {
-            memmap2::MmapOptions::new()
-                .len(fb_size)
-                .map_mut(&file)
-                .ok()
-        };
+        let mmap = unsafe { memmap2::MmapOptions::new().len(fb_size).map_mut(&file).ok() };
 
-        Ok(Self { file, width, height, bpp, stride, mmap })
+        Ok(Self {
+            file,
+            width,
+            height,
+            bpp,
+            stride,
+            mmap,
+        })
     }
 
     /// Returns the framebuffer resolution (width, height).

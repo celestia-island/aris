@@ -57,7 +57,10 @@ fn main() {
                 .chunks_exact(4)
                 .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
                 .count();
-            let pct = non_black.checked_mul(100).and_then(|n| n.checked_div(total)).unwrap_or(0);
+            let pct = non_black
+                .checked_mul(100)
+                .and_then(|n| n.checked_div(total))
+                .unwrap_or(0);
             eprintln!(
                 "[wasm] rendered {}x{}: non-black {}/{} ({}%)",
                 frame.width, frame.height, non_black, total, pct

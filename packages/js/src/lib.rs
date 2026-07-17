@@ -66,9 +66,12 @@ pub fn execute_scripts(html: &str) -> JsExecResult {
 
     // Extract document properties
     if let Ok(val) = ctx.eval(boa_engine::Source::from_bytes(
-        "JSON.stringify(__doc_props)"
+        "JSON.stringify(__doc_props)",
     )) {
-        let json_str = val.to_string(&mut ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+        let json_str = val
+            .to_string(&mut ctx)
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
         if let Some(title) = extract_json_string(&json_str, "title") {
             result.document_props.insert("title".to_string(), title);
         }
@@ -79,9 +82,12 @@ pub fn execute_scripts(html: &str) -> JsExecResult {
 
     // Extract console output
     if let Ok(val) = ctx.eval(boa_engine::Source::from_bytes(
-        "JSON.stringify(__doc_props.__console || [])"
+        "JSON.stringify(__doc_props.__console || [])",
     )) {
-        let json_str = val.to_string(&mut ctx).map(|s| s.to_std_string_escaped()).unwrap_or_default();
+        let json_str = val
+            .to_string(&mut ctx)
+            .map(|s| s.to_std_string_escaped())
+            .unwrap_or_default();
         result.console_output = parse_json_string_array(&json_str);
         for line in &result.console_output {
             eprintln!("[Boa console.log] {}", line);

@@ -10,7 +10,7 @@ static mut CTOR_RAN: u32 = 0;
 #[cfg(unix)]
 #[unsafe(link_section = ".init_array")]
 #[used]
-static CTOR: unsafe extern "C" fn() = unsafe { ctor_init };
+static CTOR: unsafe extern "C" fn() = ctor_init;
 
 #[cfg(unix)]
 unsafe extern "C" fn ctor_init() {

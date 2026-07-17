@@ -363,16 +363,27 @@ fn new_font_context() -> parley::FontContext {
         .collect();
 
     use GenericFamily::*;
-    for generic in [SansSerif, Serif, Cursive, Fantasy, SystemUi, UiSerif, UiSansSerif, UiRounded, Emoji, Math, FangSong] {
+    for generic in [
+        SansSerif,
+        Serif,
+        Cursive,
+        Fantasy,
+        SystemUi,
+        UiSerif,
+        UiSansSerif,
+        UiRounded,
+        Emoji,
+        Math,
+        FangSong,
+    ] {
         font_ctx
             .collection
             .append_generic_families(generic, sans_ids.iter().copied());
     }
     for generic in [Monospace, UiMonospace] {
-        font_ctx.collection.append_generic_families(
-            generic,
-            mono_ids.iter().chain(sans_ids.iter()).copied(),
-        );
+        font_ctx
+            .collection
+            .append_generic_families(generic, mono_ids.iter().chain(sans_ids.iter()).copied());
     }
     let all_ids = || sans_ids.iter().chain(mono_ids.iter()).copied();
     for tag in [*b"Latn", *b"Grek", *b"Cyrl", *b"Zyyy", *b"Zinh"] {

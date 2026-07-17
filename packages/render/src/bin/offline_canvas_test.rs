@@ -16,10 +16,16 @@ fn main() {
     canvas.set_fill_style("red");
     canvas.fill_rect(10.0, 10.0, 50.0, 50.0);
 
-    assert!(canvas.has_content(), "scene should have content after fill_rect");
+    assert!(
+        canvas.has_content(),
+        "scene should have content after fill_rect"
+    );
 
     let [r, g, b, a] = canvas.fill.components;
-    println!("fill color components = ({:.3}, {:.3}, {:.3}, {:.3})", r, g, b, a);
+    println!(
+        "fill color components = ({:.3}, {:.3}, {:.3}, {:.3})",
+        r, g, b, a
+    );
     assert!(r > 0.9 && g < 0.1 && b < 0.1, "expected red fill");
 
     canvas.clear_rect(0.0, 0.0, 100.0, 100.0);

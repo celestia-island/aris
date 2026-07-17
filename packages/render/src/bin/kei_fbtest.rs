@@ -71,9 +71,12 @@ fn real_main() {
             for x in 0..width {
                 let c = if y < 50 {
                     header
-                } else if y >= 58 && y < 86 {
+                } else if (58..86).contains(&y) {
                     addrbg
-                } else if (y >= 100 && y < 180) || (y >= 195 && y < 275) || (y >= 290 && y < 370) {
+                } else if (100..180).contains(&y)
+                    || (195..275).contains(&y)
+                    || (290..370).contains(&y)
+                {
                     card
                 } else {
                     bg

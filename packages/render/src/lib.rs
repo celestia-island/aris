@@ -102,16 +102,27 @@ pub fn new_embedded_font_context() -> parley::FontContext {
     // Generic families → embedded faces. Mono-first for monospace,
     // DejaVu Sans for everything else.
     use GenericFamily::*;
-    for generic in [SansSerif, Serif, Cursive, Fantasy, SystemUi, UiSerif, UiSansSerif, UiRounded, Emoji, Math, FangSong] {
+    for generic in [
+        SansSerif,
+        Serif,
+        Cursive,
+        Fantasy,
+        SystemUi,
+        UiSerif,
+        UiSansSerif,
+        UiRounded,
+        Emoji,
+        Math,
+        FangSong,
+    ] {
         font_ctx
             .collection
             .set_generic_families(generic, sans_ids.iter().copied());
     }
     for generic in [Monospace, UiMonospace] {
-        font_ctx.collection.set_generic_families(
-            generic,
-            mono_ids.iter().chain(sans_ids.iter()).copied(),
-        );
+        font_ctx
+            .collection
+            .set_generic_families(generic, mono_ids.iter().chain(sans_ids.iter()).copied());
     }
 
     // Script fallbacks → embedded faces, so runs in any of these scripts

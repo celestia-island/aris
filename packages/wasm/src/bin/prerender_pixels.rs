@@ -36,22 +36,27 @@ fn main() {
             std::process::exit(1);
         }
     };
-    eprintln!("[prerender] Loaded {} bytes from {}", wasm_bytes.len(), wasm_path);
+    eprintln!(
+        "[prerender] Loaded {} bytes from {}",
+        wasm_bytes.len(),
+        wasm_path
+    );
 
     // Step 1: Execute the tairitsu component via Wasmtime SSR → HTML
     eprintln!("[prerender] SSR rendering at {}x{}...", width, height);
-    let ssr_html = match aris_wasm::render_component_to_html(&wasm_bytes, width as i32, height as i32) {
-        Ok(h) => {
-            eprintln!("[prerender] SSR produced {} bytes of HTML", h.len());
-            // Also dump HTML for debugging
-            let _ = std::fs::write("tests/fixtures/kei_desktop_rendered.html", &h);
-            h
-        }
-        Err(e) => {
-            eprintln!("[prerender] SSR error: {:?}", e);
-            std::process::exit(1);
-        }
-    };
+    let ssr_html =
+        match aris_wasm::render_component_to_html(&wasm_bytes, width as i32, height as i32) {
+            Ok(h) => {
+                eprintln!("[prerender] SSR produced {} bytes of HTML", h.len());
+                // Also dump HTML for debugging
+                let _ = std::fs::write("tests/fixtures/kei_desktop_rendered.html", &h);
+                h
+            }
+            Err(e) => {
+                eprintln!("[prerender] SSR error: {:?}", e);
+                std::process::exit(1);
+            }
+        };
 
     // Wrap SSR HTML in a proper HTML document with body background.
     // Blitz renders <body> as black by default; we need to set it to match
@@ -83,7 +88,10 @@ fn main() {
         .chunks_exact(4)
         .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
         .count();
-    let pct = non_black.checked_mul(100).and_then(|n| n.checked_div(total)).unwrap_or(0);
+    let pct = non_black
+        .checked_mul(100)
+        .and_then(|n| n.checked_div(total))
+        .unwrap_or(0);
     eprintln!(
         "[prerender] Rasterized {}x{}: non-black {}/{} ({}%)",
         frame.width, frame.height, non_black, total, pct
