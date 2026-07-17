@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Desktop browser window backend using winit + softbuffer.
 //!
 //! Features:

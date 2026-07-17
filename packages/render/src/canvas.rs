@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Canvas 2D API backing store using anyrender::Scene.
 //!
 //! Each `<canvas>` element gets a `Canvas2D` that records drawing commands into

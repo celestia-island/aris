@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Boa JS engine integration for aris-render.
 //!
 //! Provides minimal JavaScript execution for `<script>` tags in HTML.

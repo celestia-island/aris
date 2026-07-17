@@ -6,7 +6,7 @@
 
 <div align="center">
 
-[![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](../../LICENSE)
+[![License: SySL-1.0](https://img.shields.io/badge/License-SySL--1.0-blue.svg)](https://sysl.celestia.world)
 [![Checks](https://img.shields.io/github/actions/workflow/status/celestia-island/aris/ci.yml)](https://github.com/celestia-island/aris/actions/workflows/ci.yml)
 
 </div>
@@ -93,4 +93,4 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## 라이선스
 
-Business Source License 1.1 (BUSL-1.1). 2030-01-01에 SySL-1.0 또는 Apache-2.0으로 전환. [LICENSE](../../LICENSE) 참조.
+SySL-1.0 (Synthetic Source License). [LICENSE](../../LICENSE) 또는 [SySL 웹사이트](https://sysl.celestia.world) 참조.

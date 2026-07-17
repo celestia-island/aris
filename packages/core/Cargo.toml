@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 description = "aris-core — device firmware supervisor, runs on the gateway box"
-license.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "aris-core"

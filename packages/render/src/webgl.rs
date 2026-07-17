@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! WebGL translation layer: maps WebGL API calls to wgpu commands.
 //!
 //! When `getContext('webgl')` is called on a canvas, this module creates a

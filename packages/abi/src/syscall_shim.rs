@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Syscall fallbacks for missing Linux syscalls on kei.
 //!
 //! kei implements ~240 Linux syscalls natively. This module provides

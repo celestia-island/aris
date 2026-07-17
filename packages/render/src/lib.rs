@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! aris-render — HTML/CSS rendering pipeline for the aris HMI.
 
 #![allow(unsafe_code)]

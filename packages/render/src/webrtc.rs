@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! WebRTC support via str0m (pure Rust, sans-IO).
 //!
 //! This module provides a Rust-side WebRTC peer connection backed by str0m.

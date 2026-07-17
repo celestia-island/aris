@@ -3,7 +3,7 @@ name = "aris-wasm"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license-file.workspace = true
 description = "WASM Component Model host for aris — runs tairitsu/hikari components via Wasmtime"
 
 [dependencies]

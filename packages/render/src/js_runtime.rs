@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Persistent Boa JS runtime for a document, supporting `addEventListener`.
 //!
 //! The runtime owns a single Boa [`Context`] that lives for the document's

@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! Interactive DOM↔Boa JS bridge for click handlers.
 //!
 //! When a click resolves to an element carrying an `onclick` attribute, the

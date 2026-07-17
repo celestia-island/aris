@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! DRM ioctl → fbdev translation layer.
 //!
 //! When a Linux binary expects `/dev/dri/card0` and DRM ioctls (e.g.

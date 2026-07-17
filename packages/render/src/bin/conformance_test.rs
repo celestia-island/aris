@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: BUSL-1.1
-
 //! aris conformance test suite runner.
 //
 // Runs a battery of spec-derived tests covering HTML rendering, CSS, DOM,
