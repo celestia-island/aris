@@ -27,7 +27,7 @@ eth_interfaces = ["eth0", "eth1"]
 #   "enip",      # Rockwell EtherNet/IP + CIP
 #
 # Tier 3 (third-party plugins) — declared in [[protocol_plugins]] below,
-# loaded at runtime via JSON-RPC (arona types) over WebSocket or IPC.
+# loaded at runtime via JSON-RPC (plana types) over WebSocket or IPC.
 evernight_features = [
     "hardware",
     "protocol",
@@ -63,7 +63,7 @@ usb_net_cidr = 24
 usb_net_dhcp_start = "10.0.99.100"
 usb_net_dhcp_end = "10.0.99.200"
 
-# Tier 3 protocol plugins — external processes that speak JSON-RPC (arona types)
+# Tier 3 protocol plugins — external processes that speak JSON-RPC (plana types)
 # over WebSocket or Unix domain socket. Declared here, loaded at evernight startup.
 #
 # Each plugin is an independent process. evernight connects to it at the given
