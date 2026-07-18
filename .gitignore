@@ -50,3 +50,4 @@ patches/boa_engine_021/target/
 patches/boa_engine/target/
 patches/boa_parser/target/
 patches/boa_gc/target/
+.cargo/config.toml
