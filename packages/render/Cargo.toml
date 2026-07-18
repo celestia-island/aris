@@ -18,9 +18,9 @@ memmap2 = "0.9"
 # fontconfig dependency can't cross-compile, so we only enable it on desktop.
 # These are optional so fbdev-only builds (kei_fbtest) stay slim and avoid
 # pulling in heavy musl-incompatible runtime deps.
-blitz-dom = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
+blitz-dom = { version = "=0.3.0-beta.1", default-features = false, optional = true }
 blitz-paint = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
-blitz-traits = { version = "=0.3.0-alpha.6", optional = true }
+blitz-traits = { version = "=0.3.0-beta.1", optional = true }
 blitz-html = { version = "=0.3.0-alpha.6", optional = true }
 anyrender = { version = "0.11", optional = true }
 anyrender_vello_cpu = { version = "0.14", optional = true }
@@ -30,10 +30,10 @@ peniko = "0.6"
 # For embedded font registration (render_html_with_font).
 # All font stack crates come from crates.io (no local forks).
 linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.10", default-features = false, features = [
+parley = { version = "0.11", default-features = false, features = [
     "std",
 ], optional = true }
-fontique = { version = "0.10", default-features = false, features = [
+fontique = { version = "0.11", default-features = false, features = [
     "std",
 ], optional = true }
 
@@ -74,7 +74,7 @@ image = { version = "0.25", default-features = false, features = [
 ], optional = true }
 
 # Dev-only: PNG encoding for the offscreen_chrome test binary.
-png = { version = "0.17", optional = true }
+png = { version = "0.18", optional = true }
 # WebGL rendering backend (wgpu + naga for GLSL→WGSL translation).
 wgpu = { version = "30", optional = true }
 naga = { version = "30", features = ["wgsl-out", "glsl-in"], optional = true }
