@@ -111,9 +111,4 @@ Run the `render_window` binary for a full desktop browser window:
 cargo run -p aris-render --bin render_window --features winit-backend
 ```
 
-## Related Projects
 
-- **[kei](https://github.com/celestia-island/kei)** — Rust OS kernel providing syscall ABI and framebuffer
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — WASM UI framework with VDOM
-- **[hikari](https://github.com/celestia-island/hikari)** — UI component library built on tairitsu
-- **[shirabe](https://github.com/celestia-island/shirabe)** — Browser automation, defines render FFI contract

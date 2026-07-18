@@ -26,9 +26,4 @@ ARIS est un moteur de navigateur dérivé de servo. Il peut être intégré comm
 1. **Mode intégré** (bibliothèque) : `render_html()` produit un buffer de pixels
 2. **Mode autonome** (navigateur) : `render_window` ouvre une fenêtre complète
 
-## Projets liés
 
-- **[kei](https://github.com/celestia-island/kei)** — Noyau OS Rust
-- **[tairitsu](https://github.com/celestia-island/tairitsu)** — Framework UI WASM
-- **[hikari](https://github.com/celestia-island/hikari)** — Bibliothèque de composants UI
-- **[shirabe](https://github.com/celestia-island/shirabe)** — Automatisation navigateur
