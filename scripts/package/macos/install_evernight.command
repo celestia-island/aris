@@ -1,7 +1,7 @@
 #!/bin/bash
-# ============================================================
+# ------
 #  Entelecheia Gateway — Evernight auto-installer for macOS
-# ============================================================
+# ------
 #  When the user double-clicks this .command file, Terminal opens
 #  and this script runs. It installs the evernight client.
 #
@@ -11,7 +11,7 @@
 #    3. Creates a launchd agent (auto-start on login)
 #    4. Configures the USB-C NCM network interface
 #    5. Opens Safari to the gateway dashboard
-# ============================================================
+# ------
 
 set -euo pipefail
 

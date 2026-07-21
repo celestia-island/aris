@@ -30,7 +30,7 @@ use boa_macros::JsData;
 use std::{cell::Cell, rc::Rc};
 use tap::{Conv, Pipe};
 
-// ==================== Public API ====================
+// ------ Public API ------
 
 /// The current state of a [`Promise`].
 #[derive(Debug, Clone, Finalize, PartialEq, Eq)]
@@ -129,7 +129,7 @@ unsafe impl Trace for ResolvingFunctions {
     });
 }
 
-// ==================== Private API ====================
+// ------ Private API ------
 
 /// `IfAbruptRejectPromise ( value, capability )`
 ///

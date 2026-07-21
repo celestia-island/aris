@@ -1,9 +1,9 @@
 #!/bin/bash
-# ============================================================
+# ------
 #  Build the installer FAT image using Docker for root operations.
 #  This wraps build_installer_image.sh — Docker provides the root
 #  environment needed for loop-mount, even when the host user isn't root.
-# ============================================================
+# ------
 
 set -euo pipefail
 
