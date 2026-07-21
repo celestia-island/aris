@@ -7,8 +7,7 @@ license-file.workspace = true
 description = "WASM Component Model host for aris — runs tairitsu/hikari components via Wasmtime"
 
 [dependencies]
-anyhow.workspace = true
-tracing.workspace = true
+
 aris-render = { path = "../render" }
 # tairitsu-ssr provides render_to_html(): a synchronous, non-tokio host that
 # loads a WASM Component (wasm32-wasip2), instantiates it with the
@@ -20,3 +19,6 @@ aris-render = { path = "../render" }
 #   [patch.'https://github.com/celestia-island/tairitsu.git']
 #   tairitsu-ssr = { path = "<celestia>/tairitsu/packages/ssr" }
 tairitsu-ssr = { git = "https://github.com/celestia-island/tairitsu.git", rev = "6e5cbc722c02e045064fbb1c6d65c7cec13c69d0" }
+
+anyhow.workspace = true
+tracing.workspace = true

@@ -7,12 +7,12 @@ license-file.workspace = true
 description = "Linux ABI compatibility layer for kei — syscall fallbacks, fbdev, DRM translation, proc/sys"
 
 [dependencies]
+
 anyhow.workspace = true
-thiserror.workspace = true
-tracing.workspace = true
 libc = "0.2"
 memmap2 = "0.9"
-
+thiserror.workspace = true
+tracing.workspace = true
 [features]
 default = []
 # Enable fbdev user-space driver

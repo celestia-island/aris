@@ -8,4 +8,5 @@ description = "aris-common — shared types and constants for aris"
 license-file.workspace = true
 
 [dependencies]
+
 serde = { workspace = true, features = ["derive"] }
