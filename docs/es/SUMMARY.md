@@ -9,3 +9,4 @@
 - [Inicio rápido](./build/quickstart.md)
 - [Visión general de la arquitectura](./architecture/overview.md)
 - [Despliegue](./guides/deployment.md)
+- [Aprovisionamiento cero-configuración por USB-C](./guides/usb-c-provisioning.md)
