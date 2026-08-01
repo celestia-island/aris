@@ -77,6 +77,7 @@ test:
 
 # Format Rust + Markdown docs
 fmt:
+    just fmt-toml
     cargo fmt --all
     just fmt-markdown
 

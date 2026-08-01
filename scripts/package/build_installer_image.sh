@@ -1,7 +1,7 @@
 #!/bin/bash
-# ============================================================
+# ------
 #  build_installer_image.sh — Assemble the USB mass-storage image
-# ============================================================
+# ------
 #
 #  This script is run during firmware build (or manually) to create
 #  the FAT32 image that the USB composite gadget exposes as a virtual
@@ -25,7 +25,7 @@
 #
 #  Example:
 #    ./build_installer_image.sh output/installer.img ../evernight/target
-# ============================================================
+# ------
 
 set -euo pipefail
 

@@ -1,7 +1,7 @@
 #!/bin/bash
-# ============================================================
+# ------
 #  Entelecheia Gateway — Evernight auto-installer for Linux
-# ============================================================
+# ------
 #  This script installs the evernight client on a Linux machine
 #  when the gateway is connected via USB-C.
 #
@@ -14,7 +14,7 @@
 #    4. Configures the USB-C NCM network interface
 #    5. Registers this machine as a node with the gateway
 #    5. Opens the browser to the gateway dashboard
-# ============================================================
+# ------
 
 set -euo pipefail
 

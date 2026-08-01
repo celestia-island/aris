@@ -1,5 +1,5 @@
 #!/bin/bash
-# ============================================================
+# ------
 #  Create fixture binaries for testing.
 #
 #  Each fixture is a REAL cross-compiled ELF/PE/Mach-O produced by
@@ -18,7 +18,7 @@
 #  that require a musl C cross-toolchain not present in CI. The
 #  aris-core supervisor itself cross-compiles to aarch64 musl without
 #  any C toolchain — see `scripts/build.py` and the PLAN.
-# ============================================================
+# ------
 
 set -euo pipefail
 

@@ -355,7 +355,7 @@ impl Atomics {
         Ok(value.into())
     }
 
-    // =========== Atomics.ops start ===========
+    // ------ Atomics.ops start ------
 
     atomic_op! {
         /// [`Atomics.add ( typedArray, index, value )`][spec]
