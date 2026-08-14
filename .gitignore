@@ -51,3 +51,6 @@ patches/boa_engine/target/
 patches/boa_parser/target/
 patches/boa_gc/target/
 .cargo/config.toml
+
+# Accidental doubled test dir (from running create_fixtures.sh with a relative arg)
+tests/tests/
