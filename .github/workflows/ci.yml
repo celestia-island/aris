@@ -13,7 +13,7 @@ jobs:
   check:
     runs-on: [self-hosted, linux, x64, local]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # yeslogic-fontconfig-sys (via aris-render) needs the system fontconfig
@@ -24,7 +24,7 @@ jobs:
   clippy:
     runs-on: [self-hosted, linux, x64, local]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -35,7 +35,7 @@ jobs:
   fmt:
     runs-on: [self-hosted, linux, x64, local]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -44,7 +44,7 @@ jobs:
   test:
     runs-on: [self-hosted, linux, x64, local]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev pkg-config
