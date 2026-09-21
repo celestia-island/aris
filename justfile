@@ -15,6 +15,7 @@ set lists
 # always wins over an imported one, regardless of position — so the fallback
 # below MUST mirror the devtools expression, or it would silently override it.
 set allow-duplicate-variables
+set allow-duplicate-recipes
 
 # Shared celestia-devtools recipes — NOT in git. This justfile references shared
 # variables, so the import is REQUIRED. Bootstrap once: celestia-devtools init
@@ -35,25 +36,9 @@ import? "./.just/celestia-devtools.just"
 # Stage shared celestia-devtools recipes into .just/ (gitignored).
 # Source order: explicit URL arg → local pip bundle (offline) → GitHub raw.
 # curl honors HTTP_PROXY/HTTPS_PROXY/ALL_PROXY env vars automatically.
-[script('bash')]
 fetch URL='':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    out=.just/celestia-devtools.just
-    mkdir -p .just
-    if [ -n "{{URL}}" ]; then
-      echo "[fetch] {{URL}} -> $out"
-      curl -fsSL "{{URL}}" -o "$out"
-    elif command -v celestia-devtools >/dev/null 2>&1; then
-      src=$(celestia-devtools include-path)
-      echo "[fetch] local bundle ($src) -> $out"
-      cp "$src" "$out"
-    else
-      echo "[fetch] github raw -> $out"
-      curl -fsSL "https://raw.githubusercontent.com/celestia-island/celestia-devtools/dev/src/celestia_devtools/common.just" -o "$out"
-    fi
-    echo "[fetch] wrote $out"
-
+    {{ if os_family() == "windows" { "python" } else { "python3" } }} -c "import os; os.makedirs('.just', exist_ok=True)"
+    {{ if URL != "" { "curl -fsSL " + URL + " -o .just/celestia-devtools.just" } else if which("celestia-devtools") != "" { "celestia-devtools fetch-just" } else { "curl -fsSL https://raw.githubusercontent.com/celestia-island/celestia-devtools/dev/src/celestia_devtools/common.just -o .just/celestia-devtools.just" } }}
 default: build
 
 # ── Environment ─────────────────────────────────────────────
@@ -164,11 +149,11 @@ test-quick:
 
 # Build the USB mass-storage installer image (exposed to hosts via USB-C)
 build-installer-image OUTPUT="output/installer.img" EVERNIGHT_DIR="output/evernight-binaries":
-    bash scripts/package/build_installer_image.sh {{OUTPUT}} {{EVERNIGHT_DIR}}
+    {{python_cmd}} scripts/package/build_installer_image.py {{OUTPUT}} {{EVERNIGHT_DIR}}
 
 # Create fixture binaries for testing
 create-fixtures:
-    bash tests/fixtures/create_fixtures.sh
+    {{python_cmd}} tests/fixtures/create_fixtures.py
 
 # ── Windows Testing ──────────────────────────────────────
 
