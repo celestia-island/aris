@@ -24,7 +24,7 @@ flowchart LR
     SD["microSD\n(≥ 8 GB)"] --> Board
     TTL["USB-TTL\n(CP2102/FTDI)"] -->|GND/TX/RX| Board
     WAN["eth0 — WAN\n(upstream network)"] --> Board
-    Board --> LAN["eth1 — LAN\n(192.168.42.0/24)"]
+    Board --> LAN["eth1 — LAN\n(192.0.2.10/24)"]
     LAN --> PLC["PLC / مستشعر / HMI"]
 ```
 
@@ -84,7 +84,7 @@ flowchart TB
         CORP -->|eth0 — WAN| GW
     end
     subgraph Field["شبكة الحقل (eth1)"]
-        GW -->|192.168.42.0/24| PLC["PLC\n192.168.42.5"]
+        GW -->|192.0.2.10/24| PLC["PLC\n192.168.42.5"]
         GW -->|Modbus TCP :502| SENS["مستشعر الحرارة\n192.168.42.10"]
         GW -->|OPC UA :4840| HMI["لوحة HMI\n192.168.42.20"]
     end
@@ -93,7 +93,7 @@ flowchart TB
 
 - **eth0 (WAN)**: يتصل بالشبكة المحلية للمؤسسة أو مباشرة بالإنترنت. DHCP
   افتراضيًا؛ يمكن تكوين IP ثابت عبر `/data/network.toml`.
-- **eth1 (LAN)**: يخدم شبكة الناقل الميداني المحلية على `192.168.42.0/24`.
+- **eth1 (LAN)**: يخدم شبكة الناقل الميداني المحلية على `192.0.2.10/24`.
   هنا تتصل PLCs والمستشعرات وواجهات HMI.
 
 ## تحديثات OTA

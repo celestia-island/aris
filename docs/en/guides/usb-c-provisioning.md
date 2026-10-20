@@ -19,7 +19,7 @@ evernight client is installed with zero manual configuration.
 ## CDC-NCM (Virtual Ethernet)
 
 A virtual Ethernet adapter giving the host a direct IP link to the gateway
-dashboard at `http://10.0.99.1:8080`.
+dashboard at `http://192.0.2.11:8080`.
 
 ## Flow
 
@@ -28,7 +28,7 @@ flowchart LR
     HOST["Host PC / Phone"] -->|"USB-C"| ARIS["ARIS gateway"]
     ARIS -->|"Mass Storage\n(auto-installer)"| HOST
     ARIS -->|"CDC-NCM\n(virtual Ethernet)"| HOST
-    HOST -->|"http://10.0.99.1:8080"| DASH["Gateway Dashboard"]
+    HOST -->|"http://192.0.2.11:8080"| DASH["Gateway Dashboard"]
 ```
 
 **Plug in USB-C → host sees a USB drive → open the installer → done.**

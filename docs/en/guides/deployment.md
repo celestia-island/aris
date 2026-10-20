@@ -24,7 +24,7 @@ flowchart LR
     SD["microSD\n(≥ 8 GB)"] --> Board
     TTL["USB-TTL\n(CP2102/FTDI)"] -->|GND/TX/RX| Board
     WAN["eth0 — WAN\n(upstream network)"] --> Board
-    Board --> LAN["eth1 — LAN\n(192.168.42.0/24)"]
+    Board --> LAN["eth1 — LAN\n(192.0.2.10/24)"]
     LAN --> PLC["PLC / Sensor / HMI"]
 ```
 
@@ -84,7 +84,7 @@ flowchart TB
         CORP -->|eth0 — WAN| GW
     end
     subgraph Field["Field Network (eth1)"]
-        GW -->|192.168.42.0/24| PLC["PLC\n192.168.42.5"]
+        GW -->|192.0.2.10/24| PLC["PLC\n192.168.42.5"]
         GW -->|Modbus TCP :502| SENS["Temperature Sensor\n192.168.42.10"]
         GW -->|OPC UA :4840| HMI["HMI Panel\n192.168.42.20"]
     end
@@ -93,7 +93,7 @@ flowchart TB
 
 - **eth0 (WAN)**: Connects to the upstream corporate network or directly to the
   internet. DHCP by default; static IP configurable via `/data/network.toml`.
-- **eth1 (LAN)**: Serves the local fieldbus network at `192.168.42.0/24`. This
+- **eth1 (LAN)**: Serves the local fieldbus network at `192.0.2.10/24`. This
   is where PLCs, sensors, and HMIs connect.
 
 ## OTA Updates
