@@ -55,8 +55,8 @@ to the connected host (PC, phone, tablet):
    - `common/evernight-{windows,linux,darwin}-{amd64,arm64}` — Cross-compiled binaries
 
 2. **CDC-NCM** — A virtual Ethernet adapter. The gateway assigns itself
-   `10.0.99.1/24` and the host gets `10.0.99.100`. This provides a direct
-   IP link for the dashboard at `http://10.0.99.1:8080`.
+   `192.0.2.10/24` and the host gets `192.0.2.11`. This provides a direct
+   IP link for the dashboard at `http://192.0.2.10:8080`.
 
 ### Runtime management
 

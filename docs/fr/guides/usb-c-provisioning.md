@@ -20,7 +20,7 @@ manuelle.
 ## CDC-NCM (Ethernet virtuel)
 
 Un adaptateur Ethernet virtuel offrant à l'hôte une liaison IP directe vers le
-tableau de bord de la passerelle à l'adresse `http://10.0.99.1:8080`.
+tableau de bord de la passerelle à l'adresse `http://192.0.2.10:8080`.
 
 ## Flux
 
@@ -29,7 +29,7 @@ flowchart LR
     HOST["PC / Téléphone"] -->|"USB-C"| ARIS["Passerelle ARIS"]
     ARIS -->|"Stockage de masse\n(auto-installateur)"| HOST
     ARIS -->|"CDC-NCM\n(Ethernet virtuel)"| HOST
-    HOST -->|"http://10.0.99.1:8080"| DASH["Tableau de bord de la passerelle"]
+    HOST -->|"http://192.0.2.10:8080"| DASH["Tableau de bord de la passerelle"]
 ```
 
 **Branchez USB-C → l'hôte voit un lecteur USB → ouvrez l'installateur → fini.**

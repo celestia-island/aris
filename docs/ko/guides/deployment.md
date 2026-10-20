@@ -24,7 +24,7 @@ flowchart LR
     SD["microSD\n(≥ 8 GB)"] --> Board
     TTL["USB-TTL\n(CP2102/FTDI)"] -->|GND/TX/RX| Board
     WAN["eth0 — WAN\n(upstream network)"] --> Board
-    Board --> LAN["eth1 — LAN\n(192.168.42.0/24)"]
+    Board --> LAN["eth1 — LAN\n(192.0.2.12/24)"]
     LAN --> PLC["PLC / 센서 / HMI"]
 ```
 
@@ -83,7 +83,7 @@ flowchart TB
         CORP -->|eth0 — WAN| GW
     end
     subgraph Field["현장 네트워크 (eth1)"]
-        GW -->|192.168.42.0/24| PLC["PLC\n192.168.42.5"]
+        GW -->|192.0.2.12/24| PLC["PLC\n192.168.42.5"]
         GW -->|Modbus TCP :502| SENS["온도 센서\n192.168.42.10"]
         GW -->|OPC UA :4840| HMI["HMI 패널\n192.168.42.20"]
     end
@@ -92,7 +92,7 @@ flowchart TB
 
 - **eth0 (WAN)**: 상위 기업 네트워크 또는 인터넷에 직접 연결됩니다. 기본값은
   DHCP. 고정 IP는 `/data/network.toml`을 통해 구성 가능합니다.
-- **eth1 (LAN)**: 로컬 필드버스 네트워크를 `192.168.42.0/24`로 제공합니다.
+- **eth1 (LAN)**: 로컬 필드버스 네트워크를 `192.0.2.12/24`로 제공합니다.
   PLC, 센서, HMI가 여기에 연결됩니다.
 
 ## OTA 업데이트

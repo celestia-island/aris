@@ -24,7 +24,7 @@ flowchart LR
     SD["microSD\n(≥ 8 GB)"] --> Board
     TTL["USB-TTL\n(CP2102/FTDI)"] -->|GND/TX/RX| Board
     WAN["eth0 — WAN\n(upstream network)"] --> Board
-    Board --> LAN["eth1 — LAN\n(192.168.42.0/24)"]
+    Board --> LAN["eth1 — LAN\n(192.0.2.12/24)"]
     LAN --> PLC["PLC / センサー / HMI"]
 ```
 
@@ -85,7 +85,7 @@ flowchart TB
         CORP -->|eth0 — WAN| GW
     end
     subgraph Field["現場ネットワーク (eth1)"]
-        GW -->|192.168.42.0/24| PLC["PLC\n192.168.42.5"]
+        GW -->|192.0.2.12/24| PLC["PLC\n192.168.42.5"]
         GW -->|Modbus TCP :502| SENS["温度センサー\n192.168.42.10"]
         GW -->|OPC UA :4840| HMI["HMI パネル\n192.168.42.20"]
     end
@@ -94,7 +94,7 @@ flowchart TB
 
 - **eth0 (WAN)**：上流の企業ネットワークまたは直接インターネットに接続します。
   デフォルトは DHCP。固定 IP は `/data/network.toml` で設定可能です。
-- **eth1 (LAN)**：ローカルフィールドバスネットワークを `192.168.42.0/24`
+- **eth1 (LAN)**：ローカルフィールドバスネットワークを `192.0.2.12/24`
   で提供します。PLC、センサー、HMI がここに接続します。
 
 ## OTA アップデート

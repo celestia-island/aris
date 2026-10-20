@@ -19,7 +19,7 @@ cliente evernight se instala sin configuración manual.
 ## CDC-NCM (Ethernet virtual)
 
 Un adaptador Ethernet virtual que brinda al host un enlace IP directo al panel
-de la puerta de enlace en `http://10.0.99.1:8080`.
+de la puerta de enlace en `http://192.0.2.10:8080`.
 
 ## Flujo
 
@@ -28,7 +28,7 @@ flowchart LR
     HOST["PC / Teléfono"] -->|"USB-C"| ARIS["Puerta de enlace ARIS"]
     ARIS -->|"Almacenamiento masivo\n(auto-instalador)"| HOST
     ARIS -->|"CDC-NCM\n(Ethernet virtual)"| HOST
-    HOST -->|"http://10.0.99.1:8080"| DASH["Panel de la puerta de enlace"]
+    HOST -->|"http://192.0.2.10:8080"| DASH["Panel de la puerta de enlace"]
 ```
 
 **Conecte USB-C → el host ve una unidad USB → abra el instalador → listo.**
