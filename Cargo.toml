@@ -18,18 +18,12 @@ edition = "2024"
 rust-version = "1.91"
 authors = ["langyo <langyo.china@gmail.com>"]
 license-file = "LICENSE"
-description = "aris — a pure-Rust browser engine derived from servo, embeddable and standalone"
-repository = "https://github.com/celestia-island/aris"
 
 [workspace.dependencies]
 anyhow = "^1"
-async-trait = "^0.1"
-clap = { version = "^4", features = ["derive"] }
 thiserror = "^2"
 
 serde = { version = "^1", features = ["derive"] }
-serde_json = "^1"
-toml = "^0.8"
 
 tracing = { version = "^0.1", features = ["log"] }
 tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
@@ -55,13 +49,10 @@ reqwest = { version = "^0.12", default-features = false, features = [
     "rustls-tls",
     "stream",
 ] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 futures-util = "^0.3"
 
 # Dev / test
 tempfile = "^3"
-
-common = { path = "packages/common" }
 
 # ── Build profiles ──────────────────────────────────────────
 
