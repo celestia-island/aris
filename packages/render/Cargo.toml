@@ -13,15 +13,15 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true }
 libc = "0.2"
 memmap2 = "0.9"
-# blitz-dom: system_fonts is enabled via the "desktop" feature (see below).
+# blitz-dom: system-fonts is enabled via the "desktop" feature (see below).
 # Without it, blitz-dom creates an empty font collection. On musl/kei, the
 # fontconfig dependency can't cross-compile, so we only enable it on desktop.
 # These are optional so fbdev-only builds (kei_fbtest) stay slim and avoid
 # pulling in heavy musl-incompatible runtime deps.
 blitz-dom = { version = "=0.3.0-beta.1", default-features = false, optional = true }
-blitz-paint = { version = "=0.3.0-alpha.6", default-features = false, optional = true }
+blitz-paint = { version = "=0.3.0-beta.1", default-features = false, optional = true }
 blitz-traits = { version = "=0.3.0-beta.1", optional = true }
-blitz-html = { version = "=0.3.0-alpha.6", optional = true }
+blitz-html = { version = "=0.3.0-beta.1", optional = true }
 anyrender = { version = "0.11", optional = true }
 anyrender_vello_cpu = { version = "0.14", optional = true }
 # kurbo + peniko for Canvas 2D vector geometry (must match anyrender's versions).
@@ -30,10 +30,10 @@ peniko = "0.6"
 # For embedded font registration (render_html_with_font).
 # All font stack crates come from crates.io (no local forks).
 linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.11", default-features = false, features = [
+parley = { version = "0.10", default-features = false, features = [
     "std",
 ], optional = true }
-fontique = { version = "0.11", default-features = false, features = [
+fontique = { version = "0.10", default-features = false, features = [
     "std",
 ], optional = true }
 
@@ -102,9 +102,9 @@ render = [
     "dep:keyboard-types",
     "dep:png",
 ]
-# Enable system_fonts on blitz-dom for text rendering (requires fontconfig).
+# Enable system-fonts on blitz-dom for text rendering (requires fontconfig).
 # Disable for musl cross-compile: cargo build --no-default-features
-desktop = ["blitz-dom/system_fonts", "blitz-dom/svg"]
+desktop = ["blitz-dom/system-fonts", "blitz-dom/svg"]
 # Execute <script> blocks via Boa before rendering.
 js = ["dep:aris-js", "dep:boa_engine", "dep:boa_gc"]
 # PNG encoding/decoding only (for pre-rendered framebuffer assets, e.g. the
