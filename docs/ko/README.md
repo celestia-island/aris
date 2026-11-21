@@ -73,20 +73,11 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## 아키텍처
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (UI 컴포넌트)              │
-│  WASM Component Model → WIT 인터페이스                │
-├──────────────────────────────────────────────────────┤
-│  ARIS 렌더링 파이프라인                                 │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  Boa JS 엔진 (페이지 스크립트)                          │
-│  Wasmtime (WASM 컴포넌트, WASI)                       │
-├──────────────────────────────────────────────────────┤
-│  디스플레이 백엔드: /dev/fb0 · winit+softbuffer        │
-├──────────────────────────────────────────────────────┤
-│  kei 커널 (syscall ABI) 또는 Linux                    │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari（UI 컴포넌트）<br/>WASM Component Model → WIT 인터페이스"] --> B["ARIS 렌더링 파이프라인<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>Boa JS 엔진 (페이지 스크립트)<br/>Wasmtime (WASM 컴포넌트, WASI)"]
+    B --> C["디스플레이 백엔드: /dev/fb0 · winit+softbuffer"]
+    C --> D["kei 커널 (syscall ABI) 또는 Linux"]
 ```
 
 자세한 내용은 [아키텍처 개요](./architecture/overview.md)를 참조하세요.

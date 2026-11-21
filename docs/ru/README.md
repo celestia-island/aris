@@ -73,20 +73,11 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## Архитектура
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (UI компоненты)            │
-│  WASM Component Model → интерфейс WIT                │
-├──────────────────────────────────────────────────────┤
-│  Конвейер рендеринга ARIS                              │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  Движок Boa JS (скрипты страниц)                      │
-│  Wasmtime (WASM компоненты, WASI)                     │
-├──────────────────────────────────────────────────────┤
-│  Бэкенды отображения: /dev/fb0 · winit+softbuffer     │
-├──────────────────────────────────────────────────────┤
-│  Ядро kei (syscall ABI) или Linux                     │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari（UI компоненты）<br/>WASM Component Model → интерфейс WIT"] --> B["Конвейер рендеринга ARIS<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>Движок Boa JS (скрипты страниц)<br/>Wasmtime (WASM компоненты, WASI)"]
+    B --> C["Бэкенды отображения: /dev/fb0 · winit+softbuffer"]
+    C --> D["Ядро kei (syscall ABI) или Linux"]
 ```
 
 Подробнее в [обзоре архитектуры](./architecture/overview.md).

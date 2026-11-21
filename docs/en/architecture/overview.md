@@ -58,21 +58,18 @@ ARIS renders to a pixel buffer which can be displayed through multiple backends:
 
 ## System Integration
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Application Layer                                       │
-│  tairitsu (VDOM) · hikari (UI components)                │
-├──────────────────────────────────────────────────────────┤
-│  ARIS Browser Engine                                     │
-│  ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌──────────┐     │
-│  │ render  │ │   js    │ │  wasm    │ │   abi    │     │
-│  │ HTML→   │ │ boa_    │ │ wasmtime │ │ Linux    │     │
-│  │ pixels  │ │ engine  │ │ + WIT   │ │ compat   │     │
-│  └─────────┘ └─────────┘ └──────────┘ └──────────┘     │
-├──────────────────────────────────────────────────────────┤
-│  Kernel Layer                                            │
-│  kei (syscall ABI, /dev/fb0, virtio-gpu) or Linux       │
-└──────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    APP["Application Layer<br/>tairitsu (VDOM) · hikari (UI components)"]
+    subgraph ENGINE["ARIS Browser Engine"]
+        R["render<br/>HTML→pixels"]
+        J["js<br/>boa_engine"]
+        W["wasm<br/>wasmtime + WIT"]
+        AB["abi<br/>Linux compat"]
+    end
+    KERNEL["Kernel Layer<br/>kei (syscall ABI, /dev/fb0, virtio-gpu) or Linux"]
+    APP --> ENGINE
+    ENGINE --> KERNEL
 ```
 
 ## Package Structure
