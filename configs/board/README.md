@@ -33,15 +33,9 @@ as a **USB device/gadget** (the normal runtime mode).
 When configured as a composite gadget, the board presents two functions
 to the connected host (PC, phone, tablet):
 
-```
-  ┌──────────────────────┐         ┌──────────────────┐
-  │  Host PC / Phone     │◄──USB-C──┤  NanoPi R3S      │
-  │                      │         │  (gadget mode)   │
-  │  Sees:               │         │                  │
-  │   • USB Drive (FAT)  │         │   mass_storage   │
-  │     with installers  │         │   + NCM Ethernet │
-  │   • NCM Net Adapter  │         │                  │
-  └──────────────────────┘         └──────────────────┘
+```mermaid
+graph LR
+    HOST["Host PC / Phone<br/>Sees:<br/>• USB Drive (FAT) with installers<br/>• NCM Net Adapter"] <-->|USB-C| BOARD["NanoPi R3S<br/>(gadget mode)<br/>mass_storage<br/>+ NCM Ethernet"]
 ```
 
 ### What the host sees

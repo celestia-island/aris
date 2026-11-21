@@ -73,20 +73,11 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## البنية
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (مكونات UI)               │
-│  WASM Component Model → واجهة WIT                    │
-├──────────────────────────────────────────────────────┤
-│  خط أنابيب التصيير ARIS                                │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  محرك Boa JS (نصوص الصفحات)                           │
-│  Wasmtime (مكونات WASM, WASI)                        │
-├──────────────────────────────────────────────────────┤
-│  خلفيات العرض: /dev/fb0 · winit+softbuffer           │
-├──────────────────────────────────────────────────────┤
-│  نواة kei (syscall ABI) أو Linux                     │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari（مكونات UI）<br/>WASM Component Model → واجهة WIT"] --> B["خط أنابيب التصيير ARIS<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>محرك Boa JS (نصوص الصفحات)<br/>Wasmtime (مكونات WASM, WASI)"]
+    B --> C["خلفيات العرض: /dev/fb0 · winit+softbuffer"]
+    C --> D["نواة kei (syscall ABI) أو Linux"]
 ```
 
 انظر [نظرة عامة على البنية](./architecture/overview.md).

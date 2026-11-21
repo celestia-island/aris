@@ -73,20 +73,11 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## アーキテクチャ
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (UI コンポーネント)         │
-│  WASM Component Model → WIT インターフェース           │
-├──────────────────────────────────────────────────────┤
-│  ARIS レンダリングパイプライン                          │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  Boa JS エンジン（ページスクリプト）                     │
-│  Wasmtime（WASM コンポーネント, WASI）                  │
-├──────────────────────────────────────────────────────┤
-│  ディスプレイバックエンド: /dev/fb0 · winit+softbuffer  │
-├──────────────────────────────────────────────────────┤
-│  kei カーネル（syscall ABI）または Linux               │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari（UI コンポーネント）<br/>WASM Component Model → WIT インターフェース"] --> B["ARIS レンダリングパイプライン<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>Boa JS エンジン（ページスクリプト）<br/>Wasmtime（WASM コンポーネント, WASI）"]
+    B --> C["ディスプレイバックエンド: /dev/fb0 · winit+softbuffer"]
+    C --> D["kei カーネル（syscall ABI）または Linux"]
 ```
 
 詳細は[アーキテクチャ概要](./architecture/overview.md)を参照。

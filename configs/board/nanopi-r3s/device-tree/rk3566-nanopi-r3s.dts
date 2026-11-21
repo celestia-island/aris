@@ -71,11 +71,10 @@
  * and one USB-C port (power + data) wired to the RK3566's DWC3 DRD
  * controller.  The USB-C port is the one used for gadget mode:
  *
- *   ┌──────────────────────┐         ┌──────────────────┐
- *   │  Host PC / Phone     │◄──USB-C──┤  NanoPi R3S      │
- *   │  (sees mass-storage  │         │  (gadget mode)   │
- *   │   + RNDIS adapter)   │         │                  │
- *   └──────────────────────┘         └──────────────────┘
+ *   ```mermaid
+ *   graph LR
+ *     HOST["Host PC / Phone<br/>(sees mass-storage<br/>+ RNDIS adapter)"] <-->|USB-C| BOARD["NanoPi R3S<br/>(gadget mode)"]
+ *   ```
  *
  * u2phy0_otg provides the PHY, usbdrd3_0 is the DWC3 wrapper, and
  * usbdrd_dwc3_0 is the controller node.  dr_mode = "otg" lets the

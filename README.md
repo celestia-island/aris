@@ -113,20 +113,11 @@ See the [build guide](./docs/en/build/quickstart.md) for detailed instructions.
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (UI components)            │
-│  WASM Component Model → WIT interface                │
-├──────────────────────────────────────────────────────┤
-│  ARIS render pipeline                                 │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  Boa JS engine (page scripts)                        │
-│  Wasmtime (WASM components, WASI)                    │
-├──────────────────────────────────────────────────────┤
-│  Display backends: /dev/fb0 · winit+softbuffer       │
-├──────────────────────────────────────────────────────┤
-│  kei kernel (syscall ABI) or Linux                   │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari (UI components)<br/>WASM Component Model → WIT interface"] --> B["ARIS render pipeline<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>Boa JS engine (page scripts)<br/>Wasmtime (WASM components, WASI)"]
+    B --> C["Display backends: /dev/fb0 · winit+softbuffer"]
+    C --> D["kei kernel (syscall ABI) or Linux"]
 ```
 
 See the [architecture overview](./docs/en/architecture/overview.md) for details.

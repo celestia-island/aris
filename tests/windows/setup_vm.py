@@ -22,10 +22,10 @@ required. The ISO is a free 90-day evaluation license.
   just windows-setup                    # Manual (point to your own ISO)
 
 Architecture:
-  ┌──────────────────┐     ┌─────────────────┐     ┌──────────────────┐
-  │  Windows QEMU VM │────▶│  virtual USB    │────▶│  installer.img   │
-  │  (user's ISO)    │     │  mass-storage   │     │  (FAT16 image)    │
-  └──────────────────┘     └─────────────────┘     └──────────────────┘
+  ```mermaid
+  graph LR
+    A["Windows QEMU VM<br/>(user's ISO)"] --> B["virtual USB<br/>mass-storage"] --> C["installer.img<br/>(FAT16 image)"]
+  ```
 
 Requirements:
   - qemu-system-x86_64 (installed: ✅)

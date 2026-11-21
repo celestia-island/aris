@@ -73,20 +73,11 @@ cargo run -p aris-render --bin render_window --features winit-backend
 
 ## 架構
 
-```
-┌──────────────────────────────────────────────────────┐
-│  tairitsu (VDOM) / hikari (UI 組件)                  │
-│  WASM Component Model → WIT 介面                     │
-├──────────────────────────────────────────────────────┤
-│  ARIS 渲染管線                                        │
-│  html5ever → stylo → taffy → parley → vello_cpu → RGBA│
-│  Boa JS 引擎（頁面腳本）                               │
-│  Wasmtime（WASM 組件, WASI）                          │
-├──────────────────────────────────────────────────────┤
-│  顯示後端: /dev/fb0 · winit+softbuffer                │
-├──────────────────────────────────────────────────────┤
-│  kei 核心（syscall ABI）或 Linux                       │
-└──────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    A["tairitsu (VDOM) / hikari（UI 組件）<br/>WASM Component Model → WIT 介面"] --> B["ARIS 渲染管線<br/>html5ever → stylo → taffy → parley → vello_cpu → RGBA<br/>Boa JS 引擎（頁面腳本）<br/>Wasmtime（WASM 組件, WASI）"]
+    B --> C["顯示後端: /dev/fb0 · winit+softbuffer"]
+    C --> D["kei 核心（syscall ABI）或 Linux"]
 ```
 
 詳見[架構概覽](./architecture/overview.md)。
