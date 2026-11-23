@@ -1,4 +1,4 @@
-<p align="center"><img src="./docs/logo.webp" alt="ARIS" width="240" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/celestia-island/celestia-island.github.io/main/res/logos/aris.webp" alt="ARIS" width="240" /></p>
 
 <h1 align="center">ARIS</h1>
 

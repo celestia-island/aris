@@ -5,7 +5,7 @@
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="./assets/logo_yellow.svg">
       <source media="(prefers-color-scheme: light)" srcset="./assets/logo_black.svg">
-      <img alt="Boa logo" src="./assets/logo.png">
+      <img alt="Boa logo" src="https://raw.githubusercontent.com/celestia-island/celestia-island.github.io/main/res/logos/aris.webp">
     </picture>
     </a>
 </p>
