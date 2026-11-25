@@ -14333,3 +14333,82 @@ mod listener_registry_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod idless_canvas_tests {
+    //! Pin the id-less getContext scratch-slot path (L940 leftover ③).
+    //!
+    //! A pending element handle (`createElement('div')`, not yet appended)
+    //! carries `_arisId = 0` but still gets `getContext` from
+    //! `make_element_handle`, so `getContext('2d')` is reachable on it. The
+    //! contract (master parity): hand out a working 2D context instead of
+    //! null — R6's null-return regression would fail this test.
+    //!
+    //! Key domain: the id-less route homes under `CANVAS_HOME[0]`, where 0 is
+    //! the node-id sentinel — NOT an allocation id. All id-less handles on a
+    //! thread therefore share one buffer (production code documents this at
+    //! the getContext site). The assertion below checks the *routing*
+    //! (CANVAS_HOME[0] names an allocation whose buffer holds the fillRect),
+    //! not merely "allocation 0 has content".
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    /// The allocation id the id-less scratch route homed under node 0.
+    fn scratch_alloc() -> Option<u64> {
+        super::CANVAS_HOME.with(|home| home.borrow().get(&0).copied())
+    }
+
+    fn alloc_has_content(alloc: u64) -> bool {
+        super::CANVASES.with(|cs| {
+            cs.borrow()
+                .get(&alloc)
+                .map(|c| c.has_content())
+                .unwrap_or(false)
+        })
+    }
+
+    #[test]
+    fn idless_handle_get_context_uses_scratch_slot() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var pending = document.createElement('div');
+            var ctx = pending.getContext('2d');
+            ctx.fillRect(0, 0, 4, 4);
+            document.getElementById('out').setText(ctx === null ? 'null' : 'ctx');
+            "#,
+        );
+        let out = doc
+            .get_node(blitz_traits::NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "ctx",
+            "an id-less pending handle must get a working 2D context (master parity)"
+        );
+        // Identity, not coincidence: the id-less handle must have homed an
+        // allocation under CANVAS_HOME[0] and the fillRect must have landed
+        // in THAT allocation. (Asserting "allocation 0 has content" instead
+        // would also pass for a refactor that gave each handle a fresh
+        // private buffer — that mutation survived round 2.)
+        let alloc = scratch_alloc()
+            .expect("the id-less handle must home an allocation under CANVAS_HOME[0]");
+        assert!(
+            alloc_has_content(alloc),
+            "the fillRect must land in the scratch allocation {alloc} that CANVAS_HOME[0] names"
+        );
+    }
+}
