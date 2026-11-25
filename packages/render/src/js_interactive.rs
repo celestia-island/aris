@@ -176,24 +176,24 @@ fn collect_ids(doc: &BaseDocument) -> HashMap<String, u64> {
 
 fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
     let nid = blitz_traits::NodeId::from_u64(node_id);
-    let first_text = doc.get_node(nid).and_then(|n| {
+    // Mutator session: reuses the node's first text child when present
+    // (damage + devtools records), else appends a text child with the full
+    // materialization the parse-time path gets (L940 leftover ①-cycle).
+    let mut mutator = doc.mutate();
+    let first_text = mutator.doc.get_node(nid).and_then(|n| {
         n.children.iter().copied().find(|&c| {
-            doc.get_node(c)
+            mutator
+                .doc
+                .get_node(c)
                 .map(|cn| cn.text_data().is_some())
                 .unwrap_or(false)
         })
     });
-    if let Some(text_id) = first_text {
-        if let Some(tn) = doc.get_node_mut(text_id).and_then(|n| n.text_data_mut()) {
-            tn.content = value.to_string();
-        }
-    } else {
-        let new_id = doc.create_text_node(value);
-        if let Some(parent) = doc.get_node_mut(nid) {
-            parent.children.push(new_id);
-        }
-        if let Some(child) = doc.get_node_mut(new_id) {
-            child.parent = Some(nid);
+    match first_text {
+        Some(text_id) => mutator.set_node_text(text_id, value),
+        None => {
+            let text_id = mutator.create_text_node(value);
+            mutator.append_children(nid, &[text_id]);
         }
     }
 }
@@ -211,33 +211,27 @@ fn create_and_append(
     text: &str,
     attrs: &[(String, String)],
 ) {
-    use blitz_dom::{ElementData, NodeData, QualName};
     let attrs_vec = attrs
         .iter()
         .map(|(k, v)| blitz_dom::Attribute {
-            name: QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            name: blitz_dom::QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
             value: v.as_str().into(),
         })
         .collect();
-    let el = ElementData::new(
-        QualName::new(None, blitz_dom::ns!(html), tag.into()),
+    // Mutator session: create_element materializes stylo style data, and
+    // append_children runs process_added_subtree (IS_IN_DOCUMENT + damage +
+    // id map + per-tag post-processing) — the materialization the raw
+    // create_node + children.push dance skipped, leaving replay-created
+    // nodes at 0×0 and uncomposited (L940 leftover ①-cycle).
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), tag.into()),
         attrs_vec,
     );
-    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
-    if let Some(parent) = doc.get_node_mut(blitz_traits::NodeId::from_u64(parent_id)) {
-        parent.children.push(new_id);
-    }
-    if let Some(child) = doc.get_node_mut(new_id) {
-        child.parent = Some(blitz_traits::NodeId::from_u64(parent_id));
-    }
+    mutator.append_children(blitz_traits::NodeId::from_u64(parent_id), &[new_id]);
     if !text.is_empty() {
-        let text_id = doc.create_text_node(text);
-        if let Some(el) = doc.get_node_mut(new_id) {
-            el.children.push(text_id);
-        }
-        if let Some(tn) = doc.get_node_mut(text_id) {
-            tn.parent = Some(new_id);
-        }
+        let text_id = mutator.create_text_node(text);
+        mutator.append_children(new_id, &[text_id]);
     }
 }
 
@@ -565,5 +559,80 @@ mod id_domain_tests {
                 "ids[{name}] = {id:#x} is not a live tree id (truncated?)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod element_materialization_tests {
+    //! Guard the one-shot bridge's element-append path (L940 leftover ①-cycle,
+    //! R3 S2): `js_interactive::create_and_append` is the only replay-created
+    //! element site with real shipping reach (run_onclick's AppendChild op),
+    //! and R3's probe showed a raw-create revert would regress it to
+    //! `is_in_document=false size=(0.0, 0.0)` while `cargo test` stayed green.
+
+    use super::*;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn onclick_created_element_materializes_in_document() {
+        let html = r#"<section id="root"></section><button id="b" onclick="var r = document.getElementById('root'); var d = document.createElement('div'); d.textContent = 'x'; r.appendChild(d);">go</button>"#;
+        // font_ctx: the headless test has no system-font discovery, so text
+        // shaping needs the crate's embedded-font context (without it the
+        // text line box is 0pt high and the size assertion measures fonts,
+        // not the materialization under test).
+        let doc_config = DocumentConfig {
+            viewport: Some(blitz_traits::shell::Viewport {
+                window_size: (800, 600),
+                hidpi_scale: 1.0,
+                ..Default::default()
+            }),
+            font_ctx: Some(crate::new_embedded_font_context()),
+            ..Default::default()
+        };
+        let mut doc = HtmlDocument::from_html(html, doc_config);
+        let clicked = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("fixture missing #b");
+
+        let result = run_onclick(&mut doc, clicked);
+        assert!(result.executed, "onclick must run");
+        assert!(
+            result.dom_mutated,
+            "append must record a DOM mutation; result = {result:?}"
+        );
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+        // Materialization: the replay-created div is in the document and
+        // carries a real layout box (a raw create_node regression shows up
+        // as is_in_document=false / 0×0 here).
+        doc.resolve(0.0);
+        let created = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| {
+                n.element_data()
+                    .map(|e| format!("{:?}", e.name.local).contains("'div'"))
+                    .unwrap_or(false)
+                    && n.attr(blitz_dom::local_name!("id")) != Some("root")
+            })
+            .expect("created div not found in tree");
+        assert!(
+            created.1.flags.is_in_document(),
+            "replay-created div must be materialized into the document"
+        );
+        // The materialization property: the node participates in layout at
+        // the viewport width (a raw-create regression shows up as 0-width).
+        // Height is text-shaping-dependent and not asserted here.
+        let size = created.1.final_layout().size;
+        assert!(
+            size.width > 100.0,
+            "replay-created div must lay out at the viewport width, got {size:?}"
+        );
+        let _ = NodeId::from_u64(created.0.as_u64()); // id round-trip smoke
     }
 }
