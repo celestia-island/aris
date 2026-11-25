@@ -25,7 +25,20 @@ use boa_engine::property::Attribute;
 thread_local! {
     pub(crate) static CANVASES: std::cell::RefCell<HashMap<u64, crate::canvas::Canvas2D>> =
         std::cell::RefCell::new(HashMap::new());
+    /// DOM node id → canvas allocation id. Buffers live in CANVASES keyed by
+    /// the allocation id (stable for the buffer's lifetime, so captured
+    /// 2D-context closures keep writing to the same slot); this map is the
+    /// only place that knows which DOM node a buffer composites into.
+    /// Inline canvases register at getContext time; created canvases
+    /// register when their AttachCanvas op is replayed (L940 leftover ②).
+    pub(crate) static CANVAS_HOME: std::cell::RefCell<HashMap<u64, u64>> =
+        std::cell::RefCell::new(HashMap::new());
     static NEXT_CANVAS_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Resolve the allocation id a DOM node's canvas buffer lives under.
+pub(crate) fn canvas_home_for(node_id: u64) -> Option<u64> {
+    CANVAS_HOME.with(|home| home.borrow().get(&node_id).copied())
 }
 
 /// Allocate a new canvas id and create the buffer.
@@ -81,6 +94,10 @@ struct Bridge {
     ids: HashMap<String, u64>,
     ops: Vec<Op>,
     next_pending: u32,
+    /// Monotonic sequence for addEventListener global names
+    /// (`__aris_listener_<node>_<seq>`), keeping multiple handlers of one
+    /// node distinct.
+    next_listener_reg: u32,
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
@@ -120,6 +137,12 @@ enum Op {
     AppendChild {
         parent_id: u64,
         pending_id: u32,
+    },
+    /// A created canvas handle was appended: create a real `<canvas>` node
+    /// under `parent_id` and home the existing buffer `alloc_id` to it.
+    AttachCanvas {
+        parent_id: u64,
+        alloc_id: u64,
     },
 }
 
@@ -455,7 +478,33 @@ fn apply_op(
                 create_and_append(doc, *parent_id, tag, text, attrs);
             }
         }
+        Op::AttachCanvas {
+            parent_id,
+            alloc_id,
+        } => attach_canvas_node(doc, *parent_id, *alloc_id),
     }
+}
+
+/// Create a real `<canvas>` element under `parent_id` and home the already
+/// allocated buffer `alloc_id` to the new node id, so the compositor finds
+/// it (createElement handles carry the allocation id, not a node id).
+fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
+    use blitz_dom::{ElementData, NodeData, QualName};
+    let parent = blitz_traits::NodeId::from_u64(parent_id);
+    let el = ElementData::new(
+        QualName::new(None, blitz_dom::ns!(html), "canvas".into()),
+        Vec::new(),
+    );
+    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
+    if let Some(p) = doc.get_node_mut(parent) {
+        p.children.push(new_id);
+    }
+    if let Some(c) = doc.get_node_mut(new_id) {
+        c.parent = Some(parent);
+    }
+    CANVAS_HOME.with(|home| {
+        home.borrow_mut().insert(new_id.as_u64(), alloc_id);
+    });
 }
 
 // ── DOM helpers (shared with js_interactive) ───────────────
@@ -1051,6 +1100,19 @@ fn read_pending(v: &JsValue) -> Option<u32> {
         .get(boa_engine::js_string!("_pending"), &mut Context::default())
         .ok()?;
     p.as_number().map(|n| n as u32)
+}
+
+/// Allocation id carried by created canvas handles (`_canvasAlloc`), so
+/// appendChild can route an AttachCanvas op before a DOM node exists.
+fn read_canvas_alloc(v: &JsValue) -> Option<u64> {
+    let obj = v.as_object()?;
+    let a = obj
+        .get(
+            boa_engine::js_string!("_canvasAlloc"),
+            &mut Context::default(),
+        )
+        .ok()?;
+    a.as_number().map(|n| n as u64)
 }
 
 /// Clone a JS node object: copy all enumerable own properties (except internal
@@ -10370,6 +10432,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
 fn make_canvas_handle(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
 
+    // `_canvasAlloc` routes appendChild: the handle carries the allocation
+    // id, and the DOM node id only exists once the op replay creates the
+    // real element (AttachCanvas homes the two together).
+
     let get_context = NativeFunction::from_copy_closure(move |_this, args, ctx| {
         let kind = arg_string(args, 0);
         if kind == "webgl" || kind == "experimental-webgl" {
@@ -10382,6 +10448,11 @@ fn make_canvas_handle(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     });
 
     let obj = ObjectInitializer::new(ctx)
+        .property(
+            boa_engine::js_string!("_canvasAlloc"),
+            JsValue::from(canvas_id),
+            Attribute::all(),
+        )
         .property(
             boa_engine::js_string!("width"),
             JsValue::from(300),
@@ -11048,13 +11119,12 @@ fn make_element_handle(
         if kind != "2d" {
             return Ok(JsValue::null());
         }
-        let cid = read_handle_id(_this).unwrap_or(0);
-        CANVASES.with(|cs| {
-            cs.borrow_mut()
-                .entry(cid)
-                .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
+        let node_id = read_handle_id(_this).unwrap_or(0);
+        let alloc = CANVAS_HOME.with(|home| {
+            let mut hm = home.borrow_mut();
+            *hm.entry(node_id).or_insert_with(|| alloc_canvas(300, 150))
         });
-        Ok(make_context_2d(ctx, cid)?.into())
+        Ok(make_context_2d(ctx, alloc)?.into())
     });
     init.function(get_ctx, boa_engine::js_string!("getContext"), 1);
 
@@ -12132,6 +12202,13 @@ fn make_element_handle(
                     parent_id,
                     pending_id: child_pending,
                 });
+            } else if let (Some(parent_id), Some(alloc)) = (parent_id, read_canvas_alloc(&child)) {
+                // Created canvas: the buffer is already allocated under
+                // `alloc`; the op replay creates the DOM node and homes it.
+                b.borrow_mut().ops.push(Op::AttachCanvas {
+                    parent_id,
+                    alloc_id: alloc,
+                });
             }
             // JS-level children tracking via insert_into_children (uses JsArray).
             if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
@@ -12142,6 +12219,49 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(append, boa_engine::js_string!("appendChild"), 1);
+
+    // addEventListener — stash the callback under a deterministic global
+    // name (GC-rooted via the global object) and record (node, name) on the
+    // bridge; fire_click later looks the function up by name and calls it
+    // with a fresh handle as `this`. This wires the registration half of the
+    // documented `__aris_listener_<node>_<seq>` mechanism: on master the
+    // push into bridge.new_listeners was never written, so every registered
+    // listener silently vanished (L940 leftover ①).
+    let add_listener = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let event_type = arg_string(args, 0);
+            if event_type.is_empty() {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("addEventListener: type must be a non-empty string")
+                    .into());
+            }
+            let callback = args.get(1).cloned().unwrap_or(JsValue::null());
+            let Some(cb_obj) = callback.as_object().filter(|o| o.is_callable()) else {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("addEventListener: callback must be a function")
+                    .into());
+            };
+            // Pending (not-yet-appended) handles carry no node id yet, so
+            // there is nothing to register against — mirror detached-node
+            // semantics and ignore.
+            let Some(nid) = read_handle_id(this) else {
+                return Ok(JsValue::undefined());
+            };
+            let name = {
+                let mut bb = b.borrow_mut();
+                bb.next_listener_reg += 1;
+                let name = format!("__aris_listener_{nid}_{}", bb.next_listener_reg);
+                bb.new_listeners.push((nid, name.clone()));
+                name
+            };
+            let _ = ctx
+                .global_object()
+                .set(boa_engine::js_string!(name), callback, false, ctx);
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
+    init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
     // removeChild — returns the removed child + updates _children.
     let remove_child = NativeFunction::from_copy_closure(|this, args, ctx| {
@@ -13704,5 +13824,109 @@ mod node_props_tests {
         for (name, id) in &ids {
             assert!(tree_ids.contains(id), "ids[{name}] = {id:#x} is alien");
         }
+    }
+}
+
+#[cfg(test)]
+mod bridge_flow_tests {
+    //! Behavioral pins for the two L940 leftover defects (① listener
+    //! registration dead path, ② canvas key-domain mismatch), exercised
+    //! through the real bridge: script → ops → replay → DOM/compositor.
+
+    use super::JsRuntime;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn find_id(doc: &HtmlDocument, want: &str) -> Option<u64> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(want))
+            .map(|(id, _)| id.as_u64())
+    }
+
+    #[test]
+    fn addEventListener_registration_reaches_fire_click() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">empty</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('btn').addEventListener('click', function () {
+                document.getElementById('out').setText('clicked via listener');
+            });
+        "#,
+        );
+        let Some(btn) = find_id(&doc, "btn") else {
+            panic!("fixture missing #btn");
+        };
+        rt.fire_click(&mut doc, btn);
+        let Some(out) = find_id(&doc, "out") else {
+            panic!("fixture missing #out");
+        };
+        let text = doc
+            .get_node(NodeId::from_u64(out))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            text, "clicked via listener",
+            "a registered click listener must fire and mutate the DOM"
+        );
+    }
+
+    #[test]
+    fn created_canvas_homes_to_its_dom_node() {
+        let mut doc =
+            HtmlDocument::from_html(r#"<html><body></body></html>"#, DocumentConfig::default());
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var c = document.createElement('canvas');
+            c.getContext('2d').fillRect(0, 0, 5, 5);
+            document.body.appendChild(c);
+        "#,
+        );
+
+        // The created canvas must exist as a real DOM node under body...
+        let Some(body) = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| {
+                n.element_data()
+                    .map(|e| format!("{:?}", e.name.local).contains("'body'"))
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| id.as_u64())
+        else {
+            panic!("fixture missing body");
+        };
+        let children = doc
+            .get_node(NodeId::from_u64(body))
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        assert!(
+            !children.is_empty(),
+            "created canvas must enter the DOM once its AttachCanvas op replays"
+        );
+
+        // ...and its buffer must be homed (node id → allocation id) so the
+        // compositor finds it, with the recorded fillRect intact.
+        let canvas_node = children[children.len() - 1].as_u64();
+        let alloc = super::canvas_home_for(canvas_node)
+            .unwrap_or_else(|| panic!("canvas node {canvas_node} must be homed"));
+        let has_content = super::CANVASES.with(|cs| {
+            cs.borrow()
+                .get(&alloc)
+                .map(|c| c.has_content())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_content,
+            "buffer under alloc {alloc} must carry the fillRect content"
+        );
     }
 }
