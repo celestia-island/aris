@@ -193,9 +193,8 @@ impl JsRuntime {
         // Deliberately NOT clearing self.listeners here: this path re-runs
         // for every onclick-attribute click (fire_click → bind_and_run), and
         // clearing would permanently unregister every addEventListener
-        // listener on the page. Registration names are deterministic per
-        // (node, type) and harvest dedupes, so re-running the same script is
-        // idempotent on the listener map.
+        // listener on the page. Harvest dedupes on the deterministic names,
+        // so the re-run's re-registrations collapse instead of stacking.
         self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
@@ -11126,11 +11125,15 @@ fn make_element_handle(
         if kind != "2d" {
             return Ok(JsValue::null());
         }
-        // A detached/id-less handle is not a canvas element in the DOM —
-        // hand out no context rather than aliasing a shared sentinel slot.
-        let Some(node_id) = read_handle_id(_this) else {
-            return Ok(JsValue::null());
-        };
+        // Id-less handles (document.write-materialized elements, which the
+        // bridge never saw at parse time) share the node-0 scratch slot —
+        // master parity. Blitz node ids are versioned and never 0, so slot 0
+        // is never read back by the home lookup (fresh-document ids are all
+        // > u32::MAX; pinned by
+        // node_props_tests::snapshot_ids_are_live_tree_ids). Known limitation
+        // (L940): these buffers are never composited — the replay-created
+        // node carries no layout, master included.
+        let node_id = read_handle_id(_this).unwrap_or(0);
         let alloc = CANVAS_HOME.with(|home| {
             let mut hm = home.borrow_mut();
             *hm.entry(node_id).or_insert_with(|| alloc_canvas(300, 150))
@@ -12010,10 +12013,10 @@ fn make_element_handle(
             // the global object, so the handler outlives the handle object it
             // was registered on — and record (node, name) on the bridge for
             // harvest. On master the push into new_listeners was never written,
-            // so registered listeners silently vanished. The name is
-            // deterministic so re-running a script re-registers under the same
-            // name (harvest dedupes; the global is overwritten) instead of
-            // stacking duplicate firings.
+            // so registered listeners silently vanished. Known limitation:
+            // two handlers on the same (node, type) collide on one name and
+            // only the last survives (multi-handler needs a registry
+            // redesign — see L940).
             if let Some(nid) = read_handle_id(this) {
                 let name = format!("__aris_listener_{nid}_{event_type}");
                 b.borrow_mut().new_listeners.push((nid, name.clone()));
@@ -14005,6 +14008,22 @@ mod bridge_flow_tests {
         assert!(
             has_content,
             "buffer under alloc {alloc} must carry the fillRect content"
+        );
+        // Known limitation (documented, not a regression: master never
+        // painted created canvases either — the shared create_and_append
+        // replay never materializes layout for replay-created nodes). The
+        // node is homed and the buffer holds content, but its layout box is
+        // 0×0 so composite_canvases skips it. If this pin starts failing
+        // because the size became non-zero, the materialization gap was
+        // fixed — update this pin and the L940 entry.
+        let canvas_size = doc
+            .get_node(NodeId::from_u64(canvas_node))
+            .map(|n| n.final_layout().size)
+            .expect("canvas node vanished");
+        assert_eq!(
+            (canvas_size.width, canvas_size.height),
+            (0.0, 0.0),
+            "created-canvas layout stays 0×0 until the replay-path materialization gap is fixed"
         );
     }
 }
