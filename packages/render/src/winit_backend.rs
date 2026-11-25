@@ -845,7 +845,12 @@ impl App {
             let Some(parent_id) = node.parent else {
                 continue;
             };
-            let Some(parent) = doc.get_node(parent_id) else {
+            // final_layout()/absolute_position() panic for non-element kinds
+            // (comment nodes, etc.) — only elements carry layout.
+            let Some(parent) = doc
+                .get_node(parent_id)
+                .filter(|p| p.element_data().is_some())
+            else {
                 continue;
             };
             let pos = parent.absolute_position(0.0, 0.0);
@@ -2084,7 +2089,7 @@ fn winit_key_to_kbd(key: &winit::keyboard::Key) -> keyboard_types::Key {
             NamedKey::Backspace => keyboard_types::Key::Named(keyboard_types::NamedKey::Backspace),
             NamedKey::Tab => keyboard_types::Key::Named(keyboard_types::NamedKey::Tab),
             NamedKey::Escape => keyboard_types::Key::Named(keyboard_types::NamedKey::Escape),
-            // Space has no dedicated variant in keyboard-types 0.7; it is
+            // Space has no dedicated variant in keyboard-types 0.8; it is
             // surfaced as Character(" ").
             NamedKey::Space => keyboard_types::Key::Character(" ".to_string()),
             NamedKey::ArrowLeft => keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowLeft),

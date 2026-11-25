@@ -17,7 +17,9 @@ h1 { color:#E06C75; font-size:48px; margin:20px; }
         Ok(frame) => {
             let non_black = frame
                 .rgba
-                .as_chunks::<4>().0.iter()
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
                 .count();
             tracing::info!(

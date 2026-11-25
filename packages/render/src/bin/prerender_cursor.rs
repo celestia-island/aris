@@ -88,7 +88,9 @@ html, body { width:32px; height:32px; overflow:hidden; background:transparent; }
 
     let non_black = frame
         .rgba
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0] > 5 || px[1] > 5 || px[2] > 5)
         .count();
     eprintln!(
