@@ -25,7 +25,20 @@ use boa_engine::property::Attribute;
 thread_local! {
     pub(crate) static CANVASES: std::cell::RefCell<HashMap<u64, crate::canvas::Canvas2D>> =
         std::cell::RefCell::new(HashMap::new());
+    /// DOM node id → canvas allocation id. Buffers live in CANVASES keyed by
+    /// the allocation id (stable for the buffer's lifetime, so captured
+    /// 2D-context closures keep writing to the same slot); this map is the
+    /// only place that knows which DOM node a buffer composites into.
+    /// Inline canvases register at getContext time; created canvases
+    /// register when their AttachCanvas op is replayed (L940 leftover ②).
+    pub(crate) static CANVAS_HOME: std::cell::RefCell<HashMap<u64, u64>> =
+        std::cell::RefCell::new(HashMap::new());
     static NEXT_CANVAS_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Resolve the allocation id a DOM node's canvas buffer lives under.
+pub(crate) fn canvas_home_for(node_id: u64) -> Option<u64> {
+    CANVAS_HOME.with(|home| home.borrow().get(&node_id).copied())
 }
 
 /// Allocate a new canvas id and create the buffer.
@@ -121,6 +134,12 @@ enum Op {
         parent_id: u64,
         pending_id: u32,
     },
+    /// A created canvas handle was appended: create a real `<canvas>` node
+    /// under `parent_id` and home the existing buffer `alloc_id` to it.
+    AttachCanvas {
+        parent_id: u64,
+        alloc_id: u64,
+    },
 }
 
 impl JsRuntime {
@@ -171,7 +190,11 @@ impl JsRuntime {
             b.pending.clear();
             b.next_pending = 0;
         }
-        self.listeners.clear();
+        // Deliberately NOT clearing self.listeners here: this path re-runs
+        // for every onclick-attribute click (fire_click → bind_and_run), and
+        // clearing would permanently unregister every addEventListener
+        // listener on the page. Harvest dedupes on the deterministic names,
+        // so the re-run's re-registrations collapse instead of stacking.
         self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
@@ -266,7 +289,13 @@ impl JsRuntime {
     fn harvest_listeners(&mut self) {
         let new = std::mem::take(&mut self.bridge.borrow_mut().new_listeners);
         for (node_id, name) in new {
-            self.listeners.entry(node_id).or_default().push(name);
+            // Names are deterministic per (node, type): re-running a script
+            // re-registers under the same name, so dedupe here instead of
+            // stacking duplicate firings.
+            let entry = self.listeners.entry(node_id).or_default();
+            if !entry.contains(&name) {
+                entry.push(name);
+            }
         }
     }
 
@@ -455,7 +484,33 @@ fn apply_op(
                 create_and_append(doc, *parent_id, tag, text, attrs);
             }
         }
+        Op::AttachCanvas {
+            parent_id,
+            alloc_id,
+        } => attach_canvas_node(doc, *parent_id, *alloc_id),
     }
+}
+
+/// Create a real `<canvas>` element under `parent_id` and home the already
+/// allocated buffer `alloc_id` to the new node id, so the compositor finds
+/// it (createElement handles carry the allocation id, not a node id).
+fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
+    use blitz_dom::{ElementData, NodeData, QualName};
+    let parent = blitz_traits::NodeId::from_u64(parent_id);
+    let el = ElementData::new(
+        QualName::new(None, blitz_dom::ns!(html), "canvas".into()),
+        Vec::new(),
+    );
+    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
+    if let Some(p) = doc.get_node_mut(parent) {
+        p.children.push(new_id);
+    }
+    if let Some(c) = doc.get_node_mut(new_id) {
+        c.parent = Some(parent);
+    }
+    CANVAS_HOME.with(|home| {
+        home.borrow_mut().insert(new_id.as_u64(), alloc_id);
+    });
 }
 
 // ── DOM helpers (shared with js_interactive) ───────────────
@@ -1051,6 +1106,19 @@ fn read_pending(v: &JsValue) -> Option<u32> {
         .get(boa_engine::js_string!("_pending"), &mut Context::default())
         .ok()?;
     p.as_number().map(|n| n as u32)
+}
+
+/// Allocation id carried by created canvas handles (`_canvasAlloc`), so
+/// appendChild can route an AttachCanvas op before a DOM node exists.
+fn read_canvas_alloc(v: &JsValue) -> Option<u64> {
+    let obj = v.as_object()?;
+    let a = obj
+        .get(
+            boa_engine::js_string!("_canvasAlloc"),
+            &mut Context::default(),
+        )
+        .ok()?;
+    a.as_number().map(|n| n as u64)
 }
 
 /// Clone a JS node object: copy all enumerable own properties (except internal
@@ -10370,6 +10438,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
 fn make_canvas_handle(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
 
+    // `_canvasAlloc` routes appendChild: the handle carries the allocation
+    // id, and the DOM node id only exists once the op replay creates the
+    // real element (AttachCanvas homes the two together).
+
     let get_context = NativeFunction::from_copy_closure(move |_this, args, ctx| {
         let kind = arg_string(args, 0);
         if kind == "webgl" || kind == "experimental-webgl" {
@@ -10382,6 +10454,11 @@ fn make_canvas_handle(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     });
 
     let obj = ObjectInitializer::new(ctx)
+        .property(
+            boa_engine::js_string!("_canvasAlloc"),
+            JsValue::from(canvas_id),
+            Attribute::all(),
+        )
         .property(
             boa_engine::js_string!("width"),
             JsValue::from(300),
@@ -11048,13 +11125,20 @@ fn make_element_handle(
         if kind != "2d" {
             return Ok(JsValue::null());
         }
-        let cid = read_handle_id(_this).unwrap_or(0);
-        CANVASES.with(|cs| {
-            cs.borrow_mut()
-                .entry(cid)
-                .or_insert_with(|| crate::canvas::Canvas2D::new(300, 150));
+        // Id-less handles (document.write-materialized elements, which the
+        // bridge never saw at parse time) share the node-0 scratch slot —
+        // master parity. Blitz node ids are versioned and never 0, so slot 0
+        // is never read back by the home lookup (fresh-document ids are all
+        // > u32::MAX; pinned by
+        // node_props_tests::snapshot_ids_are_live_tree_ids). Known limitation
+        // (L940): these buffers are never composited — the replay-created
+        // node carries no layout, master included.
+        let node_id = read_handle_id(_this).unwrap_or(0);
+        let alloc = CANVAS_HOME.with(|home| {
+            let mut hm = home.borrow_mut();
+            *hm.entry(node_id).or_insert_with(|| alloc_canvas(300, 150))
         });
-        Ok(make_context_2d(ctx, cid)?.into())
+        Ok(make_context_2d(ctx, alloc)?.into())
     });
     init.function(get_ctx, boa_engine::js_string!("getContext"), 1);
 
@@ -11825,102 +11909,131 @@ fn make_element_handle(
     init.function(has_attributes, boa_engine::js_string!("hasAttributes"), 0);
 
     // addEventListener
-    let add_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let event_type = arg_string(args, 0);
-        let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
-        // Check if options specify passive.
-        let explicit_passive = args
-            .get(2)
-            .and_then(|o| o.as_object())
-            .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
-            .and_then(|v| v.as_boolean());
-        // Determine default passive: touchstart, touchmove, wheel, mousewheel
-        // are passive by default on window/document/documentElement/body.
-        let is_passive_event = matches!(
-            event_type.as_str(),
-            "touchstart" | "touchmove" | "wheel" | "mousewheel"
-        );
-        // Check if this target is a passive-by-default target.
-        // Window: this === global object. Document: nodeName=#document.
-        // documentElement: nodeName=HTML. body: nodeName=BODY.
-        let is_window = this
-            .as_object()
-            .map(|o| {
-                // Check if this is the global object by comparing with ctx.global_object().
-                boa_engine::object::JsObject::equals(&o, &ctx.global_object())
-            })
-            .unwrap_or(false);
-        let target_name = this
-            .as_object()
-            .and_then(|o| o.get(boa_engine::js_string!("nodeName"), ctx).ok())
-            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-            .unwrap_or_default();
-        let is_passive_target = is_window
-            || target_name == "#document"
-            || target_name == "HTML"
-            || target_name == "BODY";
-        let passive = explicit_passive.unwrap_or(is_passive_event && is_passive_target);
-        if let Some(o) = this.as_object() {
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            // Get or create _js_listeners map on this object.
-            let listeners = o
-                .get(boa_engine::js_string!("_js_listeners"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            let lmap = match listeners {
-                Some(m) => m,
-                None => {
-                    let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = o.insert_property(
-                        boa_engine::js_string!("_js_listeners"),
-                        pd(m.clone().into()),
-                    );
-                    m
-                }
-            };
-            // Get or create the array for this event type.
-            let type_arr = lmap
-                .get(boa_engine::js_string!(event_type.clone()), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            let arr = match type_arr {
-                Some(a) => a,
-                None => {
-                    let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = a
-                        .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
-                    let _ = lmap.insert_property(
-                        boa_engine::js_string!(event_type.clone()),
-                        pd(a.clone().into()),
-                    );
-                    a
-                }
-            };
-            let len = arr
-                .get(boa_engine::js_string!("length"), ctx)
-                .ok()
-                .and_then(|v| v.as_number())
-                .unwrap_or(0.0) as u32;
-            // Store handler as {callback, passive} object.
-            let listener_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = listener_obj.insert_property(boa_engine::js_string!("callback"), pd(handler));
-            let _ = listener_obj.insert_property(
-                boa_engine::js_string!("passive"),
-                pd(JsValue::from(passive)),
+    let add_listener = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let event_type = arg_to_string(args, 0, ctx);
+            let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            // Check if options specify passive.
+            let explicit_passive = args
+                .get(2)
+                .and_then(|o| o.as_object())
+                .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
+                .and_then(|v| v.as_boolean());
+            // Determine default passive: touchstart, touchmove, wheel, mousewheel
+            // are passive by default on window/document/documentElement/body.
+            let is_passive_event = matches!(
+                event_type.as_str(),
+                "touchstart" | "touchmove" | "wheel" | "mousewheel"
             );
-            let _ = arr.insert_property(len, pd(listener_obj.into()));
-            let _ =
-                arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
-        }
-        Ok(JsValue::undefined())
-    });
+            // Check if this target is a passive-by-default target.
+            // Window: this === global object. Document: nodeName=#document.
+            // documentElement: nodeName=HTML. body: nodeName=BODY.
+            let is_window = this
+                .as_object()
+                .map(|o| {
+                    // Check if this is the global object by comparing with ctx.global_object().
+                    boa_engine::object::JsObject::equals(&o, &ctx.global_object())
+                })
+                .unwrap_or(false);
+            let target_name = this
+                .as_object()
+                .and_then(|o| o.get(boa_engine::js_string!("nodeName"), ctx).ok())
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            let is_passive_target = is_window
+                || target_name == "#document"
+                || target_name == "HTML"
+                || target_name == "BODY";
+            let passive = explicit_passive.unwrap_or(is_passive_event && is_passive_target);
+            if let Some(o) = this.as_object() {
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                // Get or create _js_listeners map on this object.
+                let listeners = o
+                    .get(boa_engine::js_string!("_js_listeners"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let lmap = match listeners {
+                    Some(m) => m,
+                    None => {
+                        let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = o.insert_property(
+                            boa_engine::js_string!("_js_listeners"),
+                            pd(m.clone().into()),
+                        );
+                        m
+                    }
+                };
+                // Get or create the array for this event type.
+                let type_arr = lmap
+                    .get(boa_engine::js_string!(event_type.clone()), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let arr = match type_arr {
+                    Some(a) => a,
+                    None => {
+                        let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = a.insert_property(
+                            boa_engine::js_string!("length"),
+                            pd(JsValue::from(0u32)),
+                        );
+                        let _ = lmap.insert_property(
+                            boa_engine::js_string!(event_type.clone()),
+                            pd(a.clone().into()),
+                        );
+                        a
+                    }
+                };
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                // Store handler as {callback, passive} object.
+                let listener_obj =
+                    boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let _ = listener_obj
+                    .insert_property(boa_engine::js_string!("callback"), pd(handler.clone()));
+                let _ = listener_obj.insert_property(
+                    boa_engine::js_string!("passive"),
+                    pd(JsValue::from(passive)),
+                );
+                let _ = arr.insert_property(len, pd(listener_obj.into()));
+                let _ = arr
+                    .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+            }
+            // Fire_click registration (L940 leftover ①): stash the callback
+            // under a deterministic per-(node, type) global name — GC-rooted via
+            // the global object, so the handler outlives the handle object it
+            // was registered on — and record (node, name) on the bridge for
+            // harvest. On master the push into new_listeners was never written,
+            // so registered listeners silently vanished. Known limitation:
+            // two handlers on the same (node, type) collide on one name and
+            // only the last survives (multi-handler needs a registry
+            // redesign — see L940).
+            if let Some(nid) = read_handle_id(this) {
+                let name = format!("__aris_listener_{nid}_{event_type}");
+                b.borrow_mut().new_listeners.push((nid, name.clone()));
+                let _ = ctx.global_object().insert_property(
+                    boa_engine::js_string!(name),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(handler)
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
     // dispatchEvent(event) — calls listeners registered via addEventListener
@@ -12131,6 +12244,13 @@ fn make_element_handle(
                 b.borrow_mut().ops.push(Op::AppendChild {
                     parent_id,
                     pending_id: child_pending,
+                });
+            } else if let (Some(parent_id), Some(alloc)) = (parent_id, read_canvas_alloc(&child)) {
+                // Created canvas: the buffer is already allocated under
+                // `alloc`; the op replay creates the DOM node and homes it.
+                b.borrow_mut().ops.push(Op::AttachCanvas {
+                    parent_id,
+                    alloc_id: alloc,
                 });
             }
             // JS-level children tracking via insert_into_children (uses JsArray).
@@ -13704,5 +13824,206 @@ mod node_props_tests {
         for (name, id) in &ids {
             assert!(tree_ids.contains(id), "ids[{name}] = {id:#x} is alien");
         }
+    }
+}
+
+#[cfg(test)]
+mod bridge_flow_tests {
+    //! Behavioral pins for the two L940 leftover defects (① listener
+    //! registration dead path, ② canvas key-domain mismatch), exercised
+    //! through the real bridge: script → ops → replay → DOM/compositor.
+
+    use super::JsRuntime;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn find_id(doc: &HtmlDocument, want: &str) -> Option<u64> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(want))
+            .map(|(id, _)| id.as_u64())
+    }
+
+    #[test]
+    fn addEventListener_registration_reaches_fire_click() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">empty</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('btn').addEventListener('click', function () {
+                document.getElementById('out').setText('clicked via listener');
+            });
+        "#,
+        );
+        let Some(btn) = find_id(&doc, "btn") else {
+            panic!("fixture missing #btn");
+        };
+        rt.fire_click(&mut doc, btn);
+        let Some(out) = find_id(&doc, "out") else {
+            panic!("fixture missing #out");
+        };
+        let text = doc
+            .get_node(NodeId::from_u64(out))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            text, "clicked via listener",
+            "a registered click listener must fire and mutate the DOM"
+        );
+    }
+
+    #[test]
+    fn onclick_attr_and_add_listener_coexist_exactly_once() {
+        // L940 leftover ① guard: fire_click re-enters bind_and_run for the
+        // onclick attribute, which must not unregister (or double-fire) the
+        // script-registered listeners — on this node or any other.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="a" onclick="document.getElementById('oa').setText('oa-' + fire_seq++)">inline</button>
+            <button id="b">scripted</button>
+            <div id="oa">0</div>
+            <div id="sa">0</div>
+            <div id="sb">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var fire_seq = 1;
+            document.getElementById('b').addEventListener('click', function () {
+                var el = document.getElementById('sb');
+                el.setText(el.textContent + 'x');
+            });
+        "#,
+        );
+        let click = |rt: &mut JsRuntime, doc: &mut HtmlDocument, id: &str| {
+            let Some(nid) = doc
+                .tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(id, _)| id.as_u64())
+            else {
+                panic!("missing #{id}");
+            };
+            rt.fire_click(doc, nid);
+        };
+
+        // First click on the onclick node: inline handler fires once, the
+        // scripted listener on #b must SURVIVE the re-bind.
+        click(&mut rt, &mut doc, "a");
+        let text = |doc: &HtmlDocument, id: &str| {
+            doc.get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing output node"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default()
+        };
+        let oa = text(&doc, "oa");
+        assert_eq!(
+            oa, "oa-1",
+            "onclick handler must fire exactly once (got {oa:?})"
+        );
+        assert_eq!(
+            text(&doc, "sb"),
+            "0",
+            "unrelated listener must survive the onclick re-bind"
+        );
+
+        // Second click: inline handler again (exactly once), then the
+        // scripted listener on #b still fires exactly once.
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text(&doc, "sb"),
+            "0x",
+            "scripted listener must fire exactly once"
+        );
+        click(&mut rt, &mut doc, "a");
+        let oa2 = text(&doc, "oa");
+        // setText replaces, and fire_seq increments per fire: a single firing
+        // reads "oa-2"; a stacked double firing would read "oa-3" (skipped).
+        assert_eq!(
+            oa2, "oa-2",
+            "second inline firing must stay single (got {oa2:?})"
+        );
+    }
+
+    #[test]
+    fn created_canvas_homes_to_its_dom_node() {
+        let mut doc =
+            HtmlDocument::from_html(r#"<html><body></body></html>"#, DocumentConfig::default());
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var c = document.createElement('canvas');
+            c.getContext('2d').fillRect(0, 0, 5, 5);
+            document.body.appendChild(c);
+        "#,
+        );
+
+        // The created canvas must exist as a real DOM node under body...
+        let Some(body) = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| {
+                n.element_data()
+                    .map(|e| format!("{:?}", e.name.local).contains("'body'"))
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| id.as_u64())
+        else {
+            panic!("fixture missing body");
+        };
+        let children = doc
+            .get_node(NodeId::from_u64(body))
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        assert!(
+            !children.is_empty(),
+            "created canvas must enter the DOM once its AttachCanvas op replays"
+        );
+
+        // ...and its buffer must be homed (node id → allocation id) so the
+        // compositor finds it, with the recorded fillRect intact.
+        let canvas_node = children[children.len() - 1].as_u64();
+        let alloc = super::canvas_home_for(canvas_node)
+            .unwrap_or_else(|| panic!("canvas node {canvas_node} must be homed"));
+        let has_content = super::CANVASES.with(|cs| {
+            cs.borrow()
+                .get(&alloc)
+                .map(|c| c.has_content())
+                .unwrap_or(false)
+        });
+        assert!(
+            has_content,
+            "buffer under alloc {alloc} must carry the fillRect content"
+        );
+        // Known limitation (documented, not a regression: master never
+        // painted created canvases either — the shared create_and_append
+        // replay never materializes layout for replay-created nodes). The
+        // node is homed and the buffer holds content, but its layout box is
+        // 0×0 so composite_canvases skips it. If this pin starts failing
+        // because the size became non-zero, the materialization gap was
+        // fixed — update this pin and the L940 entry.
+        let canvas_size = doc
+            .get_node(NodeId::from_u64(canvas_node))
+            .map(|n| n.final_layout().size)
+            .expect("canvas node vanished");
+        assert_eq!(
+            (canvas_size.width, canvas_size.height),
+            (0.0, 0.0),
+            "created-canvas layout stays 0×0 until the replay-path materialization gap is fixed"
+        );
     }
 }
