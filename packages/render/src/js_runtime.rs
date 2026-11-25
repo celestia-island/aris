@@ -417,6 +417,16 @@ impl JsRuntime {
     pub fn canvas_has_content(&self) -> bool {
         CANVASES.with(|cs| cs.borrow().values().any(|c| c.has_content()))
     }
+
+    /// Number of children recorded in the node-prop snapshot for `node_id`
+    /// (for testing: the same child_ids that feed the `childNodes` property).
+    pub fn child_nodes_count(&self, node_id: u64) -> Option<usize> {
+        self.bridge
+            .borrow()
+            .node_props
+            .get(&node_id)
+            .map(|s| s.child_ids.len())
+    }
 }
 
 impl Default for JsRuntime {
@@ -13617,4 +13627,76 @@ fn make_element_handle(
     }
 
     Ok(obj)
+}
+
+#[cfg(test)]
+mod node_props_tests {
+    //! Pin the u64 id domain and the root-parent contract in the node
+    //! snapshot (L940 leftover ⑥ — R3 mutations M3/M5 survived uncovered:
+    //! truncating version bits and fabricating a root parent_id both went
+    //! unnoticed by every shipped behavior bin).
+
+    use super::{collect_ids, collect_node_props};
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+
+    fn test_doc() -> HtmlDocument {
+        HtmlDocument::from_html(
+            r#"<html><head></head><body><p id="p">x</p></body></html>"#,
+            DocumentConfig::default(),
+        )
+    }
+
+    #[test]
+    fn snapshot_ids_are_live_tree_ids() {
+        let doc = test_doc();
+        let snapshot = collect_node_props(&doc);
+        let tree_ids: std::collections::HashSet<u64> =
+            doc.tree().iter().map(|(id, _)| id.as_u64()).collect();
+
+        assert!(
+            !tree_ids.is_empty() && tree_ids.iter().all(|v| *v > u32::MAX as u64),
+            "a fresh document must carry versioned ids (index + version in high bits), got {tree_ids:?}"
+        );
+        for (id, snap) in &snapshot {
+            assert!(tree_ids.contains(id), "snapshot key {id:#x} is alien");
+            for c in &snap.child_ids {
+                assert!(tree_ids.contains(c), "child id {c:#x} is alien");
+            }
+            if snap.parent_id != 0 {
+                assert!(
+                    tree_ids.contains(&snap.parent_id),
+                    "parent id {:#x} is alien",
+                    snap.parent_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn root_parent_id_is_zero_not_fabricated() {
+        let doc = test_doc();
+        let snapshot = collect_node_props(&doc);
+        for (id, node) in doc.tree().iter() {
+            if node.parent.is_none()
+                && let Some(snap) = snapshot.get(&id.as_u64())
+            {
+                assert_eq!(
+                    snap.parent_id, 0,
+                    "root {id:?} must keep parent_id 0 (the documented no-parent sentinel)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn collect_ids_agrees_with_tree() {
+        let doc = test_doc();
+        let ids = collect_ids(&doc);
+        let tree_ids: std::collections::HashSet<u64> =
+            doc.tree().iter().map(|(id, _)| id.as_u64()).collect();
+        for (name, id) in &ids {
+            assert!(tree_ids.contains(id), "ids[{name}] = {id:#x} is alien");
+        }
+    }
 }

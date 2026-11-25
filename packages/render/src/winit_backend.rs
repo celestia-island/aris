@@ -3321,3 +3321,87 @@ fn loading_page(url: &str) -> String {
         crate::browser::escape_html(url)
     )
 }
+
+#[cfg(test)]
+mod key_mapping_tests {
+    //! Pin `winit_key_to_kbd` arm-by-arm: the mapping has no behavioral
+    //! consumer in the test suite, so a wrong arm would otherwise fail
+    //! silently (L940 leftover ③ — R3 mutation M4 survived uncovered).
+
+    use super::winit_key_to_kbd;
+    use winit::keyboard::{Key, NamedKey};
+
+    fn named(n: NamedKey) -> Key {
+        Key::Named(n)
+    }
+
+    fn kbd_named(n: keyboard_types::NamedKey) -> keyboard_types::Key {
+        keyboard_types::Key::Named(n)
+    }
+
+    #[test]
+    fn named_keys_map_one_to_one() {
+        let pairs = [
+            (NamedKey::Enter, keyboard_types::NamedKey::Enter),
+            (NamedKey::Backspace, keyboard_types::NamedKey::Backspace),
+            (NamedKey::Tab, keyboard_types::NamedKey::Tab),
+            (NamedKey::Escape, keyboard_types::NamedKey::Escape),
+            (NamedKey::ArrowLeft, keyboard_types::NamedKey::ArrowLeft),
+            (NamedKey::ArrowRight, keyboard_types::NamedKey::ArrowRight),
+            (NamedKey::ArrowUp, keyboard_types::NamedKey::ArrowUp),
+            (NamedKey::ArrowDown, keyboard_types::NamedKey::ArrowDown),
+            (NamedKey::Home, keyboard_types::NamedKey::Home),
+            (NamedKey::End, keyboard_types::NamedKey::End),
+            (NamedKey::Delete, keyboard_types::NamedKey::Delete),
+            (NamedKey::PageUp, keyboard_types::NamedKey::PageUp),
+            (NamedKey::PageDown, keyboard_types::NamedKey::PageDown),
+            (NamedKey::Shift, keyboard_types::NamedKey::Shift),
+            (NamedKey::Control, keyboard_types::NamedKey::Control),
+            (NamedKey::Alt, keyboard_types::NamedKey::Alt),
+            (NamedKey::CapsLock, keyboard_types::NamedKey::CapsLock),
+        ];
+        for (winit_key, expected) in pairs {
+            assert_eq!(
+                winit_key_to_kbd(&named(winit_key)),
+                kbd_named(expected),
+                "{winit_key:?} must map to Named({expected:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn super_maps_to_meta() {
+        assert_eq!(
+            winit_key_to_kbd(&named(NamedKey::Super)),
+            kbd_named(keyboard_types::NamedKey::Meta)
+        );
+    }
+
+    #[test]
+    fn space_stays_character_for_text_input() {
+        // Deliberate: blitz-dom beta.5 only inserts text from
+        // Key::Character, so space must stay a character keystroke for
+        // text fields (a Named(Space) mapping cannot even be spelled —
+        // keyboard-types 0.8 has no NamedKey::Space arm that renders).
+        assert_eq!(
+            winit_key_to_kbd(&named(NamedKey::Space)),
+            keyboard_types::Key::Character(" ".to_string())
+        );
+    }
+
+    #[test]
+    fn character_keys_pass_through() {
+        assert_eq!(
+            winit_key_to_kbd(&Key::Character("a".into())),
+            keyboard_types::Key::Character("a".to_string())
+        );
+    }
+
+    #[test]
+    fn unmatched_named_key_falls_back_to_unidentified() {
+        assert_eq!(
+            winit_key_to_kbd(&named(NamedKey::F1)),
+            kbd_named(keyboard_types::NamedKey::Unidentified)
+        );
+    }
+}

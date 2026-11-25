@@ -534,3 +534,36 @@ fn read_pending(v: &JsValue) -> Option<u32> {
         .ok()?;
     p.as_number().map(|n| n as u32)
 }
+
+#[cfg(test)]
+mod id_domain_tests {
+    //! Pin the u64 node-id domain at the bridge boundary (L940 leftover ⑥ —
+    //! R3 mutation M3 truncated version bits in `collect_ids` and every
+    //! shipped behavior bin stayed green).
+
+    use super::collect_ids;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+
+    #[test]
+    fn collect_ids_preserves_full_node_id_width() {
+        let doc = HtmlDocument::from_html(
+            r#"<html><body><div id="a"></div><p id="b">x</p></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let ids = collect_ids(&doc);
+        assert_eq!(ids.len(), 2, "both id= attributes must be indexed: {ids:?}");
+
+        // Every mapped id must be exactly a live tree id (full u64 = index +
+        // version bits); a truncated u32 value would not resolve and would
+        // not be in the tree set.
+        let tree_ids: std::collections::HashSet<u64> =
+            doc.tree().iter().map(|(id, _)| id.as_u64()).collect();
+        for (name, id) in &ids {
+            assert!(
+                tree_ids.contains(id),
+                "ids[{name}] = {id:#x} is not a live tree id (truncated?)"
+            );
+        }
+    }
+}

@@ -422,6 +422,27 @@ fn js_dom_tests() -> Vec<TestResult> {
                 )
             }
         ),
+        t!(
+            "js-childNodes-length",
+            "js-dom",
+            "childNodes on a live element exposes its real children",
+            "https://dom.spec.whatwg.org/#dom-node-childnodes",
+            {
+                let mut doc = make_doc(r#"<div id="c"><span>a</span><b>b</b>tail</div>"#);
+                let mut rt = aris_render::js_runtime::JsRuntime::new();
+                rt.bind_and_run(&mut doc, "");
+                // #c's snapshot child_ids feed the childNodes property; an
+                // empty or truncated snapshot shows up here as a wrong count.
+                let c_id = doc
+                    .tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("c"))
+                    .map(|(id, _)| id.as_u64())
+                    .unwrap_or(0);
+                let out = rt.child_nodes_count(c_id);
+                (out == Some(3), format!("childNodes length: {:?}", out))
+            }
+        ),
     ]
 }
 
