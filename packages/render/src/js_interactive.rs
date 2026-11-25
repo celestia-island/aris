@@ -561,3 +561,81 @@ mod id_domain_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod element_materialization_tests {
+    //! Guard the one-shot bridge's element-append path (L940 leftover ①-cycle,
+    //! R3 S2): `js_interactive::create_and_append` is the only replay-created
+    //! element site with real shipping reach (run_onclick's AppendChild op),
+    //! and R3's probe showed a raw-create revert would regress it to
+    //! `is_in_document=false size=(0.0, 0.0)` while `cargo test` stayed green.
+
+    use super::*;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn rewrite_parse_probe() {
+        use boa_engine::{Context, Source};
+        let src = "var b = document.querySelector('body'); var d = document.createElement('div'); d.textContent = 'x'; b.appendChild(d);";
+        let rewritten = rewrite_source(src);
+        println!("PROBE rewritten = {rewritten:?}");
+        let mut ctx = Context::default();
+        let r = ctx.eval(Source::from_bytes(&rewritten));
+        println!("PROBE parse/eval result = {r:?}");
+    }
+
+    #[test]
+    fn onclick_created_element_materializes_in_document() {
+        let html = r#"<section id="root"></section><button id="b" onclick="var r = document.getElementById('root'); var d = document.createElement('div'); d.textContent = 'x'; r.appendChild(d);">go</button>"#;
+        let doc_config = DocumentConfig {
+            viewport: Some(blitz_traits::shell::Viewport {
+                window_size: (800, 600),
+                hidpi_scale: 1.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut doc = HtmlDocument::from_html(html, doc_config);
+        let clicked = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("fixture missing #b");
+
+        let result = run_onclick(&mut doc, clicked);
+        assert!(result.executed, "onclick must run");
+        assert!(
+            result.dom_mutated,
+            "append must record a DOM mutation; result = {result:?}"
+        );
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+
+        // Materialization: the replay-created div is in the document and
+        // carries a real layout box (a raw create_node regression shows up
+        // as is_in_document=false / 0×0 here).
+        doc.resolve(0.0);
+        let created = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| {
+                n.element_data()
+                    .map(|e| format!("{:?}", e.name.local).contains("'div'"))
+                    .unwrap_or(false)
+                    && n.attr(blitz_dom::local_name!("id")) != Some("root")
+            })
+            .expect("created div not found in tree");
+        assert!(
+            created.1.flags.is_in_document(),
+            "replay-created div must be materialized into the document"
+        );
+        let size = created.1.final_layout().size;
+        assert!(
+            size.width > 100.0 && size.height > 10.0,
+            "replay-created div must lay out at the viewport width with a text line box, got {size:?}"
+        );
+        let _ = NodeId::from_u64(created.0.as_u64()); // id round-trip smoke
+    }
+}
