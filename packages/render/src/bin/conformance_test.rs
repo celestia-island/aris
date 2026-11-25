@@ -431,8 +431,8 @@ fn js_dom_tests() -> Vec<TestResult> {
                 let mut doc = make_doc(r#"<div id="c"><span>a</span><b>b</b>tail</div>"#);
                 let mut rt = aris_render::js_runtime::JsRuntime::new();
                 rt.bind_and_run(&mut doc, "");
-                // #c's snapshot child_ids feed the childNodes property; an
-                // empty or truncated snapshot shows up here as a wrong count.
+                // #c's snapshot child_ids feed the childNodes property; the
+                // count does not pass on an empty or truncated snapshot.
                 let c_id = doc
                     .tree()
                     .iter()

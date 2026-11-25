@@ -538,8 +538,8 @@ fn read_pending(v: &JsValue) -> Option<u32> {
 #[cfg(test)]
 mod id_domain_tests {
     //! Pin the u64 node-id domain at the bridge boundary (L940 leftover ⑥ —
-    //! R3 mutation M3 truncated version bits in `collect_ids` and every
-    //! shipped behavior bin stayed green).
+    //! R3 mutation M3 truncated version bits in `collect_ids` and the shipped
+    //! behavior bins does not notice; this test does.
 
     use super::collect_ids;
     use blitz_dom::{BaseDocument, DocumentConfig};
