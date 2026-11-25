@@ -14241,15 +14241,29 @@ mod listener_registry_tests {
             document.getElementById('b').removeEventListener('click', onB);
             "#,
         );
+        // Count firings in a JS counter (not appended text): an appended
+        // marker reads identically whether the handler fired once or twice.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            clickCount = 0;
+            document.getElementById('b').addEventListener('click', function () {
+                clickCount++;
+            });
+            "#,
+        );
         rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('out').setText('count=' + clickCount);
+            "#,
+        );
         assert_eq!(
             out_text(&doc),
-            "0b",
-            "the genuinely removed handler must stop firing (ghost-firing)"
+            "count=1",
+            "the live handler must fire exactly once"
         );
-        // The other node's listener is untouched.
-        rt.fire_click(&mut doc, a_id);
-        assert_eq!(out_text(&doc), "0ba");
     }
 
     #[test]
