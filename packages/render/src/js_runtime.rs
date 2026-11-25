@@ -289,7 +289,13 @@ impl JsRuntime {
     fn harvest_listeners(&mut self) {
         let new = std::mem::take(&mut self.bridge.borrow_mut().new_listeners);
         for (node_id, name) in new {
-            self.listeners.entry(node_id).or_default().push(name);
+            // Names are deterministic per (node, type): re-running a script
+            // re-registers under the same name, so dedupe here instead of
+            // stacking duplicate firings.
+            let entry = self.listeners.entry(node_id).or_default();
+            if !entry.contains(&name) {
+                entry.push(name);
+            }
         }
     }
 
@@ -11119,7 +11125,11 @@ fn make_element_handle(
         if kind != "2d" {
             return Ok(JsValue::null());
         }
-        let node_id = read_handle_id(_this).unwrap_or(0);
+        // A detached/id-less handle is not a canvas element in the DOM —
+        // hand out no context rather than aliasing a shared sentinel slot.
+        let Some(node_id) = read_handle_id(_this) else {
+            return Ok(JsValue::null());
+        };
         let alloc = CANVAS_HOME.with(|home| {
             let mut hm = home.borrow_mut();
             *hm.entry(node_id).or_insert_with(|| alloc_canvas(300, 150))
@@ -11895,102 +11905,131 @@ fn make_element_handle(
     init.function(has_attributes, boa_engine::js_string!("hasAttributes"), 0);
 
     // addEventListener
-    let add_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let event_type = arg_string(args, 0);
-        let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
-        // Check if options specify passive.
-        let explicit_passive = args
-            .get(2)
-            .and_then(|o| o.as_object())
-            .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
-            .and_then(|v| v.as_boolean());
-        // Determine default passive: touchstart, touchmove, wheel, mousewheel
-        // are passive by default on window/document/documentElement/body.
-        let is_passive_event = matches!(
-            event_type.as_str(),
-            "touchstart" | "touchmove" | "wheel" | "mousewheel"
-        );
-        // Check if this target is a passive-by-default target.
-        // Window: this === global object. Document: nodeName=#document.
-        // documentElement: nodeName=HTML. body: nodeName=BODY.
-        let is_window = this
-            .as_object()
-            .map(|o| {
-                // Check if this is the global object by comparing with ctx.global_object().
-                boa_engine::object::JsObject::equals(&o, &ctx.global_object())
-            })
-            .unwrap_or(false);
-        let target_name = this
-            .as_object()
-            .and_then(|o| o.get(boa_engine::js_string!("nodeName"), ctx).ok())
-            .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
-            .unwrap_or_default();
-        let is_passive_target = is_window
-            || target_name == "#document"
-            || target_name == "HTML"
-            || target_name == "BODY";
-        let passive = explicit_passive.unwrap_or(is_passive_event && is_passive_target);
-        if let Some(o) = this.as_object() {
-            let pd = |val: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(val)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            // Get or create _js_listeners map on this object.
-            let listeners = o
-                .get(boa_engine::js_string!("_js_listeners"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            let lmap = match listeners {
-                Some(m) => m,
-                None => {
-                    let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = o.insert_property(
-                        boa_engine::js_string!("_js_listeners"),
-                        pd(m.clone().into()),
-                    );
-                    m
-                }
-            };
-            // Get or create the array for this event type.
-            let type_arr = lmap
-                .get(boa_engine::js_string!(event_type.clone()), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            let arr = match type_arr {
-                Some(a) => a,
-                None => {
-                    let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = a
-                        .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(0u32)));
-                    let _ = lmap.insert_property(
-                        boa_engine::js_string!(event_type.clone()),
-                        pd(a.clone().into()),
-                    );
-                    a
-                }
-            };
-            let len = arr
-                .get(boa_engine::js_string!("length"), ctx)
-                .ok()
-                .and_then(|v| v.as_number())
-                .unwrap_or(0.0) as u32;
-            // Store handler as {callback, passive} object.
-            let listener_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = listener_obj.insert_property(boa_engine::js_string!("callback"), pd(handler));
-            let _ = listener_obj.insert_property(
-                boa_engine::js_string!("passive"),
-                pd(JsValue::from(passive)),
+    let add_listener = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let event_type = arg_to_string(args, 0, ctx);
+            let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            // Check if options specify passive.
+            let explicit_passive = args
+                .get(2)
+                .and_then(|o| o.as_object())
+                .and_then(|o| o.get(boa_engine::js_string!("passive"), ctx).ok())
+                .and_then(|v| v.as_boolean());
+            // Determine default passive: touchstart, touchmove, wheel, mousewheel
+            // are passive by default on window/document/documentElement/body.
+            let is_passive_event = matches!(
+                event_type.as_str(),
+                "touchstart" | "touchmove" | "wheel" | "mousewheel"
             );
-            let _ = arr.insert_property(len, pd(listener_obj.into()));
-            let _ =
-                arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
-        }
-        Ok(JsValue::undefined())
-    });
+            // Check if this target is a passive-by-default target.
+            // Window: this === global object. Document: nodeName=#document.
+            // documentElement: nodeName=HTML. body: nodeName=BODY.
+            let is_window = this
+                .as_object()
+                .map(|o| {
+                    // Check if this is the global object by comparing with ctx.global_object().
+                    boa_engine::object::JsObject::equals(&o, &ctx.global_object())
+                })
+                .unwrap_or(false);
+            let target_name = this
+                .as_object()
+                .and_then(|o| o.get(boa_engine::js_string!("nodeName"), ctx).ok())
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            let is_passive_target = is_window
+                || target_name == "#document"
+                || target_name == "HTML"
+                || target_name == "BODY";
+            let passive = explicit_passive.unwrap_or(is_passive_event && is_passive_target);
+            if let Some(o) = this.as_object() {
+                let pd = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                // Get or create _js_listeners map on this object.
+                let listeners = o
+                    .get(boa_engine::js_string!("_js_listeners"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let lmap = match listeners {
+                    Some(m) => m,
+                    None => {
+                        let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = o.insert_property(
+                            boa_engine::js_string!("_js_listeners"),
+                            pd(m.clone().into()),
+                        );
+                        m
+                    }
+                };
+                // Get or create the array for this event type.
+                let type_arr = lmap
+                    .get(boa_engine::js_string!(event_type.clone()), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let arr = match type_arr {
+                    Some(a) => a,
+                    None => {
+                        let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = a.insert_property(
+                            boa_engine::js_string!("length"),
+                            pd(JsValue::from(0u32)),
+                        );
+                        let _ = lmap.insert_property(
+                            boa_engine::js_string!(event_type.clone()),
+                            pd(a.clone().into()),
+                        );
+                        a
+                    }
+                };
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                // Store handler as {callback, passive} object.
+                let listener_obj =
+                    boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let _ = listener_obj
+                    .insert_property(boa_engine::js_string!("callback"), pd(handler.clone()));
+                let _ = listener_obj.insert_property(
+                    boa_engine::js_string!("passive"),
+                    pd(JsValue::from(passive)),
+                );
+                let _ = arr.insert_property(len, pd(listener_obj.into()));
+                let _ = arr
+                    .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+            }
+            // Fire_click registration (L940 leftover ①): stash the callback
+            // under a deterministic per-(node, type) global name — GC-rooted via
+            // the global object, so the handler outlives the handle object it
+            // was registered on — and record (node, name) on the bridge for
+            // harvest. On master the push into new_listeners was never written,
+            // so registered listeners silently vanished. The name is
+            // deterministic so re-running a script re-registers under the same
+            // name (harvest dedupes; the global is overwritten) instead of
+            // stacking duplicate firings.
+            if let Some(nid) = read_handle_id(this) {
+                let name = format!("__aris_listener_{nid}_{event_type}");
+                b.borrow_mut().new_listeners.push((nid, name.clone()));
+                let _ = ctx.global_object().insert_property(
+                    boa_engine::js_string!(name),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(handler)
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
     // dispatchEvent(event) — calls listeners registered via addEventListener
@@ -12219,49 +12258,6 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(append, boa_engine::js_string!("appendChild"), 1);
-
-    // addEventListener — stash the callback under a deterministic global
-    // name (GC-rooted via the global object) and record (node, name) on the
-    // bridge; fire_click later looks the function up by name and calls it
-    // with a fresh handle as `this`. This wires the registration half of the
-    // documented `__aris_listener_<node>_<seq>` mechanism: on master the
-    // push into bridge.new_listeners was never written, so every registered
-    // listener silently vanished (L940 leftover ①).
-    let add_listener = NativeFunction::from_copy_closure_with_captures(
-        |this, args, b, ctx| {
-            let event_type = arg_string(args, 0);
-            if event_type.is_empty() {
-                return Err(boa_engine::JsNativeError::typ()
-                    .with_message("addEventListener: type must be a non-empty string")
-                    .into());
-            }
-            let callback = args.get(1).cloned().unwrap_or(JsValue::null());
-            let Some(cb_obj) = callback.as_object().filter(|o| o.is_callable()) else {
-                return Err(boa_engine::JsNativeError::typ()
-                    .with_message("addEventListener: callback must be a function")
-                    .into());
-            };
-            // Pending (not-yet-appended) handles carry no node id yet, so
-            // there is nothing to register against — mirror detached-node
-            // semantics and ignore.
-            let Some(nid) = read_handle_id(this) else {
-                return Ok(JsValue::undefined());
-            };
-            let name = {
-                let mut bb = b.borrow_mut();
-                bb.next_listener_reg += 1;
-                let name = format!("__aris_listener_{nid}_{}", bb.next_listener_reg);
-                bb.new_listeners.push((nid, name.clone()));
-                name
-            };
-            let _ = ctx
-                .global_object()
-                .set(boa_engine::js_string!(name), callback, false, ctx);
-            Ok(JsValue::undefined())
-        },
-        Gc::clone(&bridge),
-    );
-    init.function(add_listener, boa_engine::js_string!("addEventListener"), 2);
 
     // removeChild — returns the removed child + updates _children.
     let remove_child = NativeFunction::from_copy_closure(|this, args, ctx| {

@@ -3267,8 +3267,13 @@ fn composite_canvases(
         // Buffers are keyed by allocation id; CANVAS_HOME maps this
         // element's node id to it (inline canvases home at getContext,
         // created canvases when their AttachCanvas op replays).
-        let cid = crate::js_runtime::canvas_home_for(node_id.as_u64())
-            .unwrap_or_else(|| node_id.as_u64());
+        // No home entry = no buffer for this node; never fall back to the
+        // raw node id (small allocation ids and node ids share the same
+        // numeric range, so that fallback could composite another canvas's
+        // buffer).
+        let Some(cid) = crate::js_runtime::canvas_home_for(node_id.as_u64()) else {
+            continue;
+        };
         crate::js_runtime::CANVASES.with(|cs| {
             let cs = cs.borrow();
             if let Some(canvas) = cs.get(&cid) {
