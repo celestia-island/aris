@@ -845,8 +845,10 @@ impl App {
             let Some(parent_id) = node.parent else {
                 continue;
             };
-            // final_layout()/absolute_position() panic for non-element kinds
-            // (comment nodes, etc.) — only elements carry layout.
+            // Defensive guard: only element parents carry layout across the
+            // node kinds reachable here (Document's layout_data is optional
+            // and Comment is a leaf), so a non-element parent would at best
+            // yield an empty box.
             let Some(parent) = doc
                 .get_node(parent_id)
                 .filter(|p| p.element_data().is_some())

@@ -169,9 +169,11 @@ fn real_main() {
 /// The asset is written by prerender_vtty as RGBA8, so no transforms needed.
 #[cfg(unix)]
 fn decode_png_rgba(data: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
-    let decoder = png::Decoder::new(data);
+    // png 0.18 requires BufRead + Seek; wrap the embedded byte slice in a
+    // Cursor so the in-memory asset satisfies the bound.
+    let decoder = png::Decoder::new(std::io::Cursor::new(data));
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![0u8; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buf).ok()?;
     buf.truncate(info.buffer_size());
     Some((info.width as usize, info.height as usize, buf))
