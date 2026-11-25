@@ -422,6 +422,28 @@ fn js_dom_tests() -> Vec<TestResult> {
                 )
             }
         ),
+        t!(
+            "js-childNodes-length",
+            "js-dom",
+            "node-prop snapshot feeds childNodes with the right child count",
+            "https://dom.spec.whatwg.org/#dom-node-childnodes",
+            {
+                let mut doc = make_doc(r#"<div id="c"><span>a</span><b>b</b>tail</div>"#);
+                let mut rt = aris_render::js_runtime::JsRuntime::new();
+                rt.bind_and_run(&mut doc, "");
+                // #c's snapshot child_ids feed the childNodes property; the
+                // count does not pass on an empty or truncated snapshot
+                // (MUT:M3-family anchor: truncation reds the id-domain tests).
+                let c_id = doc
+                    .tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("c"))
+                    .map(|(id, _)| id.as_u64())
+                    .unwrap_or(0);
+                let out = rt.child_nodes_count(c_id);
+                (out == Some(3), format!("childNodes length: {:?}", out))
+            }
+        ),
     ]
 }
 
