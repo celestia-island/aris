@@ -176,24 +176,24 @@ fn collect_ids(doc: &BaseDocument) -> HashMap<String, u64> {
 
 fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
     let nid = blitz_traits::NodeId::from_u64(node_id);
-    let first_text = doc.get_node(nid).and_then(|n| {
+    // Mutator session: reuses the node's first text child when present
+    // (damage + devtools records), else appends a text child with the full
+    // materialization the parse-time path gets (L940 leftover ①-cycle).
+    let mut mutator = doc.mutate();
+    let first_text = mutator.doc.get_node(nid).and_then(|n| {
         n.children.iter().copied().find(|&c| {
-            doc.get_node(c)
+            mutator
+                .doc
+                .get_node(c)
                 .map(|cn| cn.text_data().is_some())
                 .unwrap_or(false)
         })
     });
-    if let Some(text_id) = first_text {
-        if let Some(tn) = doc.get_node_mut(text_id).and_then(|n| n.text_data_mut()) {
-            tn.content = value.to_string();
-        }
-    } else {
-        let new_id = doc.create_text_node(value);
-        if let Some(parent) = doc.get_node_mut(nid) {
-            parent.children.push(new_id);
-        }
-        if let Some(child) = doc.get_node_mut(new_id) {
-            child.parent = Some(nid);
+    match first_text {
+        Some(text_id) => mutator.set_node_text(text_id, value),
+        None => {
+            let text_id = mutator.create_text_node(value);
+            mutator.append_children(nid, &[text_id]);
         }
     }
 }
@@ -211,33 +211,27 @@ fn create_and_append(
     text: &str,
     attrs: &[(String, String)],
 ) {
-    use blitz_dom::{ElementData, NodeData, QualName};
     let attrs_vec = attrs
         .iter()
         .map(|(k, v)| blitz_dom::Attribute {
-            name: QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            name: blitz_dom::QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
             value: v.as_str().into(),
         })
         .collect();
-    let el = ElementData::new(
-        QualName::new(None, blitz_dom::ns!(html), tag.into()),
+    // Mutator session: create_element materializes stylo style data, and
+    // append_children runs process_added_subtree (IS_IN_DOCUMENT + damage +
+    // id map + per-tag post-processing) — the materialization the raw
+    // create_node + children.push dance skipped, leaving replay-created
+    // nodes at 0×0 and uncomposited (L940 leftover ①-cycle).
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), tag.into()),
         attrs_vec,
     );
-    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
-    if let Some(parent) = doc.get_node_mut(blitz_traits::NodeId::from_u64(parent_id)) {
-        parent.children.push(new_id);
-    }
-    if let Some(child) = doc.get_node_mut(new_id) {
-        child.parent = Some(blitz_traits::NodeId::from_u64(parent_id));
-    }
+    mutator.append_children(blitz_traits::NodeId::from_u64(parent_id), &[new_id]);
     if !text.is_empty() {
-        let text_id = doc.create_text_node(text);
-        if let Some(el) = doc.get_node_mut(new_id) {
-            el.children.push(text_id);
-        }
-        if let Some(tn) = doc.get_node_mut(text_id) {
-            tn.parent = Some(new_id);
-        }
+        let text_id = mutator.create_text_node(text);
+        mutator.append_children(new_id, &[text_id]);
     }
 }
 

@@ -495,19 +495,17 @@ fn apply_op(
 /// allocated buffer `alloc_id` to the new node id, so the compositor finds
 /// it (createElement handles carry the allocation id, not a node id).
 fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
-    use blitz_dom::{ElementData, NodeData, QualName};
+    use blitz_dom::QualName;
     let parent = blitz_traits::NodeId::from_u64(parent_id);
-    let el = ElementData::new(
+    // Mutator session: same materialization semantics as create_and_append
+    // (stylo data + IS_IN_DOCUMENT + damage) so the created canvas actually
+    // participates in layout instead of staying a 0×0 uncomposited stub.
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
         QualName::new(None, blitz_dom::ns!(html), "canvas".into()),
         Vec::new(),
     );
-    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
-    if let Some(p) = doc.get_node_mut(parent) {
-        p.children.push(new_id);
-    }
-    if let Some(c) = doc.get_node_mut(new_id) {
-        c.parent = Some(parent);
-    }
+    mutator.append_children(parent, &[new_id]);
     CANVAS_HOME.with(|home| {
         home.borrow_mut().insert(new_id.as_u64(), alloc_id);
     });
@@ -622,24 +620,24 @@ fn collect_query_index(
 
 fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
     let nid = blitz_traits::NodeId::from_u64(node_id);
-    let first_text = doc.get_node(nid).and_then(|n| {
+    // Mutator session: reuse the node's first text child when present
+    // (damage + devtools records), else append a text child with the full
+    // materialization the parse-time path gets.
+    let mut mutator = doc.mutate();
+    let first_text = mutator.doc.get_node(nid).and_then(|n| {
         n.children.iter().copied().find(|&c| {
-            doc.get_node(c)
+            mutator
+                .doc
+                .get_node(c)
                 .map(|cn| cn.text_data().is_some())
                 .unwrap_or(false)
         })
     });
-    if let Some(text_id) = first_text {
-        if let Some(tn) = doc.get_node_mut(text_id).and_then(|n| n.text_data_mut()) {
-            tn.content = value.to_string();
-        }
-    } else {
-        let new_id = doc.create_text_node(value);
-        if let Some(parent) = doc.get_node_mut(nid) {
-            parent.children.push(new_id);
-        }
-        if let Some(child) = doc.get_node_mut(new_id) {
-            child.parent = Some(nid);
+    match first_text {
+        Some(text_id) => mutator.set_node_text(text_id, value),
+        None => {
+            let text_id = mutator.create_text_node(value);
+            mutator.append_children(nid, &[text_id]);
         }
     }
 }
@@ -657,33 +655,27 @@ fn create_and_append(
     text: &str,
     attrs: &[(String, String)],
 ) {
-    use blitz_dom::{ElementData, NodeData, QualName};
     let attrs_vec = attrs
         .iter()
         .map(|(k, v)| blitz_dom::Attribute {
-            name: QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            name: blitz_dom::QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
             value: v.as_str().into(),
         })
         .collect();
-    let el = ElementData::new(
-        QualName::new(None, blitz_dom::ns!(html), tag.into()),
+    // Mutator session: create_element materializes stylo style data, and
+    // append_children runs process_added_subtree (IS_IN_DOCUMENT + damage +
+    // id map + per-tag post-processing) — the materialization the raw
+    // create_node + children.push dance skipped, leaving replay-created
+    // nodes at 0×0 and uncomposited (L940 leftover ①-cycle).
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), tag.into()),
         attrs_vec,
     );
-    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
-    if let Some(parent) = doc.get_node_mut(blitz_traits::NodeId::from_u64(parent_id)) {
-        parent.children.push(new_id);
-    }
-    if let Some(child) = doc.get_node_mut(new_id) {
-        child.parent = Some(blitz_traits::NodeId::from_u64(parent_id));
-    }
+    mutator.append_children(blitz_traits::NodeId::from_u64(parent_id), &[new_id]);
     if !text.is_empty() {
-        let text_id = doc.create_text_node(text);
-        if let Some(el) = doc.get_node_mut(new_id) {
-            el.children.push(text_id);
-        }
-        if let Some(tn) = doc.get_node_mut(text_id) {
-            tn.parent = Some(new_id);
-        }
+        let text_id = mutator.create_text_node(text);
+        mutator.append_children(new_id, &[text_id]);
     }
 }
 
@@ -14009,21 +14001,24 @@ mod bridge_flow_tests {
             has_content,
             "buffer under alloc {alloc} must carry the fillRect content"
         );
-        // Known limitation (documented, not a regression: master never
-        // painted created canvases either — the shared create_and_append
-        // replay never materializes layout for replay-created nodes). The
-        // node is homed and the buffer holds content, but its layout box is
-        // 0×0 so composite_canvases skips it. If this pin starts failing
-        // because the size became non-zero, the materialization gap was
-        // fixed — update this pin and the L940 entry.
-        let canvas_size = doc
+        // Materialization (the fix for L940 leftover ①-cycle): the
+        // mutator-based replay gives the created node stylo style data +
+        // IS_IN_DOCUMENT, so a layout pass gives it the canvas intrinsic
+        // 300×150 box instead of the old 0×0 uncomposited stub. If this
+        // starts failing with 0×0 again, the materialization regressed.
+        doc.resolve(0.0);
+        let node = doc
             .get_node(NodeId::from_u64(canvas_node))
-            .map(|n| n.final_layout().size)
             .expect("canvas node vanished");
+        assert!(
+            node.flags.is_in_document(),
+            "created canvas must be in the document"
+        );
+        let size = node.final_layout().size;
         assert_eq!(
-            (canvas_size.width, canvas_size.height),
-            (0.0, 0.0),
-            "created-canvas layout stays 0×0 until the replay-path materialization gap is fixed"
+            (size.width, size.height),
+            (300.0, 150.0),
+            "created canvas must lay out at the canvas intrinsic 300×150, got {size:?}"
         );
     }
 }
