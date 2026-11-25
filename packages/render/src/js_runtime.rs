@@ -100,11 +100,25 @@ struct Bridge {
     query_by_id: HashMap<String, u64>,
     /// Snapshot of node properties: node_id → (tag_name, text_content, id_attr, class_attr, node_type)
     node_props: HashMap<u64, NodePropSnapshot>,
-    new_listeners: Vec<(u64, String)>,
-    /// (node, type) pairs removed via removeEventListener; harvest untracks
-    /// them from the fire_click dispatch map (L940 leftover ②-cycle).
-    removed_listeners: Vec<(u64, String)>,
+    /// Listener actions in SCRIPT ORDER (add / remove), so a same-window
+    /// add→remove or remove→add collapses to the final script state instead
+    /// of an arbitrary pass order (L940 leftover ②-cycle, R3/R4 findings).
+    listener_actions: Vec<ListenerAction>,
     new_timers: Vec<(String, u64, Option<u64>)>,
+}
+
+/// One listener registration/removal in script order.
+#[derive(Clone, Trace, Finalize)]
+enum ListenerAction {
+    Add {
+        node_id: u64,
+        name: String,
+        handler: JsValue,
+    },
+    Remove {
+        node_id: u64,
+        name: String,
+    },
 }
 
 /// Snapshot of a blitz node's properties for JS-side access.
@@ -192,6 +206,10 @@ impl JsRuntime {
             b.ops.clear();
             b.pending.clear();
             b.next_pending = 0;
+            // Actions belong to the ticket that recorded them; a later
+            // re-registration must not be killed by a stale record
+            // (R3 S1: cross-ticket remove→re-add left the listener dead).
+            b.listener_actions.clear();
         }
         // Deliberately NOT clearing self.listeners here: this path re-runs
         // for every onclick-attribute click (fire_click → bind_and_run), and
@@ -290,25 +308,56 @@ impl JsRuntime {
     /// The handler objects were already stashed as named globals during
     /// addEventListener; here we just record node → name.
     fn harvest_listeners(&mut self) {
-        let removed = std::mem::take(&mut self.bridge.borrow_mut().removed_listeners);
-        for (node_id, event_type) in removed {
-            let name = format!("__aris_listener_{node_id}_{event_type}");
-            if let Some(entry) = self.listeners.get_mut(&node_id) {
-                entry.retain(|n| n != &name);
-            }
-            // Un-root the stashed callback: the deterministic name makes the
-            // removal exact (one registration per (node, type)).
-            let global = self.ctx.global_object();
-            let _ = global.delete_property_or_throw(boa_engine::js_string!(name), &mut self.ctx);
-        }
-        let new = std::mem::take(&mut self.bridge.borrow_mut().new_listeners);
-        for (node_id, name) in new {
-            // Names are deterministic per (node, type): re-running a script
-            // re-registers under the same name, so dedupe here instead of
-            // stacking duplicate firings.
-            let entry = self.listeners.entry(node_id).or_default();
-            if !entry.contains(&name) {
-                entry.push(name);
+        let actions: Vec<ListenerAction> =
+            std::mem::take(&mut self.bridge.borrow_mut().listener_actions);
+        for action in actions {
+            // ListenerAction derives Trace/Finalize (Drop), so match by
+            // reference and clone the fields we keep.
+            match &action {
+                ListenerAction::Add {
+                    node_id,
+                    name,
+                    handler,
+                } => {
+                    let node_id = *node_id;
+                    let name = name.clone();
+                    let handler = handler.clone();
+                    // Re-stash when an earlier removal in this window deleted
+                    // the global (remove → re-add in one ticket).
+                    let global = self.ctx.global_object();
+                    let present = global
+                        .get(boa_engine::js_string!(name.clone()), &mut self.ctx)
+                        .ok()
+                        .map(|v| v.is_object() || v.is_callable())
+                        .unwrap_or(false);
+                    if !present {
+                        let _ = global.insert_property(
+                            boa_engine::js_string!(name.clone()),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(handler)
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                    // Deterministic name: re-registering dedupes instead of
+                    // stacking duplicate firings.
+                    let entry = self.listeners.entry(node_id).or_default();
+                    if !entry.contains(&name) {
+                        entry.push(name);
+                    }
+                }
+                ListenerAction::Remove { node_id, name } => {
+                    let node_id = *node_id;
+                    let name: String = name.clone();
+                    if let Some(entry) = self.listeners.get_mut(&node_id) {
+                        entry.retain(|n| n != &name);
+                    }
+                    let global = self.ctx.global_object();
+                    let _ = global
+                        .delete_property_or_throw(boa_engine::js_string!(name), &mut self.ctx);
+                }
             }
         }
     }
@@ -12025,7 +12074,11 @@ fn make_element_handle(
             // redesign — see L940).
             if let Some(nid) = read_handle_id(this) {
                 let name = format!("__aris_listener_{nid}_{event_type}");
-                b.borrow_mut().new_listeners.push((nid, name.clone()));
+                b.borrow_mut().listener_actions.push(ListenerAction::Add {
+                    node_id: nid,
+                    name: name.clone(),
+                    handler: handler.clone(),
+                });
                 let _ = ctx.global_object().insert_property(
                     boa_engine::js_string!(name),
                     boa_engine::property::PropertyDescriptor::builder()
@@ -12200,10 +12253,30 @@ fn make_element_handle(
             let handler_obj = args.get(1).and_then(|v| v.as_object());
             // Untrack from the fire_click dispatch map (L940 leftover ②-cycle):
             // without this, a removed click handler kept firing (ghost-firing).
+            // Gated on handler IDENTITY: the registered callback is the stashed
+            // global, so removing an unrelated/undefined handler must not kill
+            // a live listener (R3 S0).
             if let Some(nid) = read_handle_id(this) {
-                b.borrow_mut()
-                    .removed_listeners
-                    .push((nid, event_type.clone()));
+                let name = format!("__aris_listener_{nid}_{event_type}");
+                let registered = ctx
+                    .global_object()
+                    .get(boa_engine::js_string!(name.clone()), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let same = match (&handler_obj, &registered) {
+                    (Some(wanted), Some(actual)) => {
+                        boa_engine::object::JsObject::equals(wanted, actual)
+                    }
+                    _ => false,
+                };
+                if same {
+                    b.borrow_mut()
+                        .listener_actions
+                        .push(ListenerAction::Remove {
+                            node_id: nid,
+                            name: format!("__aris_listener_{nid}_{event_type}"),
+                        });
+                }
             }
             if let Some(o) = this.as_object() {
                 if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
@@ -14115,27 +14188,101 @@ mod listener_registry_tests {
     }
 
     #[test]
-    fn removeEventListener_stops_firing() {
-        let (mut doc, mut rt) = doc_with_buttons();
+    fn removeEventListener_stops_firing_only_for_the_matching_handler() {
+        // Register #b's handler under a named global so the script can pass
+        // the SAME function object to removeEventListener (handler identity
+        // is what the untrack is gated on).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="a">a</button>
+            <button id="b">b</button>
+            <div id="out">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
             r#"
-            document.getElementById('b').removeEventListener('click', document.getElementById('b').__removeProbe);
-        "#,
+            function onB() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'b');
+            }
+            function onA() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'a');
+            }
+            document.getElementById('b').addEventListener('click', onB);
+            document.getElementById('a').addEventListener('click', onA);
+
+            // Negative control: removing an UNRELATED handler must not kill
+            // the live listener (R3 S0 — an undefined/foreign handler used to
+            // untrack the whole (node, type) pair). Same ticket as the
+            // registration so the removal record is actually harvested.
+            document.getElementById('b').removeEventListener('click', onA);
+            "#,
         );
-        // Removal without a matching re-registration must untrack the
-        // handler: clicking #b no longer appends 'b'.
         let b_id = find_id(&doc, "b");
         let a_id = find_id(&doc, "a");
         rt.fire_click(&mut doc, b_id);
         assert_eq!(
             out_text(&doc),
-            "0",
-            "a removed click handler must stop firing (ghost-firing)"
+            "0b",
+            "removing an unrelated handler must NOT stop the live listener"
+        );
+
+        // Now remove the real registered handler (same ticket as a fresh
+        // registration, so identity matching drives the untrack): it must
+        // stop firing.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('b').addEventListener('click', onB);
+            document.getElementById('b').removeEventListener('click', onB);
+            "#,
+        );
+        rt.fire_click(&mut doc, b_id);
+        assert_eq!(
+            out_text(&doc),
+            "0b",
+            "the genuinely removed handler must stop firing (ghost-firing)"
         );
         // The other node's listener is untouched.
         rt.fire_click(&mut doc, a_id);
-        assert_eq!(out_text(&doc), "0a");
+        assert_eq!(out_text(&doc), "0ba");
+    }
+
+    #[test]
+    fn remove_then_readd_in_one_ticket_stays_live() {
+        // R3 S1's exact shape: within ONE script, remove then re-register.
+        // The removal record must not outlive the re-registration that
+        // follows it in the same harvest window (drain-before-add plus the
+        // named re-push is what keeps this live).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">b</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            function onB() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'b');
+            }
+            var b = document.getElementById('b');
+            b.addEventListener('click', onB);
+            b.removeEventListener('click', onB);
+            b.addEventListener('click', onB);
+            "#,
+        );
+        let b_id = find_id(&doc, "b");
+        rt.fire_click(&mut doc, b_id);
+        assert_eq!(
+            out_text(&doc),
+            "0b",
+            "remove-then-readd in one ticket must leave the listener live"
+        );
     }
 
     #[test]
