@@ -432,7 +432,8 @@ fn js_dom_tests() -> Vec<TestResult> {
                 let mut rt = aris_render::js_runtime::JsRuntime::new();
                 rt.bind_and_run(&mut doc, "");
                 // #c's snapshot child_ids feed the childNodes property; the
-                // count does not pass on an empty or truncated snapshot.
+                // count does not pass on an empty or truncated snapshot
+                // (MUT:M3-family anchor: truncation reds the id-domain tests).
                 let c_id = doc
                     .tree()
                     .iter()
