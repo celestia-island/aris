@@ -100,8 +100,25 @@ struct Bridge {
     query_by_id: HashMap<String, u64>,
     /// Snapshot of node properties: node_id → (tag_name, text_content, id_attr, class_attr, node_type)
     node_props: HashMap<u64, NodePropSnapshot>,
-    new_listeners: Vec<(u64, String)>,
+    /// Listener actions in SCRIPT ORDER (add / remove), so a same-window
+    /// add→remove or remove→add collapses to the final script state instead
+    /// of an arbitrary pass order (L940 leftover ②-cycle, R3/R4 findings).
+    listener_actions: Vec<ListenerAction>,
     new_timers: Vec<(String, u64, Option<u64>)>,
+}
+
+/// One listener registration/removal in script order.
+#[derive(Clone, Trace, Finalize)]
+enum ListenerAction {
+    Add {
+        node_id: u64,
+        name: String,
+        handler: JsValue,
+    },
+    Remove {
+        node_id: u64,
+        name: String,
+    },
 }
 
 /// Snapshot of a blitz node's properties for JS-side access.
@@ -189,6 +206,10 @@ impl JsRuntime {
             b.ops.clear();
             b.pending.clear();
             b.next_pending = 0;
+            // Actions belong to the ticket that recorded them; a later
+            // re-registration must not be killed by a stale record
+            // (R3 S1: cross-ticket remove→re-add left the listener dead).
+            b.listener_actions.clear();
         }
         // Deliberately NOT clearing self.listeners here: this path re-runs
         // for every onclick-attribute click (fire_click → bind_and_run), and
@@ -287,14 +308,56 @@ impl JsRuntime {
     /// The handler objects were already stashed as named globals during
     /// addEventListener; here we just record node → name.
     fn harvest_listeners(&mut self) {
-        let new = std::mem::take(&mut self.bridge.borrow_mut().new_listeners);
-        for (node_id, name) in new {
-            // Names are deterministic per (node, type): re-running a script
-            // re-registers under the same name, so dedupe here instead of
-            // stacking duplicate firings.
-            let entry = self.listeners.entry(node_id).or_default();
-            if !entry.contains(&name) {
-                entry.push(name);
+        let actions: Vec<ListenerAction> =
+            std::mem::take(&mut self.bridge.borrow_mut().listener_actions);
+        for action in actions {
+            // ListenerAction derives Trace/Finalize (Drop), so match by
+            // reference and clone the fields we keep.
+            match &action {
+                ListenerAction::Add {
+                    node_id,
+                    name,
+                    handler,
+                } => {
+                    let node_id = *node_id;
+                    let name = name.clone();
+                    let handler = handler.clone();
+                    // Re-stash when an earlier removal in this window deleted
+                    // the global (remove → re-add in one ticket).
+                    let global = self.ctx.global_object();
+                    let present = global
+                        .get(boa_engine::js_string!(name.clone()), &mut self.ctx)
+                        .ok()
+                        .map(|v| v.is_object() || v.is_callable())
+                        .unwrap_or(false);
+                    if !present {
+                        let _ = global.insert_property(
+                            boa_engine::js_string!(name.clone()),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(handler)
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                    // Deterministic name: re-registering dedupes instead of
+                    // stacking duplicate firings.
+                    let entry = self.listeners.entry(node_id).or_default();
+                    if !entry.contains(&name) {
+                        entry.push(name);
+                    }
+                }
+                ListenerAction::Remove { node_id, name } => {
+                    let node_id = *node_id;
+                    let name: String = name.clone();
+                    if let Some(entry) = self.listeners.get_mut(&node_id) {
+                        entry.retain(|n| n != &name);
+                    }
+                    let global = self.ctx.global_object();
+                    let _ = global
+                        .delete_property_or_throw(boa_engine::js_string!(name), &mut self.ctx);
+                }
             }
         }
     }
@@ -12011,7 +12074,11 @@ fn make_element_handle(
             // redesign — see L940).
             if let Some(nid) = read_handle_id(this) {
                 let name = format!("__aris_listener_{nid}_{event_type}");
-                b.borrow_mut().new_listeners.push((nid, name.clone()));
+                b.borrow_mut().listener_actions.push(ListenerAction::Add {
+                    node_id: nid,
+                    name: name.clone(),
+                    handler: handler.clone(),
+                });
                 let _ = ctx.global_object().insert_property(
                     boa_engine::js_string!(name),
                     boa_engine::property::PropertyDescriptor::builder()
@@ -12162,64 +12229,110 @@ fn make_element_handle(
                 }
             }
         }
+        // WHATWG: currentTarget is null once dispatch completes (after every
+        // listener ran; during the walk it stays the dispatch target).
+        if let Some(ev_obj) = event.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::null())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+        }
         Ok(JsValue::from(not_canceled))
     });
     init.function(dispatch, boa_engine::js_string!("dispatchEvent"), 1);
 
     // removeEventListener — removes from _js_listeners.
-    let remove_listener = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let event_type = arg_string(args, 0);
-        let handler_obj = args.get(1).and_then(|v| v.as_object());
-        if let Some(o) = this.as_object() {
-            if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
-                if let Some(lm) = lmap.as_object() {
-                    if let Ok(type_arr) = lm.get(boa_engine::js_string!(event_type.clone()), ctx) {
-                        if let Some(arr) = type_arr.as_object() {
-                            let len = arr
-                                .get(boa_engine::js_string!("length"), ctx)
-                                .ok()
-                                .and_then(|v| v.as_number())
-                                .unwrap_or(0.0) as u32;
-                            let new_arr =
-                                boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                            let pd = |val: JsValue| {
-                                boa_engine::property::PropertyDescriptor::builder()
-                                    .value(val)
-                                    .writable(true)
-                                    .enumerable(true)
-                                    .configurable(true)
-                                    .build()
-                            };
-                            let mut new_len = 0u32;
-                            for i in 0..len {
-                                if let Ok(h) = arr.get(i as u32, ctx) {
-                                    let matches = match (&handler_obj, h.as_object()) {
-                                        (Some(target), Some(ho)) => {
-                                            boa_engine::object::JsObject::equals(target, &ho)
+    let remove_listener = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let event_type = arg_string(args, 0);
+            let handler_obj = args.get(1).and_then(|v| v.as_object());
+            // Untrack from the fire_click dispatch map (L940 leftover ②-cycle):
+            // without this, a removed click handler kept firing (ghost-firing).
+            // Gated on handler IDENTITY: the registered callback is the stashed
+            // global, so removing an unrelated/undefined handler must not kill
+            // a live listener (R3 S0).
+            if let Some(nid) = read_handle_id(this) {
+                let name = format!("__aris_listener_{nid}_{event_type}");
+                let registered = ctx
+                    .global_object()
+                    .get(boa_engine::js_string!(name.clone()), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let same = match (&handler_obj, &registered) {
+                    (Some(wanted), Some(actual)) => {
+                        boa_engine::object::JsObject::equals(wanted, actual)
+                    }
+                    _ => false,
+                };
+                if same {
+                    b.borrow_mut()
+                        .listener_actions
+                        .push(ListenerAction::Remove {
+                            node_id: nid,
+                            name: format!("__aris_listener_{nid}_{event_type}"),
+                        });
+                }
+            }
+            if let Some(o) = this.as_object() {
+                if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
+                    if let Some(lm) = lmap.as_object() {
+                        if let Ok(type_arr) =
+                            lm.get(boa_engine::js_string!(event_type.clone()), ctx)
+                        {
+                            if let Some(arr) = type_arr.as_object() {
+                                let len =
+                                    arr.get(boa_engine::js_string!("length"), ctx)
+                                        .ok()
+                                        .and_then(|v| v.as_number())
+                                        .unwrap_or(0.0) as u32;
+                                let new_arr = boa_engine::object::JsObject::with_object_proto(
+                                    ctx.intrinsics(),
+                                );
+                                let pd = |val: JsValue| {
+                                    boa_engine::property::PropertyDescriptor::builder()
+                                        .value(val)
+                                        .writable(true)
+                                        .enumerable(true)
+                                        .configurable(true)
+                                        .build()
+                                };
+                                let mut new_len = 0u32;
+                                for i in 0..len {
+                                    if let Ok(h) = arr.get(i as u32, ctx) {
+                                        let matches = match (&handler_obj, h.as_object()) {
+                                            (Some(target), Some(ho)) => {
+                                                boa_engine::object::JsObject::equals(target, &ho)
+                                            }
+                                            _ => false,
+                                        };
+                                        if !matches {
+                                            let _ = new_arr.insert_property(new_len, pd(h));
+                                            new_len += 1;
                                         }
-                                        _ => false,
-                                    };
-                                    if !matches {
-                                        let _ = new_arr.insert_property(new_len, pd(h));
-                                        new_len += 1;
                                     }
                                 }
+                                let _ = new_arr.insert_property(
+                                    boa_engine::js_string!("length"),
+                                    pd(JsValue::from(new_len)),
+                                );
+                                let _ = lm.insert_property(
+                                    boa_engine::js_string!(event_type),
+                                    pd(JsValue::from(new_arr)),
+                                );
                             }
-                            let _ = new_arr.insert_property(
-                                boa_engine::js_string!("length"),
-                                pd(JsValue::from(new_len)),
-                            );
-                            let _ = lm.insert_property(
-                                boa_engine::js_string!(event_type),
-                                pd(JsValue::from(new_arr)),
-                            );
                         }
                     }
                 }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(
         remove_listener,
         boa_engine::js_string!("removeEventListener"),
@@ -14019,6 +14132,204 @@ mod bridge_flow_tests {
             (size.width, size.height),
             (300.0, 150.0),
             "created canvas must lay out at the canvas intrinsic 300×150, got {size:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod listener_registry_tests {
+    //! L940 leftover ②-cycle: removeEventListener must untrack the handler
+    //! from the fire_click dispatch map (ghost-firing fix), and the
+    //! dispatchEvent surface must reset currentTarget after dispatch.
+
+    use super::JsRuntime;
+    use blitz_dom::{BaseDocument, DocumentConfig};
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn doc_with_buttons() -> (HtmlDocument, JsRuntime) {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="a">a</button>
+            <button id="b">b</button>
+            <div id="out">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('a').addEventListener('click', function () {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'a');
+            });
+            document.getElementById('b').addEventListener('click', function () {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'b');
+            });
+        "#,
+        );
+        (doc, rt)
+    }
+
+    fn find_id(doc: &HtmlDocument, want: &str) -> u64 {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(want))
+            .map(|(id, _)| id.as_u64())
+            .expect("fixture id missing")
+    }
+
+    fn out_text(doc: &HtmlDocument) -> String {
+        doc.get_node(blitz_traits::NodeId::from_u64(find_id(doc, "out")))
+            .map(|n| n.text_content())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn removeEventListener_stops_firing_only_for_the_matching_handler() {
+        // Register #b's handler under a named global so the script can pass
+        // the SAME function object to removeEventListener (handler identity
+        // is what the untrack is gated on).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="a">a</button>
+            <button id="b">b</button>
+            <div id="out">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            function onB() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'b');
+            }
+            function onA() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'a');
+            }
+            document.getElementById('b').addEventListener('click', onB);
+            document.getElementById('a').addEventListener('click', onA);
+
+            // Negative control: removing an UNRELATED handler must not kill
+            // the live listener (R3 S0 — an undefined/foreign handler used to
+            // untrack the whole (node, type) pair). Same ticket as the
+            // registration so the removal record is actually harvested.
+            document.getElementById('b').removeEventListener('click', onA);
+            "#,
+        );
+        let b_id = find_id(&doc, "b");
+        rt.fire_click(&mut doc, b_id);
+        assert_eq!(
+            out_text(&doc),
+            "0b",
+            "removing an unrelated handler must NOT stop the live listener"
+        );
+
+        // Now remove the real registered handler (same ticket as a fresh
+        // registration, so identity matching drives the untrack): it must
+        // stop firing.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('b').addEventListener('click', onB);
+            document.getElementById('b').removeEventListener('click', onB);
+            "#,
+        );
+        // Count firings in a JS counter (not appended text): an appended
+        // marker reads identically whether the handler fired once or twice.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            clickCount = 0;
+            document.getElementById('b').addEventListener('click', function () {
+                clickCount++;
+            });
+            "#,
+        );
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('out').setText('count=' + clickCount);
+            "#,
+        );
+        assert_eq!(
+            out_text(&doc),
+            "count=1",
+            "the live handler must fire exactly once"
+        );
+    }
+
+    #[test]
+    fn remove_then_readd_in_one_ticket_stays_live() {
+        // R3 S1's exact shape: within ONE script, remove then re-register.
+        // The removal record must not outlive the re-registration that
+        // follows it in the same harvest window (drain-before-add plus the
+        // named re-push is what keeps this live).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">b</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            function onB() {
+                var o = document.getElementById('out');
+                o.setText(o.textContent + 'b');
+            }
+            var b = document.getElementById('b');
+            b.addEventListener('click', onB);
+            b.removeEventListener('click', onB);
+            b.addEventListener('click', onB);
+            "#,
+        );
+        let b_id = find_id(&doc, "b");
+        rt.fire_click(&mut doc, b_id);
+        assert_eq!(
+            out_text(&doc),
+            "0b",
+            "remove-then-readd in one ticket must leave the listener live"
+        );
+    }
+
+    #[test]
+    fn dispatch_resets_current_target_after_the_walk() {
+        // WHATWG: currentTarget === this during dispatch, null after it.
+        // The probe records both readings from inside the page script.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="t"></div><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var inside = 'unset';
+            var after = 'unset';
+            var t = document.getElementById('t');
+            t.addEventListener('ping', function (e) {
+                inside = (e.currentTarget === t) ? 'target' : String(e.currentTarget);
+            });
+            var ev = new Event('ping');
+            t.dispatchEvent(ev);
+            after = String(ev.currentTarget);
+            var o = document.getElementById('out');
+            o.setText(inside + '|' + after);
+        "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(find_id(&doc, "out")))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "target|null",
+            "currentTarget must be the dispatch target during the walk and null after it"
         );
     }
 }
