@@ -94,10 +94,6 @@ struct Bridge {
     ids: HashMap<String, u64>,
     ops: Vec<Op>,
     next_pending: u32,
-    /// Monotonic sequence for addEventListener global names
-    /// (`__aris_listener_<node>_<seq>`), keeping multiple handlers of one
-    /// node distinct.
-    next_listener_reg: u32,
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
@@ -194,7 +190,12 @@ impl JsRuntime {
             b.pending.clear();
             b.next_pending = 0;
         }
-        self.listeners.clear();
+        // Deliberately NOT clearing self.listeners here: this path re-runs
+        // for every onclick-attribute click (fire_click → bind_and_run), and
+        // clearing would permanently unregister every addEventListener
+        // listener on the page. Registration names are deterministic per
+        // (node, type) and harvest dedupes, so re-running the same script is
+        // idempotent on the listener map.
         self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
@@ -13870,6 +13871,87 @@ mod bridge_flow_tests {
         assert_eq!(
             text, "clicked via listener",
             "a registered click listener must fire and mutate the DOM"
+        );
+    }
+
+    #[test]
+    fn onclick_attr_and_add_listener_coexist_exactly_once() {
+        // L940 leftover ① guard: fire_click re-enters bind_and_run for the
+        // onclick attribute, which must not unregister (or double-fire) the
+        // script-registered listeners — on this node or any other.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="a" onclick="document.getElementById('oa').setText('oa-' + fire_seq++)">inline</button>
+            <button id="b">scripted</button>
+            <div id="oa">0</div>
+            <div id="sa">0</div>
+            <div id="sb">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var fire_seq = 1;
+            document.getElementById('b').addEventListener('click', function () {
+                var el = document.getElementById('sb');
+                el.setText(el.textContent + 'x');
+            });
+        "#,
+        );
+        let click = |rt: &mut JsRuntime, doc: &mut HtmlDocument, id: &str| {
+            let Some(nid) = doc
+                .tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(id, _)| id.as_u64())
+            else {
+                panic!("missing #{id}");
+            };
+            rt.fire_click(doc, nid);
+        };
+
+        // First click on the onclick node: inline handler fires once, the
+        // scripted listener on #b must SURVIVE the re-bind.
+        click(&mut rt, &mut doc, "a");
+        let text = |doc: &HtmlDocument, id: &str| {
+            doc.get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing output node"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default()
+        };
+        let oa = text(&doc, "oa");
+        assert_eq!(
+            oa, "oa-1",
+            "onclick handler must fire exactly once (got {oa:?})"
+        );
+        assert_eq!(
+            text(&doc, "sb"),
+            "0",
+            "unrelated listener must survive the onclick re-bind"
+        );
+
+        // Second click: inline handler again (exactly once), then the
+        // scripted listener on #b still fires exactly once.
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text(&doc, "sb"),
+            "0x",
+            "scripted listener must fire exactly once"
+        );
+        click(&mut rt, &mut doc, "a");
+        let oa2 = text(&doc, "oa");
+        // setText replaces, and fire_seq increments per fire: a single firing
+        // reads "oa-2"; a stacked double firing would read "oa-3" (skipped).
+        assert_eq!(
+            oa2, "oa-2",
+            "second inline firing must stay single (got {oa2:?})"
         );
     }
 
