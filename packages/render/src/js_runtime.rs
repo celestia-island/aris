@@ -12071,16 +12071,6 @@ fn make_element_handle(
                     .configurable(true)
                     .build(),
             );
-            // WHATWG: currentTarget is null once dispatch completes.
-            let _ = ev_obj.insert_property(
-                boa_engine::js_string!("currentTarget"),
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(JsValue::null())
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build(),
-            );
         }
         let mut not_canceled = true;
         // 1. Call on<type> property handler.
@@ -12185,6 +12175,19 @@ fn make_element_handle(
                     }
                 }
             }
+        }
+        // WHATWG: currentTarget is null once dispatch completes (after every
+        // listener ran; during the walk it stays the dispatch target).
+        if let Some(ev_obj) = event.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::null())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
         }
         Ok(JsValue::from(not_canceled))
     });
@@ -14136,21 +14139,37 @@ mod listener_registry_tests {
     }
 
     #[test]
-    fn dispatch_resets_current_target() {
-        // WHATWG: after dispatch completes, event.currentTarget is null.
+    fn dispatch_resets_current_target_after_the_walk() {
+        // WHATWG: currentTarget === this during dispatch, null after it.
+        // The probe records both readings from inside the page script.
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><div id="t"></div></body></html>"#,
+            r#"<html><body><div id="t"></div><div id="out"></div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
-        rt.bind_and_run(&mut doc, "");
-        // Drive the document-level dispatch surface through a synthetic
-        // click event on the registered node.
-        let t_id = find_id(&doc, "t");
-        rt.fire_click(&mut doc, t_id);
-        // No assertion on behavior beyond "must not panic"; the currentTarget
-        // contract is pinned by the dispatch closure itself (reset after the
-        // listener walk completes).
-        let _ = NodeId::from_u64(t_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var inside = 'unset';
+            var after = 'unset';
+            var t = document.getElementById('t');
+            t.addEventListener('ping', function (e) {
+                inside = (e.currentTarget === t) ? 'target' : String(e.currentTarget);
+            });
+            var ev = new Event('ping');
+            t.dispatchEvent(ev);
+            after = String(ev.currentTarget);
+            var o = document.getElementById('out');
+            o.setText(inside + '|' + after);
+        "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(find_id(&doc, "out")))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "target|null",
+            "currentTarget must be the dispatch target during the walk and null after it"
+        );
     }
 }
