@@ -18,30 +18,30 @@ memmap2 = "0.9"
 # fontconfig dependency can't cross-compile, so we only enable it on desktop.
 # These are optional so fbdev-only builds (kei_fbtest) stay slim and avoid
 # pulling in heavy musl-incompatible runtime deps.
-blitz-dom = { version = "=0.3.0-beta.1", default-features = false, optional = true }
-blitz-paint = { version = "=0.3.0-beta.1", default-features = false, optional = true }
-blitz-traits = { version = "=0.3.0-beta.1", optional = true }
-blitz-html = { version = "=0.3.0-beta.1", optional = true }
-anyrender = { version = "0.11", optional = true }
-anyrender_vello_cpu = { version = "0.14", optional = true }
+blitz-dom = { version = "=0.3.0-beta.5", default-features = false, optional = true }
+blitz-paint = { version = "=0.3.0-beta.5", default-features = false, optional = true }
+blitz-traits = { version = "=0.3.0-beta.5", optional = true }
+blitz-html = { version = "=0.3.0-beta.5", optional = true }
+anyrender = { version = "0.15", optional = true }
+anyrender_vello_cpu = { version = "0.19", optional = true }
 # kurbo + peniko for Canvas 2D vector geometry (must match anyrender's versions).
 kurbo = "0.13"
 peniko = "0.6"
 # For embedded font registration (render_html_with_font).
 # All font stack crates come from crates.io (no local forks).
 linebender_resource_handle = { version = "0.1", optional = true }
-parley = { version = "0.10", default-features = false, features = [
+parley = { version = "0.13", default-features = false, features = [
     "std",
 ], optional = true }
-fontique = { version = "0.10", default-features = false, features = [
+fontique = { version = "0.13", default-features = false, features = [
     "std",
 ], optional = true }
 
 # Boa JS engine (optional)
 aris-js = { path = "../js", optional = true }
 # Direct Boa access for the minimal onclick DOM bridge (js feature).
-boa_engine = { version = "=0.21.1", optional = true }
-boa_gc = { version = "=0.21.1", optional = true }
+boa_engine = { version = "0.22", optional = true }
+boa_gc = { version = "0.22", optional = true }
 
 # Desktop windowing (optional)
 winit = { version = "0.30", optional = true }
@@ -52,9 +52,9 @@ raw-window-handle = { version = "0.6", optional = true }
 # browser, not for the headless/fbdev kiosk renderer). Kept optional so musl
 # cross-compile and kei fbdev builds stay slim.
 url = { version = "2", optional = true }
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
-    "rustls-tls",
+    "rustls",
     "gzip",
     "cookies",
 ], optional = true }
@@ -63,7 +63,7 @@ bytes = { version = "1", optional = true }
 http = { version = "1", optional = true }
 # keyboard-types is a transitive dep of blitz-traits; we need it directly to
 # construct BlitzKeyEvent values when forwarding winit key events to blitz-dom.
-keyboard-types = { version = "0.7", optional = true }
+keyboard-types = { version = "0.8", optional = true }
 # Session persistence (history save/load).
 serde_json = { version = "1", optional = true }
 # Favicon image decoding.
@@ -78,9 +78,9 @@ png = { version = "0.18", optional = true }
 # WebGL rendering backend (wgpu + naga for GLSL→WGSL translation).
 wgpu = { version = "30", optional = true }
 naga = { version = "30", features = ["wgsl-out", "glsl-in"], optional = true }
-pollster = { version = "0.4", optional = true }
+pollster = { version = "1", optional = true }
 # WebRTC support (str0m = pure Rust sans-IO WebRTC, with pure Rust crypto).
-str0m = { version = "0.21", default-features = false, features = [
+str0m = { version = "0.26", default-features = false, features = [
     "rust-crypto",
 ], optional = true }
 

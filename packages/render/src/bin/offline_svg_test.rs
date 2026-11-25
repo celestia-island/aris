@@ -29,12 +29,16 @@ fn main() {
             // Check for red pixels (the circle).
             let red = frame
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|px| px[0] > 150 && px[1] < 80 && px[2] < 80)
                 .count();
             let white = frame
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|px| px[0] > 200 && px[1] > 200 && px[2] > 200)
                 .count();
             println!("red pixels: {} (SVG circle)", red);

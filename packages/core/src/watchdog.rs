@@ -242,7 +242,9 @@ mod tests {
 
     #[test]
     fn default_timeout_is_reasonable() {
-        assert!(DEFAULT_TIMEOUT_SECS >= 5 && DEFAULT_TIMEOUT_SECS <= 120);
+        const {
+            assert!(DEFAULT_TIMEOUT_SECS >= 5 && DEFAULT_TIMEOUT_SECS <= 120);
+        }
     }
 
     #[test]

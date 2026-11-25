@@ -60,15 +60,15 @@ h1{margin:0;} a{display:block;margin:8px 0;font-size:16px;}</style>
 
     // Scan the document for the first <a> node and read its layout box.
     let tree = doc.tree();
-    let mut link_id: Option<usize> = None;
+    let mut link_id: Option<blitz_traits::NodeId> = None;
     let mut link_box: Option<(f32, f32, f32, f32)> = None;
     for (id, node) in tree.iter() {
         if let Some(el) = node.element_data()
             && format!("{:?}", el.name.local).contains("'a'")
         {
             let pos = node.absolute_position(0.0, 0.0);
-            let w = node.final_layout.size.width;
-            let h = node.final_layout.size.height;
+            let w = node.final_layout().size.width;
+            let h = node.final_layout().size.height;
             println!("found <a> node {id} at ({}, {}) {}x{}", pos.x, pos.y, w, h);
             if link_id.is_none() {
                 link_id = Some(id);
@@ -110,6 +110,7 @@ h1{margin:0;} a{display:block;margin:8px 0;font-size:16px;}</style>
         mods: unsafe { core::mem::zeroed() },
         details: Default::default(),
         element: Default::default(),
+        active_pointers: Default::default(),
     };
 
     // Disable background fetch threads from actually running by checking the

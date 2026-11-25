@@ -201,7 +201,7 @@ impl Frame {
         writeln!(file, "{} {}", self.width, self.height)?;
         writeln!(file, "255")?;
         let mut rgb = Vec::with_capacity((self.width * self.height * 3) as usize);
-        for chunk in self.rgba.chunks_exact(4) {
+        for chunk in self.rgba.as_chunks::<4>().0 {
             rgb.push(chunk[0]);
             rgb.push(chunk[1]);
             rgb.push(chunk[2]);

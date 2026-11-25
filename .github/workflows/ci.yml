@@ -17,6 +17,12 @@ jobs:
       # dev headers and pkg-config to build on the Ubuntu runner.
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev pkg-config
       - run: cargo check --workspace
+      # kei's build channel cross-compiles kei_tty with only the `png`
+      # feature (`required-features` keeps this bin invisible to
+      # `cargo check --workspace`), so pin its lane explicitly — a
+      # transitive bump that breaks the png closure must fail here, not at
+      # kei's next firmware build.
+      - run: cargo check -p aris-render --no-default-features --features png --bin kei_tty
 
   clippy:
     runs-on: [self-hosted, linux, x64, local]
