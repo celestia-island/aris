@@ -14223,7 +14223,6 @@ mod listener_registry_tests {
             "#,
         );
         let b_id = find_id(&doc, "b");
-        let a_id = find_id(&doc, "a");
         rt.fire_click(&mut doc, b_id);
         assert_eq!(
             out_text(&doc),
