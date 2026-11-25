@@ -13677,16 +13677,22 @@ mod node_props_tests {
     fn root_parent_id_is_zero_not_fabricated() {
         let doc = test_doc();
         let snapshot = collect_node_props(&doc);
+        let mut covered_roots = 0;
         for (id, node) in doc.tree().iter() {
             if node.parent.is_none()
                 && let Some(snap) = snapshot.get(&id.as_u64())
             {
+                covered_roots += 1;
                 assert_eq!(
                     snap.parent_id, 0,
                     "root {id:?} must keep parent_id 0 (the documented no-parent sentinel)"
                 );
             }
         }
+        assert!(
+            covered_roots >= 1,
+            "fixture must contain at least one parentless node, else this test is vacuous"
+        );
     }
 
     #[test]

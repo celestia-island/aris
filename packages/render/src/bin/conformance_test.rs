@@ -425,7 +425,7 @@ fn js_dom_tests() -> Vec<TestResult> {
         t!(
             "js-childNodes-length",
             "js-dom",
-            "childNodes on a live element exposes its real children",
+            "node-prop snapshot feeds childNodes with the right child count",
             "https://dom.spec.whatwg.org/#dom-node-childnodes",
             {
                 let mut doc = make_doc(r#"<div id="c"><span>a</span><b>b</b>tail</div>"#);
