@@ -192,7 +192,14 @@ impl Canvas2D {
     pub fn fill_rect(&mut self, x: f64, y: f64, w: f64, h: f64) {
         let rect = Rect::new(x, y, x + w, y + h);
         let tf = self.current_transform();
-        self.scene.fill(Fill::EvenOdd, tf, self.fill, None, &rect);
+        self.scene.fill(
+            Fill::EvenOdd,
+            tf,
+            self.fill,
+            None,
+            &rect,
+            anyrender::AntiAliasing::Enabled,
+        );
     }
 
     /// Stroke a rectangle outline with the current stroke color.
@@ -200,7 +207,14 @@ impl Canvas2D {
         let rect = Rect::new(x, y, x + w, y + h);
         let tf = self.current_transform();
         let stroke = kurbo::Stroke::new(1.0);
-        self.scene.stroke(&stroke, tf, self.stroke, None, &rect);
+        self.scene.stroke(
+            &stroke,
+            tf,
+            self.stroke,
+            None,
+            &rect,
+            anyrender::AntiAliasing::Enabled,
+        );
     }
 
     /// Clear a rectangle to transparent (resets the clip region).
@@ -254,15 +268,27 @@ impl Canvas2D {
 
     pub fn fill_path(&mut self) {
         let tf = self.current_transform();
-        self.scene
-            .fill(Fill::EvenOdd, tf, self.fill, None, &self.path);
+        self.scene.fill(
+            Fill::EvenOdd,
+            tf,
+            self.fill,
+            None,
+            &self.path,
+            anyrender::AntiAliasing::Enabled,
+        );
     }
 
     pub fn stroke_path(&mut self) {
         let tf = self.current_transform();
         let stroke = kurbo::Stroke::new(1.0);
-        self.scene
-            .stroke(&stroke, tf, self.stroke, None, &self.path);
+        self.scene.stroke(
+            &stroke,
+            tf,
+            self.stroke,
+            None,
+            &self.path,
+            anyrender::AntiAliasing::Enabled,
+        );
     }
 
     // ── Transforms ──

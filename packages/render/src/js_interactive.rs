@@ -35,7 +35,7 @@ pub struct OnclickResult {
 #[derive(Default, Trace, Finalize)]
 struct Bridge {
     /// Snapshot of element id → node id, taken at install time.
-    ids: HashMap<String, u32>,
+    ids: HashMap<String, u64>,
     /// Recorded DOM operations, replayed after the script.
     ops: Vec<Op>,
     /// Monotonic counter for created-element handles.
@@ -43,43 +43,43 @@ struct Bridge {
     /// Stashed created elements keyed by pending id: (tag, text, attrs).
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
     /// querySelector index: tag/class/id → first node id.
-    query_by_tag: HashMap<String, u32>,
-    query_by_class: HashMap<String, u32>,
-    query_by_id: HashMap<String, u32>,
+    query_by_tag: HashMap<String, u64>,
+    query_by_class: HashMap<String, u64>,
+    query_by_id: HashMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
 enum Op {
     SetText {
-        node_id: u32,
+        node_id: u64,
         value: String,
     },
     SetAttr {
-        node_id: u32,
+        node_id: u64,
         name: String,
         value: String,
     },
     /// Append a created element (looked up by pending id) under parent node id.
     AppendChild {
-        parent_id: u32,
+        parent_id: u64,
         pending_id: u32,
     },
 }
 
-pub fn run_onclick(doc: &mut BaseDocument, clicked_id: usize) -> OnclickResult {
+pub fn run_onclick(doc: &mut BaseDocument, clicked_id: u64) -> OnclickResult {
     let mut result = OnclickResult::default();
 
     // Walk up to the nearest element with an onclick attribute.
     let mut handler_src: Option<String> = None;
     let mut cur = Some(clicked_id);
     while let Some(id) = cur {
-        match doc.get_node(id) {
+        match doc.get_node(blitz_traits::NodeId::from_u64(id)) {
             Some(node) => {
                 if let Some(src) = node.attr(local_name!("onclick")) {
                     handler_src = Some(src.to_string());
                     break;
                 }
-                cur = node.parent;
+                cur = node.parent.map(|p| p.as_u64());
             }
             None => break,
         }
@@ -136,7 +136,7 @@ fn apply_op(
 ) -> bool {
     match &op {
         Op::SetText { node_id, value } => {
-            set_text_content(doc, *node_id as usize, value);
+            set_text_content(doc, *node_id, value);
             true
         }
         Op::SetAttr {
@@ -144,7 +144,7 @@ fn apply_op(
             name,
             value,
         } => {
-            set_attribute(doc, *node_id as usize, name, value);
+            set_attribute(doc, *node_id, name, value);
             true
         }
         Op::AppendChild {
@@ -152,7 +152,7 @@ fn apply_op(
             pending_id,
         } => {
             if let Some((tag, text, attrs)) = pending.get(pending_id) {
-                create_and_append(doc, *parent_id as usize, tag, text, attrs);
+                create_and_append(doc, *parent_id, tag, text, attrs);
                 true
             } else {
                 false
@@ -163,19 +163,20 @@ fn apply_op(
 
 // ── Live-DOM helpers ───────────────────────────────────────
 
-fn collect_ids(doc: &BaseDocument) -> HashMap<String, u32> {
+fn collect_ids(doc: &BaseDocument) -> HashMap<String, u64> {
     let mut r = HashMap::new();
     let tree = doc.tree();
     for (id, node) in tree.iter() {
         if let Some(id_attr) = node.attr(local_name!("id")) {
-            r.insert(id_attr.to_string(), id as u32);
+            r.insert(id_attr.to_string(), id.as_u64());
         }
     }
     r
 }
 
-fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
-    let first_text = doc.get_node(node_id).and_then(|n| {
+fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
+    let nid = blitz_traits::NodeId::from_u64(node_id);
+    let first_text = doc.get_node(nid).and_then(|n| {
         n.children.iter().copied().find(|&c| {
             doc.get_node(c)
                 .map(|cn| cn.text_data().is_some())
@@ -188,23 +189,24 @@ fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
         }
     } else {
         let new_id = doc.create_text_node(value);
-        if let Some(parent) = doc.get_node_mut(node_id) {
+        if let Some(parent) = doc.get_node_mut(nid) {
             parent.children.push(new_id);
         }
         if let Some(child) = doc.get_node_mut(new_id) {
-            child.parent = Some(node_id);
+            child.parent = Some(nid);
         }
     }
 }
 
-fn set_attribute(doc: &mut BaseDocument, node_id: usize, name: &str, value: &str) {
+fn set_attribute(doc: &mut BaseDocument, node_id: u64, name: &str, value: &str) {
     let qname = blitz_dom::QualName::new(None, blitz_dom::ns!(html), name.into());
-    doc.mutate().set_attribute(node_id, qname, value);
+    doc.mutate()
+        .set_attribute(blitz_traits::NodeId::from_u64(node_id), qname, value);
 }
 
 fn create_and_append(
     doc: &mut BaseDocument,
-    parent_id: usize,
+    parent_id: u64,
     tag: &str,
     text: &str,
     attrs: &[(String, String)],
@@ -221,12 +223,12 @@ fn create_and_append(
         QualName::new(None, blitz_dom::ns!(html), tag.into()),
         attrs_vec,
     );
-    let new_id = doc.create_node(NodeData::Element(el));
-    if let Some(parent) = doc.get_node_mut(parent_id) {
+    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
+    if let Some(parent) = doc.get_node_mut(blitz_traits::NodeId::from_u64(parent_id)) {
         parent.children.push(new_id);
     }
     if let Some(child) = doc.get_node_mut(new_id) {
-        child.parent = Some(parent_id);
+        child.parent = Some(blitz_traits::NodeId::from_u64(parent_id));
     }
     if !text.is_empty() {
         let text_id = doc.create_text_node(text);
@@ -322,9 +324,9 @@ fn arg_string(args: &[JsValue], idx: usize) -> String {
 fn collect_query_index(
     doc: &BaseDocument,
 ) -> (
-    HashMap<String, u32>,
-    HashMap<String, u32>,
-    HashMap<String, u32>,
+    HashMap<String, u64>,
+    HashMap<String, u64>,
+    HashMap<String, u64>,
 ) {
     let mut by_tag = HashMap::new();
     let mut by_class = HashMap::new();
@@ -336,15 +338,15 @@ fn collect_query_index(
                 .trim_start_matches("Atom('")
                 .trim_end_matches("' type=static)")
                 .to_string();
-            by_tag.entry(tag).or_insert(id as u32);
+            by_tag.entry(tag).or_insert(id.as_u64());
             if let Some(cls) = node.attr(local_name!("class")) {
                 for c in cls.split_whitespace() {
-                    by_class.entry(c.to_string()).or_insert(id as u32);
+                    by_class.entry(c.to_string()).or_insert(id.as_u64());
                 }
             }
         }
         if let Some(id_attr) = node.attr(local_name!("id")) {
-            by_id.entry(id_attr.to_string()).or_insert(id as u32);
+            by_id.entry(id_attr.to_string()).or_insert(id.as_u64());
         }
     }
     (by_tag, by_class, by_id)
@@ -360,7 +362,7 @@ fn collect_query_index(
 fn make_element_handle(
     ctx: &mut Context,
     bridge: Gc<GcRefCell<Bridge>>,
-    nid: u32,
+    nid: u64,
     pending: Option<u32>,
 ) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
@@ -517,12 +519,12 @@ fn parse_quoted(s: &str) -> Option<(String, &str)> {
     Some((inner[..end].to_string(), &inner[end + 1..]))
 }
 
-fn read_handle_id(v: &JsValue) -> Option<u32> {
+fn read_handle_id(v: &JsValue) -> Option<u64> {
     let obj = v.as_object()?;
     let id = obj
         .get(boa_engine::js_string!("_arisId"), &mut Context::default())
         .ok()?;
-    id.as_number().map(|n| n as u32).filter(|&n| n != 0)
+    id.as_number().map(|n| n as u64).filter(|&n| n != 0)
 }
 
 fn read_pending(v: &JsValue) -> Option<u32> {

@@ -72,7 +72,7 @@ fn main() {
     println!("#out before click: {:?}", before);
 
     // Fire the click listener.
-    rt.fire_click(&mut doc, btn_id as u32);
+    rt.fire_click(&mut doc, btn_id.as_u64());
 
     let after = doc
         .get_node(out_id)

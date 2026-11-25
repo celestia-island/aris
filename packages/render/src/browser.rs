@@ -598,20 +598,6 @@ impl ShellProvider for BrowserShellProvider {
         *self.state.clipboard.lock().unwrap() = Some(text);
         Ok(())
     }
-
-    fn get_clipboard_text(&self) -> Result<String, blitz_traits::shell::ClipboardError> {
-        // Prefer the OS clipboard; fall back to the buffer.
-        match os_clipboard_get() {
-            Ok(s) => Ok(s),
-            Err(_) => Ok(self
-                .state
-                .clipboard
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_default()),
-        }
-    }
 }
 
 /// Set the OS clipboard text. Returns Err with a message if unavailable.

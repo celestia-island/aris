@@ -50,18 +50,18 @@ fn main() {
         doc.tree()
             .iter()
             .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
-            .map(|(nid, _)| nid)
-            .unwrap_or(usize::MAX)
+            .map(|(nid, _)| nid.as_u64())
+            .unwrap_or(u64::MAX)
     };
     let btn_id = find_by_id(&doc, "btn");
     let sty_id = find_by_id(&doc, "sty");
     let out_id = find_by_id(&doc, "out");
-    assert!(btn_id != usize::MAX, "no #btn");
-    assert!(sty_id != usize::MAX, "no #sty");
-    assert!(out_id != usize::MAX, "no #out");
+    assert!(btn_id != u64::MAX, "no #btn");
+    assert!(sty_id != u64::MAX, "no #sty");
+    assert!(out_id != u64::MAX, "no #out");
 
     let before = doc
-        .get_node(out_id)
+        .get_node(blitz_traits::NodeId::from_u64(out_id))
         .map(|n| n.text_content())
         .unwrap_or_default();
     println!("#out before click: {:?}", before);
@@ -76,7 +76,7 @@ fn main() {
         println!("  [js] {}", e);
     }
     let after = doc
-        .get_node(out_id)
+        .get_node(blitz_traits::NodeId::from_u64(out_id))
         .map(|n| n.text_content())
         .unwrap_or_default();
     println!("#out after #btn click:  {:?}", after);
@@ -96,7 +96,7 @@ fn main() {
         println!("  [js] {}", e);
     }
     let style_attr = doc
-        .get_node(out_id)
+        .get_node(blitz_traits::NodeId::from_u64(out_id))
         .and_then(|n| n.attr(blitz_dom::local_name!("style")))
         .map(|s| s.to_string())
         .unwrap_or_default();
@@ -113,9 +113,12 @@ fn main() {
     // Run the createElement+appendChild onclick on #add and verify #list got a child.
     let add_id = find_by_id(&doc, "add");
     let list_id = find_by_id(&doc, "list");
-    assert!(add_id != usize::MAX, "no #add");
-    assert!(list_id != usize::MAX, "no #list");
-    let list_children_before = doc.get_node(list_id).map(|n| n.children.len()).unwrap_or(0);
+    assert!(add_id != u64::MAX, "no #add");
+    assert!(list_id != u64::MAX, "no #list");
+    let list_children_before = doc
+        .get_node(blitz_traits::NodeId::from_u64(list_id))
+        .map(|n| n.children.len())
+        .unwrap_or(0);
     let r3 = aris_render::js_interactive::run_onclick(&mut doc, add_id);
     println!(
         "add onclick: executed={} mutated={}",
@@ -124,7 +127,10 @@ fn main() {
     for e in &r3.errors {
         println!("  [js] {}", e);
     }
-    let list_children_after = doc.get_node(list_id).map(|n| n.children.len()).unwrap_or(0);
+    let list_children_after = doc
+        .get_node(blitz_traits::NodeId::from_u64(list_id))
+        .map(|n| n.children.len())
+        .unwrap_or(0);
     println!(
         "#list children: {} -> {}",
         list_children_before, list_children_after
@@ -135,7 +141,7 @@ fn main() {
     }
     // Verify the appended div carries the text "Added by JS".
     let appended_text = doc
-        .get_node(list_id)
+        .get_node(blitz_traits::NodeId::from_u64(list_id))
         .and_then(|n| n.children.last().and_then(|&cid| doc.get_node(cid)))
         .map(|n| n.text_content())
         .unwrap_or_default();

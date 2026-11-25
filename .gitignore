@@ -18,7 +18,6 @@ Thumbs.db
 *.cpio.gz
 __pycache__/
 /tests/output/
-/Cargo.lock
 
 dist/
 packages/js/target/
@@ -27,7 +26,6 @@ packages/js/target/
 /.just/
 /celestia-devtools.just
 .wpt/
-patches/boa_engine_021/target/
 
 # WPT 测试集，按需克隆（见 scripts/fetch_wpt.py / `just pull wpt`），不纳入版本控制
 /tests/wpt/wpt-master/
@@ -46,10 +44,6 @@ patches/boa_engine_021/target/
 # 顶层 kei_desktop.html 是 PPM 格式的样例图像（文件名误导），保留在树里。
 # （如果未来改为生成产物，再添加到 ignore）
 
-# patches/ 下的各 crate 的构建目录
-patches/boa_engine/target/
-patches/boa_parser/target/
-patches/boa_gc/target/
 .cargo/config.toml
 
 # Accidental doubled test dir (from running create_fixtures.sh with a relative arg)

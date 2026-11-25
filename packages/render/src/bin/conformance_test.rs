@@ -322,21 +322,21 @@ fn js_dom_tests() -> Vec<TestResult> {
                             .map(|e| format!("{:?}", e.name.local).contains("'button'"))
                             .unwrap_or(false)
                     })
-                    .map(|(id, _)| id)
-                    .unwrap_or(0) as u32;
+                    .map(|(id, _)| id.as_u64())
+                    .unwrap_or(0);
                 let out = doc
                     .tree()
                     .iter()
                     .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
-                    .map(|(id, _)| id)
+                    .map(|(id, _)| id.as_u64())
                     .unwrap_or(0);
                 let before = doc
-                    .get_node(out)
+                    .get_node(blitz_traits::NodeId::from_u64(out))
                     .map(|n| n.text_content())
                     .unwrap_or_default();
                 rt.fire_click(&mut doc, btn);
                 let after = doc
-                    .get_node(out)
+                    .get_node(blitz_traits::NodeId::from_u64(out))
                     .map(|n| n.text_content())
                     .unwrap_or_default();
                 (
@@ -371,10 +371,13 @@ fn js_dom_tests() -> Vec<TestResult> {
                     .tree()
                     .iter()
                     .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
-                    .map(|(id, _)| id)
+                    .map(|(id, _)| id.as_u64())
                     .unwrap_or(0);
                 let children_before = 0;
-                let children_after = doc.get_node(list_id).map(|n| n.children.len()).unwrap_or(0);
+                let children_after = doc
+                    .get_node(blitz_traits::NodeId::from_u64(list_id))
+                    .map(|n| n.children.len())
+                    .unwrap_or(0);
                 (
                     children_after > children_before,
                     format!("children: {} -> {}", children_before, children_after),
@@ -401,16 +404,18 @@ fn js_dom_tests() -> Vec<TestResult> {
                     .tree()
                     .iter()
                     .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("x"))
-                    .map(|(id, _)| id)
+                    .map(|(id, _)| id.as_u64())
                     .unwrap_or(0);
-                let attr_val = doc.get_node(x_id).and_then(|n| {
-                    n.element_data().and_then(|e| {
-                        e.attrs
-                            .iter()
-                            .find(|a| a.name.local.as_ref() == "data-test")
-                            .map(|a| a.value.to_string())
-                    })
-                });
+                let attr_val = doc
+                    .get_node(blitz_traits::NodeId::from_u64(x_id))
+                    .and_then(|n| {
+                        n.element_data().and_then(|e| {
+                            e.attrs
+                                .iter()
+                                .find(|a| &a.name.local.to_string() == "data-test")
+                                .map(|a| a.value.to_string())
+                        })
+                    });
                 (
                     attr_val.as_deref() == Some("value123"),
                     format!("data-test={:?}", attr_val),
@@ -442,21 +447,21 @@ fn js_event_tests() -> Vec<TestResult> {
                 .tree()
                 .iter()
                 .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
-                .map(|(id, _)| id)
-                .unwrap_or(0) as u32;
+                .map(|(id, _)| id.as_u64())
+                .unwrap_or(0);
             let out = doc
                 .tree()
                 .iter()
                 .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
-                .map(|(id, _)| id)
+                .map(|(id, _)| id.as_u64())
                 .unwrap_or(0);
             let before = doc
-                .get_node(out)
+                .get_node(blitz_traits::NodeId::from_u64(out))
                 .map(|n| n.text_content())
                 .unwrap_or_default();
             rt.fire_click(&mut doc, btn);
             let after = doc
-                .get_node(out)
+                .get_node(blitz_traits::NodeId::from_u64(out))
                 .map(|n| n.text_content())
                 .unwrap_or_default();
             (
@@ -491,10 +496,10 @@ fn js_timer_tests() -> Vec<TestResult> {
                 .tree()
                 .iter()
                 .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
-                .map(|(id, _)| id)
+                .map(|(id, _)| id.as_u64())
                 .unwrap_or(0);
             let after = doc
-                .get_node(out)
+                .get_node(blitz_traits::NodeId::from_u64(out))
                 .map(|n| n.text_content())
                 .unwrap_or_default();
             (

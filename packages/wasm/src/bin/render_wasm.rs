@@ -54,7 +54,7 @@ fn main() {
             let total = frame.width as usize * frame.height as usize;
             let non_black = frame
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>().0.iter()
                 .filter(|px| px[0] > 10 || px[1] > 10 || px[2] > 10)
                 .count();
             let pct = non_black

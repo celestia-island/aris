@@ -465,7 +465,9 @@ impl App {
         // Clamp the root to the viewport so wide content can't force the page
         // wider than the window (a common cause of "uses maximized width"
         // symptoms on HiDPI displays where layout scales unexpectedly).
-        doc.add_user_agent_stylesheet("html,body{max-width:100vw;overflow-x:hidden;}");
+        doc.add_user_agent_stylesheet(blitz_dom::UserAgentStylesheet::parse(
+            "html,body{max-width:100vw;overflow-x:hidden;}",
+        ));
         doc.resolve(0.0);
 
         // With the `js` feature, run inline <script> blocks through the
@@ -550,8 +552,8 @@ impl App {
         let hover_id = doc.get_hover_node_id()?;
         let node = doc.get_node(hover_id)?;
         let pos = node.absolute_position(0.0, 0.0);
-        let w = node.final_layout.size.width;
-        let h = node.final_layout.size.height;
+        let w = node.final_layout().size.width;
+        let h = node.final_layout().size.height;
         if w < 1.0 || h < 1.0 {
             return None;
         }
@@ -801,11 +803,11 @@ impl App {
         let viewport_h_css =
             (self.phys_size.1 as f32 / self.scale_factor as f32) - CHROME_HEIGHT_CSS;
         // Content height: the body's content box height.
-        let content_h = body.final_layout.size.height;
+        let content_h = body.final_layout().size.height;
         if content_h <= viewport_h_css + 1.0 {
             return None; // not scrollable
         }
-        let scroll_y = body.scroll_offset.y as f32;
+        let scroll_y = body.scroll_offset().y as f32;
         Some(ScrollbarMetrics {
             content_h,
             viewport_h: viewport_h_css,
@@ -836,10 +838,19 @@ impl App {
             if !content.contains(&needle) {
                 continue;
             }
-            // Use this text node's own layout box if available, else the parent's.
-            let pos = node.absolute_position(0.0, 0.0);
-            let w = node.final_layout.size.width;
-            let h = node.final_layout.size.height;
+            // Text nodes no longer participate in layout in blitz 0.3.0-beta.5
+            // (layout_data() panics for them), so read the rect from the
+            // parent element — element-level highlighting is the pragmatic
+            // approximation this path was already built around.
+            let Some(parent_id) = node.parent else {
+                continue;
+            };
+            let Some(parent) = doc.get_node(parent_id) else {
+                continue;
+            };
+            let pos = parent.absolute_position(0.0, 0.0);
+            let w = parent.final_layout().size.width;
+            let h = parent.final_layout().size.height;
             if w < 1.0 || h < 1.0 {
                 continue;
             }
@@ -978,6 +989,7 @@ impl App {
             mods,
             details: unsafe { core::mem::zeroed() },
             element: Default::default(),
+            active_pointers: Default::default(),
         };
         let ui = if pressed {
             UiEvent::PointerDown(pe)
@@ -995,7 +1007,7 @@ impl App {
                 .doc
                 .as_ref()
                 .and_then(|d| d.get_hover_node_id())
-                .unwrap_or(0);
+                .unwrap_or(Default::default());
             #[cfg(feature = "js")]
             {
                 // onclick attribute + addEventListener listeners both go through
@@ -1011,7 +1023,7 @@ impl App {
                         .map(|s| s.to_string());
                     rt.bind_and_run(doc, onclick_src.as_deref().unwrap_or(""));
                     // Registered click listeners.
-                    rt.fire_click(doc, target as u32);
+                    rt.fire_click(doc, target.as_u64());
                     self.active_tab_mut().needs_rerender = true;
                 }
             }
@@ -1104,8 +1116,8 @@ impl App {
             -120.0
         };
         if let Some(doc) = self.active_tab_mut().doc.as_mut() {
-            let hover = doc.get_hover_node_id().unwrap_or(0);
-            doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
+            let hover = doc.get_hover_node_id().unwrap_or(Default::default());
+            doc.scroll_node_by(hover, dy, 0.0);
             self.active_tab_mut().needs_rerender = true;
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -1116,7 +1128,7 @@ impl App {
     /// Scroll the document to an absolute y position (`0.0` = top).
     fn scroll_to(&mut self, _y: f64) {
         if let Some(doc) = self.active_tab_mut().doc.as_mut() {
-            let hover = doc.get_hover_node_id().unwrap_or(0);
+            let hover = doc.get_hover_node_id().unwrap_or(Default::default());
             // scroll_node_by is relative; for absolute we'd need the current
             // offset. As a pragmatic approximation, scroll by a large negative
             // delta to reach the bottom, or scroll to top via the viewport API.
@@ -1144,8 +1156,8 @@ impl App {
         if delta.abs() > 0.5
             && let Some(doc) = self.active_tab_mut().doc.as_mut()
         {
-            let hover = doc.get_hover_node_id().unwrap_or(0);
-            doc.scroll_node_by(hover, delta as f64, 0.0, &mut |_| {});
+            let hover = doc.get_hover_node_id().unwrap_or(Default::default());
+            doc.scroll_node_by(hover, delta as f64, 0.0);
             self.active_tab_mut().needs_rerender = true;
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -1513,8 +1525,8 @@ impl ApplicationHandler for App {
                     }
                 };
                 if let Some(doc) = self.active_tab_mut().doc.as_mut() {
-                    let hover = doc.get_hover_node_id().unwrap_or(0);
-                    doc.scroll_node_by(hover, dy, 0.0, &mut |_| {});
+                    let hover = doc.get_hover_node_id().unwrap_or(Default::default());
+                    doc.scroll_node_by(hover, dy, 0.0);
                     self.active_tab_mut().needs_rerender = true;
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -2068,31 +2080,33 @@ fn winit_key_to_kbd(key: &winit::keyboard::Key) -> keyboard_types::Key {
     use winit::keyboard::{Key, NamedKey};
     match key {
         Key::Named(n) => match n {
-            NamedKey::Enter => keyboard_types::Key::Enter,
-            NamedKey::Backspace => keyboard_types::Key::Backspace,
-            NamedKey::Tab => keyboard_types::Key::Tab,
-            NamedKey::Escape => keyboard_types::Key::Escape,
+            NamedKey::Enter => keyboard_types::Key::Named(keyboard_types::NamedKey::Enter),
+            NamedKey::Backspace => keyboard_types::Key::Named(keyboard_types::NamedKey::Backspace),
+            NamedKey::Tab => keyboard_types::Key::Named(keyboard_types::NamedKey::Tab),
+            NamedKey::Escape => keyboard_types::Key::Named(keyboard_types::NamedKey::Escape),
             // Space has no dedicated variant in keyboard-types 0.7; it is
             // surfaced as Character(" ").
             NamedKey::Space => keyboard_types::Key::Character(" ".to_string()),
-            NamedKey::ArrowLeft => keyboard_types::Key::ArrowLeft,
-            NamedKey::ArrowRight => keyboard_types::Key::ArrowRight,
-            NamedKey::ArrowUp => keyboard_types::Key::ArrowUp,
-            NamedKey::ArrowDown => keyboard_types::Key::ArrowDown,
-            NamedKey::Home => keyboard_types::Key::Home,
-            NamedKey::End => keyboard_types::Key::End,
-            NamedKey::Delete => keyboard_types::Key::Delete,
-            NamedKey::PageUp => keyboard_types::Key::PageUp,
-            NamedKey::PageDown => keyboard_types::Key::PageDown,
-            NamedKey::Shift => keyboard_types::Key::Shift,
-            NamedKey::Control => keyboard_types::Key::Control,
-            NamedKey::Alt => keyboard_types::Key::Alt,
-            NamedKey::Super => keyboard_types::Key::Meta,
-            NamedKey::CapsLock => keyboard_types::Key::CapsLock,
-            _ => keyboard_types::Key::Unidentified,
+            NamedKey::ArrowLeft => keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowLeft),
+            NamedKey::ArrowRight => {
+                keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowRight)
+            }
+            NamedKey::ArrowUp => keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowUp),
+            NamedKey::ArrowDown => keyboard_types::Key::Named(keyboard_types::NamedKey::ArrowDown),
+            NamedKey::Home => keyboard_types::Key::Named(keyboard_types::NamedKey::Home),
+            NamedKey::End => keyboard_types::Key::Named(keyboard_types::NamedKey::End),
+            NamedKey::Delete => keyboard_types::Key::Named(keyboard_types::NamedKey::Delete),
+            NamedKey::PageUp => keyboard_types::Key::Named(keyboard_types::NamedKey::PageUp),
+            NamedKey::PageDown => keyboard_types::Key::Named(keyboard_types::NamedKey::PageDown),
+            NamedKey::Shift => keyboard_types::Key::Named(keyboard_types::NamedKey::Shift),
+            NamedKey::Control => keyboard_types::Key::Named(keyboard_types::NamedKey::Control),
+            NamedKey::Alt => keyboard_types::Key::Named(keyboard_types::NamedKey::Alt),
+            NamedKey::Super => keyboard_types::Key::Named(keyboard_types::NamedKey::Meta),
+            NamedKey::CapsLock => keyboard_types::Key::Named(keyboard_types::NamedKey::CapsLock),
+            _ => keyboard_types::Key::Named(keyboard_types::NamedKey::Unidentified),
         },
         Key::Character(c) => keyboard_types::Key::Character(c.to_string()),
-        _ => keyboard_types::Key::Unidentified,
+        _ => keyboard_types::Key::Named(keyboard_types::NamedKey::Unidentified),
     }
 }
 
@@ -3068,7 +3082,7 @@ fn blit_strip(
         if y >= buf_h {
             break;
         }
-        for (col, px) in chunk.chunks_exact(4).enumerate() {
+        for (col, px) in chunk.as_chunks::<4>().0.iter().enumerate() {
             let a = px[3] as u32;
             if a == 0 {
                 continue;
@@ -3238,13 +3252,13 @@ fn composite_canvases(
             continue;
         }
         let pos = node.absolute_position(0.0, 0.0);
-        let w = node.final_layout.size.width;
-        let h = node.final_layout.size.height;
+        let w = node.final_layout().size.width;
+        let h = node.final_layout().size.height;
         if w < 1.0 || h < 1.0 {
             continue;
         }
         // The canvas element's node id is the key into CANVASES.
-        let cid = node_id as u32;
+        let cid = node_id.as_u64();
         crate::js_runtime::CANVASES.with(|cs| {
             let cs = cs.borrow();
             if let Some(canvas) = cs.get(&cid) {

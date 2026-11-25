@@ -23,13 +23,13 @@ use boa_engine::property::Attribute;
 // so canvas buffers are accessed via this thread_local. The render loop is
 // single-threaded, so this is safe.
 thread_local! {
-    pub(crate) static CANVASES: std::cell::RefCell<HashMap<u32, crate::canvas::Canvas2D>> =
+    pub(crate) static CANVASES: std::cell::RefCell<HashMap<u64, crate::canvas::Canvas2D>> =
         std::cell::RefCell::new(HashMap::new());
-    static NEXT_CANVAS_ID: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static NEXT_CANVAS_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Allocate a new canvas id and create the buffer.
-fn alloc_canvas(width: u32, height: u32) -> u32 {
+fn alloc_canvas(width: u32, height: u32) -> u64 {
     NEXT_CANVAS_ID.with(|c| {
         let id = c.get();
         c.set(id + 1);
@@ -43,6 +43,13 @@ fn alloc_canvas(width: u32, height: u32) -> u32 {
 
 use blitz_dom::{BaseDocument, local_name};
 use boa_engine::object::builtins::JsArray;
+
+/// `JsArray::new` is fallible in boa 0.22 (allocation can fail under a
+/// configured runtime limit). aris runs without limits, so a failure here is
+/// OOM and panics with a clear message.
+fn new_array(ctx: &mut Context) -> JsArray {
+    JsArray::new(ctx).expect("JsArray allocation failed")
+}
 use boa_engine::{Context, JsObject, JsResult, JsValue, NativeFunction, Source};
 use boa_gc::{Finalize, Gc, GcRefCell, Trace};
 
@@ -50,7 +57,7 @@ use boa_gc::{Finalize, Gc, GcRefCell, Trace};
 pub struct JsRuntime {
     ctx: Context,
     /// node id → list of global function names registered as listeners.
-    listeners: HashMap<u32, Vec<String>>,
+    listeners: HashMap<u64, Vec<String>>,
     /// Shared bridge state used while a script or listener runs.
     bridge: Gc<GcRefCell<Bridge>>,
     /// Monotonic counter for listener global names.
@@ -71,16 +78,16 @@ struct Timer {
 
 #[derive(Default, Trace, Finalize)]
 struct Bridge {
-    ids: HashMap<String, u32>,
+    ids: HashMap<String, u64>,
     ops: Vec<Op>,
     next_pending: u32,
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
-    query_by_tag: HashMap<String, u32>,
-    query_by_class: HashMap<String, u32>,
-    query_by_id: HashMap<String, u32>,
+    query_by_tag: HashMap<String, u64>,
+    query_by_class: HashMap<String, u64>,
+    query_by_id: HashMap<String, u64>,
     /// Snapshot of node properties: node_id → (tag_name, text_content, id_attr, class_attr, node_type)
-    node_props: HashMap<u32, NodePropSnapshot>,
-    new_listeners: Vec<(u32, String)>,
+    node_props: HashMap<u64, NodePropSnapshot>,
+    new_listeners: Vec<(u64, String)>,
     new_timers: Vec<(String, u64, Option<u64>)>,
 }
 
@@ -94,24 +101,24 @@ struct NodePropSnapshot {
     node_type: u32,
     attrs: Vec<(String, String)>,
     /// Child node IDs (in document order).
-    child_ids: Vec<u32>,
+    child_ids: Vec<u64>,
     /// Parent node ID (0 = no parent / root).
-    parent_id: u32,
+    parent_id: u64,
 }
 
 #[derive(Clone, Debug, Trace, Finalize)]
 enum Op {
     SetText {
-        node_id: u32,
+        node_id: u64,
         value: String,
     },
     SetAttr {
-        node_id: u32,
+        node_id: u64,
         name: String,
         value: String,
     },
     AppendChild {
-        parent_id: u32,
+        parent_id: u64,
         pending_id: u32,
     },
 }
@@ -193,14 +200,16 @@ impl JsRuntime {
     /// Fire any click listeners attached to `node_id`. Each listener function
     /// is invoked with the current element handle as `this`. Recorded ops are
     /// applied after all listeners run.
-    pub fn fire_click(&mut self, doc: &mut BaseDocument, node_id: u32) {
+    pub fn fire_click(&mut self, doc: &mut BaseDocument, node_id: u64) {
         self.apply_ops(doc);
 
         // 1. Inline onclick attribute: evaluate it in the runtime.
-        let onclick_src = doc.get_node(node_id as usize).and_then(|n| {
-            n.attr(blitz_dom::local_name!("onclick"))
-                .map(|s| s.to_string())
-        });
+        let onclick_src = doc
+            .get_node(blitz_traits::NodeId::from_u64(node_id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("onclick"))
+                    .map(|s| s.to_string())
+            });
         if let Some(src) = onclick_src {
             self.bind_and_run(doc, &src);
         }
@@ -334,7 +343,7 @@ impl JsRuntime {
 
     /// Find html/body/head elements in node_props and populate document's
     /// documentElement/body/head properties with real element handles.
-    fn populate_doc_elements(&mut self, snapshot: &HashMap<u32, NodePropSnapshot>) {
+    fn populate_doc_elements(&mut self, snapshot: &HashMap<u64, NodePropSnapshot>) {
         let pd = |val: JsValue| {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(val)
@@ -345,9 +354,9 @@ impl JsRuntime {
         };
 
         // Find html, body, head node IDs.
-        let mut html_id: Option<u32> = None;
-        let mut head_id: Option<u32> = None;
-        let mut body_id: Option<u32> = None;
+        let mut html_id: Option<u64> = None;
+        let mut head_id: Option<u64> = None;
+        let mut body_id: Option<u64> = None;
         for (&nid, s) in snapshot.iter() {
             let tag_lower = s.tag_name.to_lowercase();
             if tag_lower == "html" && html_id.is_none() {
@@ -371,7 +380,7 @@ impl JsRuntime {
         let bridge = Gc::clone(&self.bridge);
 
         // Helper: create + populate handle for a node, and set its prototype.
-        let mk = |nid: u32, snap: &NodePropSnapshot, ctx: &mut Context| {
+        let mk = |nid: u64, snap: &NodePropSnapshot, ctx: &mut Context| {
             let handle =
                 make_element_handle(ctx, Gc::clone(&bridge), nid, None).unwrap_or_else(|_| {
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
@@ -422,18 +431,18 @@ fn apply_op(
     pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
 ) {
     match &op {
-        Op::SetText { node_id, value } => set_text_content(doc, *node_id as usize, value),
+        Op::SetText { node_id, value } => set_text_content(doc, *node_id, value),
         Op::SetAttr {
             node_id,
             name,
             value,
-        } => set_attribute(doc, *node_id as usize, name, value),
+        } => set_attribute(doc, *node_id, name, value),
         Op::AppendChild {
             parent_id,
             pending_id,
         } => {
             if let Some((tag, text, attrs)) = pending.get(pending_id) {
-                create_and_append(doc, *parent_id as usize, tag, text, attrs);
+                create_and_append(doc, *parent_id, tag, text, attrs);
             }
         }
     }
@@ -441,18 +450,18 @@ fn apply_op(
 
 // ── DOM helpers (shared with js_interactive) ───────────────
 
-fn collect_ids(doc: &BaseDocument) -> HashMap<String, u32> {
+fn collect_ids(doc: &BaseDocument) -> HashMap<String, u64> {
     let mut r = HashMap::new();
     for (id, node) in doc.tree().iter() {
         if let Some(id_attr) = node.attr(local_name!("id")) {
-            r.insert(id_attr.to_string(), id as u32);
+            r.insert(id_attr.to_string(), id.as_u64());
         }
     }
     r
 }
 
 /// Snapshot all node properties into a map for JS-side access.
-fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
+fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
     let mut r = HashMap::new();
     for (id, node) in doc.tree().iter() {
         let tag = node
@@ -491,10 +500,10 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
                     .collect()
             })
             .unwrap_or_default();
-        let child_ids: Vec<u32> = node.children.iter().map(|&c| c as u32).collect();
-        let parent_id = node.parent.map(|p| p as u32).unwrap_or(0);
+        let child_ids: Vec<u64> = node.children.iter().map(|&c| c.as_u64()).collect();
+        let parent_id = node.parent.map(|p| p.as_u64()).unwrap_or(0);
         r.insert(
-            id as u32,
+            id.as_u64(),
             NodePropSnapshot {
                 tag_name: tag,
                 text_content: text,
@@ -513,9 +522,9 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u32, NodePropSnapshot> {
 fn collect_query_index(
     doc: &BaseDocument,
 ) -> (
-    HashMap<String, u32>,
-    HashMap<String, u32>,
-    HashMap<String, u32>,
+    HashMap<String, u64>,
+    HashMap<String, u64>,
+    HashMap<String, u64>,
 ) {
     let mut by_tag = HashMap::new();
     let mut by_class = HashMap::new();
@@ -532,22 +541,23 @@ fn collect_query_index(
             } else {
                 String::new()
             };
-            by_tag.entry(tag).or_insert(id as u32);
+            by_tag.entry(tag).or_insert(id.as_u64());
             if let Some(cls) = node.attr(local_name!("class")) {
                 for c in cls.split_whitespace() {
-                    by_class.entry(c.to_string()).or_insert(id as u32);
+                    by_class.entry(c.to_string()).or_insert(id.as_u64());
                 }
             }
         }
         if let Some(id_attr) = node.attr(local_name!("id")) {
-            by_id.entry(id_attr.to_string()).or_insert(id as u32);
+            by_id.entry(id_attr.to_string()).or_insert(id.as_u64());
         }
     }
     (by_tag, by_class, by_id)
 }
 
-fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
-    let first_text = doc.get_node(node_id).and_then(|n| {
+fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
+    let nid = blitz_traits::NodeId::from_u64(node_id);
+    let first_text = doc.get_node(nid).and_then(|n| {
         n.children.iter().copied().find(|&c| {
             doc.get_node(c)
                 .map(|cn| cn.text_data().is_some())
@@ -560,23 +570,24 @@ fn set_text_content(doc: &mut BaseDocument, node_id: usize, value: &str) {
         }
     } else {
         let new_id = doc.create_text_node(value);
-        if let Some(parent) = doc.get_node_mut(node_id) {
+        if let Some(parent) = doc.get_node_mut(nid) {
             parent.children.push(new_id);
         }
         if let Some(child) = doc.get_node_mut(new_id) {
-            child.parent = Some(node_id);
+            child.parent = Some(nid);
         }
     }
 }
 
-fn set_attribute(doc: &mut BaseDocument, node_id: usize, name: &str, value: &str) {
+fn set_attribute(doc: &mut BaseDocument, node_id: u64, name: &str, value: &str) {
     let qname = blitz_dom::QualName::new(None, blitz_dom::ns!(html), name.into());
-    doc.mutate().set_attribute(node_id, qname, value);
+    doc.mutate()
+        .set_attribute(blitz_traits::NodeId::from_u64(node_id), qname, value);
 }
 
 fn create_and_append(
     doc: &mut BaseDocument,
-    parent_id: usize,
+    parent_id: u64,
     tag: &str,
     text: &str,
     attrs: &[(String, String)],
@@ -593,12 +604,12 @@ fn create_and_append(
         QualName::new(None, blitz_dom::ns!(html), tag.into()),
         attrs_vec,
     );
-    let new_id = doc.create_node(NodeData::Element(el));
-    if let Some(parent) = doc.get_node_mut(parent_id) {
+    let new_id = doc.create_node(NodeData::Element(Box::new(el)));
+    if let Some(parent) = doc.get_node_mut(blitz_traits::NodeId::from_u64(parent_id)) {
         parent.children.push(new_id);
     }
     if let Some(child) = doc.get_node_mut(new_id) {
-        child.parent = Some(parent_id);
+        child.parent = Some(blitz_traits::NodeId::from_u64(parent_id));
     }
     if !text.is_empty() {
         let text_id = doc.create_text_node(text);
@@ -792,7 +803,7 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
             .and_then(|b| b.as_object())
             .and_then(|b| b.get(boa_engine::js_string!("_arisId"), ctx).ok())
             .and_then(|v| v.as_number())
-            .map(|id| id as u32 == s.parent_id)
+            .map(|id| id as u64 == s.parent_id)
             .unwrap_or(false)
     };
     let parent_is_html = {
@@ -807,7 +818,7 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
             .and_then(|b| b.as_object())
             .and_then(|b| b.get(boa_engine::js_string!("_arisId"), ctx).ok())
             .and_then(|v| v.as_number())
-            .map(|id| id as u32 == s.parent_id)
+            .map(|id| id as u64 == s.parent_id)
             .unwrap_or(false)
     };
     let snapshot_parent_tag = if parent_is_body {
@@ -1016,12 +1027,12 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
     }
 }
 
-fn read_handle_id(v: &JsValue) -> Option<u32> {
+fn read_handle_id(v: &JsValue) -> Option<u64> {
     let obj = v.as_object()?;
     let id = obj
         .get(boa_engine::js_string!("_arisId"), &mut Context::default())
         .ok()?;
-    id.as_number().map(|n| n as u32).filter(|&n| n != 0)
+    id.as_number().map(|n| n as u64).filter(|&n| n != 0)
 }
 
 fn read_pending(v: &JsValue) -> Option<u32> {
@@ -2816,7 +2827,7 @@ fn install_dom_globals(ctx: &mut Context) {
             // Initialize _children for textContent setter support.
             let _ = df.insert_property(
                 boa_engine::js_string!("_children"),
-                pd2(JsArray::new(ctx).into()),
+                pd2(new_array(ctx).into()),
             );
             // textContent accessor: getter concatenates children text, setter replaces children.
             let df_tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
@@ -2846,7 +2857,7 @@ fn install_dom_globals(ctx: &mut Context) {
                             .build()
                     };
                     if s.is_empty() {
-                        let empty_arr = JsArray::new(ctx);
+                        let empty_arr = new_array(ctx);
                         let _ = o.insert_property(
                             boa_engine::js_string!("_children"),
                             pd3(empty_arr.into()),
@@ -2895,7 +2906,7 @@ fn install_dom_globals(ctx: &mut Context) {
                                 }
                             }
                         }
-                        let new_arr = JsArray::new(ctx);
+                        let new_arr = new_array(ctx);
                         let _ = new_arr.push(JsValue::from(text_node), ctx);
                         let _ = o.insert_property(
                             boa_engine::js_string!("_children"),
@@ -2941,7 +2952,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         }
                     }
                 }
-                Ok(JsValue::from(JsArray::new(ctx)))
+                Ok(JsValue::from(new_array(ctx)))
             });
             let fc_fn2 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
@@ -3470,7 +3481,7 @@ fn install_dom_globals(ctx: &mut Context) {
                 let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
             }
             // Text nodes have no children.
-            let empty_arr = JsArray::new(ctx);
+            let empty_arr = new_array(ctx);
             let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(empty_arr.into()));
             let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
             let _ = obj.insert_property(boa_engine::js_string!("lastChild"), pd(JsValue::null()));
@@ -3605,7 +3616,7 @@ fn install_dom_globals(ctx: &mut Context) {
                 let _ = obj.insert_property(boa_engine::js_string!("ownerDocument"), pd(doc_val));
             }
             // Comment nodes have no children.
-            let empty_arr2 = JsArray::new(ctx);
+            let empty_arr2 = new_array(ctx);
             let _ =
                 obj.insert_property(boa_engine::js_string!("childNodes"), pd(empty_arr2.into()));
             let _ = obj.insert_property(boa_engine::js_string!("firstChild"), pd(JsValue::null()));
@@ -3658,7 +3669,7 @@ fn install_dom_globals(ctx: &mut Context) {
             // Initialize _children for textContent/firstChild/childNodes support.
             let _ = obj.insert_property(
                 boa_engine::js_string!("_children"),
-                pd(JsArray::new(ctx).into()),
+                pd(new_array(ctx).into()),
             );
             // textContent accessor.
             let df_tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
@@ -3688,7 +3699,7 @@ fn install_dom_globals(ctx: &mut Context) {
                             .build()
                     };
                     if s.is_empty() {
-                        let empty_arr = JsArray::new(ctx);
+                        let empty_arr = new_array(ctx);
                         let _ = o.insert_property(
                             boa_engine::js_string!("_children"),
                             pd3(empty_arr.into()),
@@ -3734,7 +3745,7 @@ fn install_dom_globals(ctx: &mut Context) {
                                 }
                             }
                         }
-                        let new_arr = JsArray::new(ctx);
+                        let new_arr = new_array(ctx);
                         let _ = new_arr.push(JsValue::from(tn), ctx);
                         let _ = o.insert_property(
                             boa_engine::js_string!("_children"),
@@ -3780,7 +3791,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         }
                     }
                 }
-                Ok(JsValue::from(JsArray::new(ctx)))
+                Ok(JsValue::from(new_array(ctx)))
             });
             let fc_fn3 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
@@ -5132,7 +5143,7 @@ fn install_dom_globals(ctx: &mut Context) {
                     );
                 }
                 // Add empty childNodes/firstChild/lastChild for Document constructor.
-                let empty_arr = JsArray::new(ctx);
+                let empty_arr = new_array(ctx);
                 let pd_doc = |val: JsValue| {
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(val)
@@ -5690,7 +5701,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         }
                         // Update _children if changes were made.
                         if new_children.len() as u32 != len {
-                            let new_arr = JsArray::new(ctx);
+                            let new_arr = new_array(ctx);
                             for child in new_children {
                                 let _ = new_arr.push(child, ctx);
                             }
@@ -6016,15 +6027,15 @@ fn install_dom_globals(ctx: &mut Context) {
     if let Some(proto) = get_proto("TouchEvent", ctx) {
         let _ = proto.insert_property(
             boa_engine::js_string!("touches"),
-            ev_pd(JsValue::from(JsArray::new(ctx))),
+            ev_pd(JsValue::from(new_array(ctx))),
         );
         let _ = proto.insert_property(
             boa_engine::js_string!("targetTouches"),
-            ev_pd(JsValue::from(JsArray::new(ctx))),
+            ev_pd(JsValue::from(new_array(ctx))),
         );
         let _ = proto.insert_property(
             boa_engine::js_string!("changedTouches"),
-            ev_pd(JsValue::from(JsArray::new(ctx))),
+            ev_pd(JsValue::from(new_array(ctx))),
         );
         let _ = proto.insert_property(
             boa_engine::js_string!("ctrlKey"),
@@ -6112,7 +6123,7 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         // values() returns an array of values.
         let nl_values = NativeFunction::from_copy_closure(|this, _args, ctx| {
-            let arr = JsArray::new(ctx);
+            let arr = new_array(ctx);
             if let Some(o) = this.as_object() {
                 let len = o
                     .get(boa_engine::js_string!("length"), ctx)
@@ -6161,7 +6172,7 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         // entries() returns array of [key, value] pairs.
         let nl_entries = NativeFunction::from_copy_closure(|this, _args, ctx| {
-            let arr = JsArray::new(ctx);
+            let arr = new_array(ctx);
             if let Some(o) = this.as_object() {
                 let len = o
                     .get(boa_engine::js_string!("length"), ctx)
@@ -6170,7 +6181,7 @@ fn install_dom_globals(ctx: &mut Context) {
                     .unwrap_or(0.0) as u32;
                 for i in 0..len {
                     let val = o.get(i, ctx).unwrap_or(JsValue::undefined());
-                    let pair = JsArray::new(ctx);
+                    let pair = new_array(ctx);
                     let _ = pair.push(JsValue::from(i), ctx);
                     let _ = pair.push(val, ctx);
                     let _ = arr.push(JsValue::from(pair), ctx);
@@ -6503,7 +6514,7 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         // takeRecords() — returns mutation records if className changed.
         let take_fn = NativeFunction::from_copy_closure(|this, _a, ctx| {
-            let records = JsArray::new(ctx);
+            let records = new_array(ctx);
             if let Some(o) = this.as_object() {
                 // Check if className changed since observe().
                 let target = o
@@ -6735,8 +6746,7 @@ fn install_dom_globals(ctx: &mut Context) {
     let _ = ctx.register_global_callable(boa_engine::js_string!("BroadcastChannel"), 1, bc_ctor);
 
     // ── Gamepad API (caniuse: 97%+) ── Stub.
-    let gp_fn =
-        NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(JsArray::new(ctx))));
+    let gp_fn = NativeFunction::from_copy_closure(|_t, _a, ctx| Ok(JsValue::from(new_array(ctx))));
     let _ = ctx.global_object().insert_property(
         boa_engine::js_string!("getGamepads"),
         boa_engine::property::PropertyDescriptor::builder()
@@ -7002,7 +7012,7 @@ fn install_dom_globals(ctx: &mut Context) {
                 boa_engine::object::FunctionObjectBuilder::new(
                     ctx.realm(),
                     NativeFunction::from_copy_closure(|_t, _a, ctx| {
-                        Ok(JsValue::from(JsArray::new(ctx)))
+                        Ok(JsValue::from(new_array(ctx)))
                     }),
                 )
                 .build(),
@@ -7015,7 +7025,7 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         let _ = obj.insert_property(
             boa_engine::js_string!("thresholds"),
-            pd(JsValue::from(JsArray::new(ctx))),
+            pd(JsValue::from(new_array(ctx))),
         );
         Ok(obj.into())
     });
@@ -7599,9 +7609,9 @@ fn get_or_create_children(parent: &JsObject, ctx: &mut Context) -> JsArray {
         .ok()
         .and_then(|v| v.as_object());
     match children {
-        Some(obj) => JsArray::from_object(obj).unwrap_or_else(|_| JsArray::new(ctx)),
+        Some(obj) => JsArray::from_object(obj).unwrap_or_else(|_| new_array(ctx)),
         None => {
-            let arr = JsArray::new(ctx);
+            let arr = new_array(ctx);
             let _ =
                 parent.insert_property(boa_engine::js_string!("_children"), pd(arr.clone().into()));
             arr
@@ -9977,7 +9987,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         move |_this, args, b, ctx| {
             let tag = arg_string(args, 0).to_lowercase();
             let bb = b.borrow();
-            let matching: Vec<u32> = bb
+            let matching: Vec<u64> = bb
                 .node_props
                 .iter()
                 .filter(|(_, s)| {
@@ -10040,7 +10050,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         move |_this, args, b, ctx| {
             let cls = arg_string(args, 0);
             let bb = b.borrow();
-            let matching: Vec<u32> = bb
+            let matching: Vec<u64> = bb
                 .node_props
                 .iter()
                 .filter(|(_, s)| {
@@ -10347,7 +10357,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
 
 /// Build a JS canvas handle object: has `width`, `height`, and `getContext('2d')`.
 /// Canvas buffers are in the thread_local CANVASES map.
-fn make_canvas_handle(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
+fn make_canvas_handle(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
 
     let get_context = NativeFunction::from_copy_closure(move |_this, args, ctx| {
@@ -10379,7 +10389,7 @@ fn make_canvas_handle(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
 
 /// Build a JS CanvasRenderingContext2D object bound to canvas_id's buffer
 /// (accessed via thread_local CANVASES).
-fn make_context_2d(ctx: &mut Context, canvas_id: u32) -> JsResult<JsObject> {
+fn make_context_2d(ctx: &mut Context, canvas_id: u64) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
 
     let fill_rect = NativeFunction::from_copy_closure(move |_this, args, _ctx| {
@@ -10879,7 +10889,7 @@ fn install_webrtc_stubs(ctx: &mut Context) {
 fn make_element_handle(
     ctx: &mut Context,
     bridge: Gc<GcRefCell<Bridge>>,
-    nid: u32,
+    nid: u64,
     pending: Option<u32>,
 ) -> JsResult<JsObject> {
     use boa_engine::object::ObjectInitializer;
@@ -12907,7 +12917,7 @@ fn make_element_handle(
         |_this, args, b, ctx| {
             let tag = arg_string(args, 0).to_lowercase();
             let bb = b.borrow();
-            let matching: Vec<u32> = bb
+            let matching: Vec<u64> = bb
                 .node_props
                 .iter()
                 .filter(|(_, s)| {
@@ -13001,7 +13011,7 @@ fn make_element_handle(
             let cls = arg_string(args, 0);
             let wanted: Vec<&str> = cls.split_whitespace().collect();
             let bb = b.borrow();
-            let matching: Vec<u32> = bb
+            let matching: Vec<u64> = bb
                 .node_props
                 .iter()
                 .filter(|(_, s)| {
@@ -13386,7 +13396,7 @@ fn make_element_handle(
             }
             if s.is_empty() {
                 // Empty string → no children.
-                let empty_arr = JsArray::new(ctx);
+                let empty_arr = new_array(ctx);
                 let _ =
                     o.insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
             } else {
@@ -13429,7 +13439,7 @@ fn make_element_handle(
                         }
                     }
                 }
-                let new_arr = JsArray::new(ctx);
+                let new_arr = new_array(ctx);
                 let _ = new_arr.push(JsValue::from(text_node), ctx);
                 let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
             }
@@ -13515,7 +13525,7 @@ fn make_element_handle(
                 }
             }
         }
-        Ok(JsValue::from(JsArray::new(ctx)))
+        Ok(JsValue::from(new_array(ctx)))
     });
     let cn_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
     let _ = obj.insert_property(

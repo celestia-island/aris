@@ -67,7 +67,7 @@ fn main() {
 
     let non_black = frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .filter(|px| px[0] > 16 || px[1] > 16 || px[2] > 16)
         .count();
     eprintln!(

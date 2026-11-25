@@ -41,9 +41,18 @@ fn main() {
         }
         let content = node.text_content().to_lowercase();
         if content.contains(&needle) {
-            let pos = node.absolute_position(0.0, 0.0);
-            let w = node.final_layout.size.width;
-            let h = node.final_layout.size.height;
+            // Text nodes no longer participate in layout in blitz
+            // 0.3.0-beta.5 (layout_data() panics for them) — read the rect
+            // from the parent element instead.
+            let Some(parent_id) = node.parent else {
+                continue;
+            };
+            let Some(parent) = doc.get_node(parent_id) else {
+                continue;
+            };
+            let pos = parent.absolute_position(0.0, 0.0);
+            let w = parent.final_layout().size.width;
+            let h = parent.final_layout().size.height;
             let count = content.matches(&needle).count();
             for i in 0..count {
                 let slice = w / count.max(1) as f32;
