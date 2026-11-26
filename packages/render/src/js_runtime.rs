@@ -525,8 +525,15 @@ impl JsRuntime {
     }
 
     /// Move pending ops from the bridge into the document.
-    fn apply_ops(&self, doc: &mut BaseDocument) {
-        let ops: Vec<Op> = { self.bridge.borrow().ops.clone() };
+    fn apply_ops(&mut self, doc: &mut BaseDocument) {
+        // DRAIN, not clone: every call consumes the ops recorded so far.
+        // Cloning here made every apply_ops REPLAY the whole accumulated log,
+        // and `Op::AppendChild` mints a fresh node per replay — one inline
+        // onclick append landed two nodes and each further click added four
+        // more, an unbounded leak (L940 S1). Callers that re-apply on purpose
+        // do not exist: every push site is followed by an apply within the
+        // same script run.
+        let ops: Vec<Op> = std::mem::take(&mut self.bridge.borrow_mut().ops);
         let pending: HashMap<u32, (String, String, Vec<(String, String)>)> =
             { self.bridge.borrow().pending.clone() };
         for op in ops {
@@ -16666,5 +16673,54 @@ mod style_css_text_tests {
             .map(|n| n.text_content())
             .unwrap_or_default();
         assert_eq!(res, "color:red", "cssText must read back what was written");
+    }
+}
+
+#[cfg(test)]
+mod apply_ops_drain_tests {
+    //! L940 S1: `apply_ops` used to CLONE the op log and never clear it, so
+    //! every call replayed everything recorded so far and `Op::AppendChild`
+    //! minted a fresh node per replay — one inline onclick append landed two
+    //! nodes and each further click added four more (unbounded). The drain
+    //! makes every op apply exactly once.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn repeated_clicks_grow_the_list_by_exactly_one_each() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="add" onclick="var d = document.createElement('div'); document.getElementById('list').appendChild(d);">add</button><div id="list"></div><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, "");
+        let add_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("add"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #add");
+        let count = |doc: &HtmlDocument| -> usize {
+            doc.get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #list"),
+            ))
+            .map(|n| n.children.len())
+            .unwrap_or(0)
+        };
+        for expected in 1..=5 {
+            rt.fire_click(&mut doc, add_id);
+            assert_eq!(
+                count(&doc),
+                expected,
+                "click {expected}: the list must grow by exactly one per click"
+            );
+        }
     }
 }

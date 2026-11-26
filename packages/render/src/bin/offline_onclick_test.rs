@@ -120,40 +120,25 @@ fn main() {
         "#list children: {} -> {}",
         list_children_before, list_children_after
     );
-    // KNOWN LIMITATION (pre-existing, and NOT caused by the migration).
-    // comment-gate-ok: the behaviour claims below are pinned by this test's own
-    //   executable assertions (child count and empty texts, asserted at the
-    //   bottom of this case); the mutation surface for a future drain fix is
-    //   exactly those assertions.
+    // FIXED (this PR): `apply_ops` now DRAINS the op log, so the append in
+    // one inline onclick lands exactly once, and further clicks add one each.
+    // Before the drain, the log was replayed by every apply site — the append
+    // landed twice on the first click and each further click added four more
+    // (MUT: apply-ops-clone — restoring the clone instead of the drain reds
+    //   the assertions below: children 2/6/10 instead of 1/2/3).
     //
-    // ROOT CAUSE: `JsRuntime::apply_ops` clones the op log and never clears it,
-    // so every call REPLAYS every op recorded so far; `Op::AppendChild` mints a
-    // fresh node each time it is applied.
-    // MUT: apply-ops-drain — adding the drain changes the pinned child count
-    //   below, so the assertions there are the check. `bind_and_run` calls `apply_ops`
-    // twice (once on entry, once after evaluating), so one inline onclick that
-    // appends lands two nodes, and each further click adds four more — an
-    // unbounded leak. A plain script path (one `bind_and_run`) appends once.
-    //
-    // The appended node's text is separately absent because the `textContent`
-    // setter only pushes an op when `read_handle_id` yields a tree id, and a
-    // pending `createElement` handle has none — the text is dropped at the
-    // source, not lost in transit.
-    //
-    // The retired `js_interactive` bridge avoided both by running its own
-    // mutator session, which is exactly why guarding it never surfaced them.
-    // MUT: bridge-unretired — re-adding a side bridge would re-hide this; the
-    //   pinned assertions below are the check.
-    // This test therefore asserts only what the production path guarantees
-    // today — the append reaches the document — and pins the child count so a
-    // future fix has to update it deliberately.
+    // Still a known limitation: the appended node carries no text, because a
+    // detached `createElement` handle has no tree id and the `textContent`
+    // setter only pushes an op when `read_handle_id` yields one — dropped at
+    // the source (MUT: pending-settext — carrying the text into the pending
+    //   tuple would make the assertions below assert a non-empty text).
     if list_children_after <= list_children_before {
         println!("FAIL: createElement+appendChild did not add a child to #list");
         std::process::exit(2);
     }
-    if list_children_after != 2 {
+    if list_children_after != 1 {
         println!(
-            "FAIL: expected the pinned count of 2 children, got {}",
+            "FAIL: expected exactly 1 appended child, got {}",
             list_children_after
         );
         std::process::exit(2);
@@ -175,7 +160,7 @@ fn main() {
         }
     }
     println!(
-        "OK: createElement+appendChild reached the document ({} children, text dropped — known limitation)",
+        "OK: createElement+appendChild landed exactly once ({} child, text dropped — known limitation)",
         list_children_after
     );
 }
