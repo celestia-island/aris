@@ -11667,11 +11667,20 @@ fn make_element_handle(
     let style_css_text_set = NativeFunction::from_copy_closure_with_captures(
         move |this, args, b, _ctx| {
             let value = arg_string(args, 0);
-            b.borrow_mut().ops.push(Op::SetAttr {
-                node_id: nid,
-                name: "style".to_string(),
-                value: value.clone(),
-            });
+            // `nid == 0` is a PENDING handle (a `createElement` node with no
+            // tree id yet). Pushing an op against it panics in blitz
+            // (`SlotMap` invalid key), which is strictly worse than the caught
+            // JS TypeError this path used to raise. Skip the op and keep the
+            // value on the style object only; carrying it into the pending
+            // tuple so the attribute survives `appendChild` is a separate
+            // change (the pending map is not written by any caller today).
+            if nid != 0 {
+                b.borrow_mut().ops.push(Op::SetAttr {
+                    node_id: nid,
+                    name: "style".to_string(),
+                    value: value.clone(),
+                });
+            }
             if let Some(o) = this.as_object() {
                 let _ = o.insert_property(
                     boa_engine::js_string!("cssText"),
@@ -16605,6 +16614,32 @@ mod style_css_text_tests {
         assert_eq!(
             style, "color:#ff0000",
             "cssText must write the style attribute"
+        );
+    }
+
+    #[test]
+    fn styling_a_pending_create_element_handle_does_not_panic() {
+        // Round-2 S1: a `createElement` handle has no tree id yet (`nid == 0`),
+        // and pushing an op against it panicked inside blitz. Master raised a
+        // caught JS TypeError here; the fix must not turn that into a crash.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.style.cssText = 'color:red';
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        // Reaching here at all is the assertion: no panic.
+        assert!(
+            doc.tree()
+                .iter()
+                .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
         );
     }
 
