@@ -2042,6 +2042,26 @@ fn install_event_api(ctx: &mut Context) {
                     }
                 }
                 let this_val = JsValue::from(o.clone());
+                // DOM: dispatchEvent sets event.target/currentTarget to the
+                // target. Leaving them null made a listener on a self-made
+                // EventTarget unable to tell where the event came from
+                // (round-2 S2).
+                if let Some(ev_obj) = event.as_object() {
+                    let pd_ev = |val: JsValue| {
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(val)
+                            .writable(true)
+                            .enumerable(true)
+                            .configurable(true)
+                            .build()
+                    };
+                    let _ = ev_obj
+                        .insert_property(boa_engine::js_string!("target"), pd_ev(this_val.clone()));
+                    let _ = ev_obj.insert_property(
+                        boa_engine::js_string!("currentTarget"),
+                        pd_ev(this_val.clone()),
+                    );
+                }
                 for cb in handlers {
                     let Some(f) = cb.as_object() else { continue };
                     if f.is_callable() {
@@ -3424,10 +3444,34 @@ fn install_dom_globals(ctx: &mut Context) {
                 }
                 Ok(JsValue::from(new_array(ctx)))
             });
+            let lc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let len = ca
+                                .get(boa_engine::js_string!("length"), ctx)
+                                .ok()
+                                .and_then(|v| v.as_number())
+                                .unwrap_or(0.0) as u32;
+                            if len == 0 {
+                                return Ok(JsValue::null());
+                            }
+                            let v = ca.get(len - 1, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() {
+                                return Ok(JsValue::null());
+                            }
+                            return Ok(v);
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
             let fc_fn2 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
             let cn_fn2 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+            let lc_fn2 =
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lc_get).build();
             let _ = df.insert_property(
                 boa_engine::js_string!("firstChild"),
                 boa_engine::property::PropertyDescriptor::builder()
@@ -3439,7 +3483,7 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = df.insert_property(
                 boa_engine::js_string!("lastChild"),
                 boa_engine::property::PropertyDescriptor::builder()
-                    .get(fc_fn2)
+                    .get(lc_fn2)
                     .enumerable(true)
                     .configurable(true)
                     .build(),
@@ -15596,6 +15640,23 @@ mod fragment_and_eventtarget_tests {
             t.dispatchEvent(new Event('ping'));
         "#);
         assert_eq!(out, "0", "a removed EventTarget listener must not run");
+    }
+
+    #[test]
+    fn event_target_sets_event_target_and_current_target() {
+        let out = run(r#"
+            var t = new EventTarget();
+            var seen = 'unset';
+            t.addEventListener('ping', function (e) {
+                seen = (e.target === t ? 'T' : 't') + (e.currentTarget === t ? 'C' : 'c');
+            });
+            t.dispatchEvent(new Event('ping'));
+            document.getElementById('out').setText(seen);
+        "#);
+        assert_eq!(
+            out, "TC",
+            "dispatchEvent must set event.target and event.currentTarget"
+        );
     }
 
     #[test]
