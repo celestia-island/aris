@@ -1672,13 +1672,28 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             if let Some(arr) = val.as_object() {
                 let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                 let arr_keys = arr.own_property_keys(ctx).unwrap_or_default();
-                for (i, ak) in arr_keys.iter().enumerate() {
-                    if let Ok(child_val) = arr.get(ak.clone(), ctx) {
-                        if let Some(child_obj) = child_val.as_object() {
-                            let child_clone = clone_node_js(Some(&child_obj), true, ctx)?;
-                            let _ = new_arr.insert_property(i as u32, pd(child_clone));
-                        }
+                // Copy each entry under the SAME numeric key it had, and carry
+                // `length` across explicitly: `length` is a number, so the
+                // object-only filter below silently dropped it, leaving a clone
+                // whose `childNodes.length` was `undefined` and whose
+                // `hasChildNodes()` therefore reported false for a node that
+                // demonstrably had children (round-4 S1).
+                for ak in arr_keys.iter() {
+                    let Ok(child_val) = arr.get(ak.clone(), ctx) else {
+                        continue;
+                    };
+                    if let Some(child_obj) = child_val.as_object() {
+                        let child_clone = clone_node_js(Some(&child_obj), true, ctx)?;
+                        let _ = new_arr.insert_property(ak.clone(), pd(child_clone));
                     }
+                }
+                if let Ok(len_val) = arr.get(boa_engine::js_string!("length"), ctx)
+                    && let Some(len) = len_val.as_number()
+                {
+                    let _ = new_arr.insert_property(
+                        boa_engine::js_string!("length"),
+                        pd(JsValue::from(len as u32)),
+                    );
                 }
                 let _ = clone.insert_property(key, pd(new_arr.into()));
                 continue;
@@ -17975,6 +17990,47 @@ mod child_nodes_accessor_tests {
         assert_eq!(
             out, "cn=3|ch=1|cec=1|textonly_cec=0",
             "children/childElementCount must exclude text nodes"
+        );
+    }
+
+    #[test]
+    fn a_deep_clone_keeps_its_collection_lengths() {
+        // Round-4 S1: cloneNode(true) rebuilt the arrays copying only OBJECT
+        // values, so `length` (a number) was dropped — the clone read
+        // childNodes.length === undefined and hasChildNodes() answered FALSE
+        // for a node with children. That is exactly the symptom this PR fixes,
+        // re-created through the clone path.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="m">text<b>x</b>more</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.getElementById('m');
+            var c = m.cloneNode(true);
+            document.getElementById('res').setText(
+                'cn=' + c.childNodes.length +
+                '|ch=' + c.children.length +
+                '|cec=' + c.childElementCount +
+                '|has=' + c.hasChildNodes()
+            );
+            "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "cn=3|ch=1|cec=1|has=true",
+            "a deep clone must keep its collection lengths and answer hasChildNodes()"
         );
     }
 
