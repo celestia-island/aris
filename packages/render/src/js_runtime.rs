@@ -14251,14 +14251,23 @@ fn make_element_handle(
     let tc_get = NativeFunction::from_copy_closure_with_captures(
         |this, _args, b, ctx| {
             if let Some(o) = this.as_object() {
-                let text = collect_text_content(&o, ctx, 0);
-                if !text.is_empty() {
-                    return Ok(JsValue::from(boa_engine::js_string!(text)));
+                // Has this handle's text been written from script yet? A parsed
+                // element has no `_children` text, so the snapshot is the only
+                // source — but once script writes (INCLUDING writing ""),
+                // `_children` is authoritative and must win even when empty.
+                // Keying the fallback off "text is empty" would resurrect the
+                // parsed value after a deliberate clear (round-2 S1:
+                // `el.textContent=''; el.textContent=n`).
+                let materialized = o
+                    .get(boa_engine::js_string!("_arisTextMaterialized"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_boolean())
+                    .unwrap_or(false);
+                if materialized {
+                    return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(
+                        &o, ctx, 0
+                    ))));
                 }
-                // `_children` carries no text: this handle was built before any
-                // child nodes existed, so fall back to the node snapshot. Without
-                // this the element's initial text (e.g. "0") read back empty
-                // once `textContent` became an accessor.
                 if let Some(nid) = read_handle_id(this)
                     && let Some(snap) = b.borrow().node_props.get(&nid).cloned()
                 {
@@ -14374,6 +14383,17 @@ fn make_element_handle(
                 // applied from script but the rendered document never changed
                 // (the retired `js_interactive` bridge masked this by rewriting
                 // the source to `setText`).
+                if let Some(o) = this.as_object() {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("_arisTextMaterialized"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(true))
+                            .writable(true)
+                            .enumerable(false)
+                            .configurable(true)
+                            .build(),
+                    );
+                }
                 if let Some(nid) = read_handle_id(this) {
                     b.borrow_mut().ops.push(Op::SetText {
                         node_id: nid,
@@ -16301,20 +16321,94 @@ mod text_content_assignment_tests {
     }
 
     #[test]
-    fn an_empty_assignment_clears_the_text() {
+    fn a_clear_then_set_cycle_does_not_resurrect_the_old_text() {
+        // Round-2 S1: the counter pattern. An empty assignment must be
+        // authoritative — the getter may not fall back to the parsed value.
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><div id="out">gone</div></body></html>"#,
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
-            r#"document.getElementById('out').textContent = '';"#,
+            r#"
+            var c = document.getElementById('c');
+            c.textContent = '';
+            c.textContent = '6';
+            document.getElementById('res').setText(c.textContent);
+            "#,
+        );
+        assert_eq!(read(&doc, "c"), "6", "the DOM must hold the new value");
+        assert_eq!(read(&doc, "res"), "6", "and the getter must agree with it");
+    }
+
+    #[test]
+    fn clearing_is_visible_to_the_getter() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var c = document.getElementById('c');
+            c.textContent = '';
+            document.getElementById('res').setText('[' + c.textContent + ']');
+            "#,
+        );
+        assert_eq!(read(&doc, "c"), "", "the DOM text must be cleared");
+        assert_eq!(
+            read(&doc, "res"),
+            "[]",
+            "the getter must report empty, not the pre-clear value"
+        );
+    }
+
+    #[test]
+    fn repeated_assignment_keeps_the_last_value() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">z</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.textContent = 'a';
+            el.textContent = 'b';
+            document.getElementById('res').setText(el.textContent);
+            "#,
+        );
+        assert_eq!(read(&doc, "out"), "b", "the last assignment wins");
+        assert_eq!(read(&doc, "res"), "b", "and the getter agrees");
+    }
+
+    #[test]
+    fn an_empty_assignment_clears_the_text() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">gone</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.textContent = '';
+            document.getElementById('res').setText('[' + el.textContent + ']');
+            "#,
         );
         assert_eq!(
             read(&doc, "out"),
             "",
             "assigning an empty string must clear the element's text"
+        );
+        assert_eq!(
+            read(&doc, "res"),
+            "[]",
+            "and the getter must not resurrect the parsed text"
         );
     }
 }
