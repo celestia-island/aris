@@ -11709,7 +11709,7 @@ fn make_element_handle(
             }
             if let Some(o) = this.as_object() {
                 let _ = o.insert_property(
-                    boa_engine::js_string!("cssText"),
+                    boa_engine::js_string!("_arisCssTextCache"),
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(value)))
                         .writable(true)
@@ -11724,11 +11724,28 @@ fn make_element_handle(
     );
     let style_css_text_set_fn =
         boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), style_css_text_set).build();
+    // `cssText` must be a proper ACCESSOR. The old definition carried both
+    // `.value("")` and `.set(...)` (a contradictory descriptor) AND the setter
+    // replaced `cssText` with a data property on first write — so the second
+    // `el.style.cssText = …` assignment hit a plain data property and pushed
+    // no op. The getter reads the cache the setter maintains; there is no
+    // parse-time seed, so `cssText` on a parsed style attribute reads "".
+    let style_css_text_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+        if let Some(o) = this.as_object()
+            && let Ok(v) = o.get(boa_engine::js_string!("_arisCssTextCache"), ctx)
+            && !v.is_undefined()
+        {
+            return Ok(v);
+        }
+        Ok(JsValue::from(boa_engine::js_string!("")))
+    });
+    let style_css_text_get_fn =
+        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), style_css_text_get).build();
     let style_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
     let _ = style_obj.insert_property(
         boa_engine::js_string!("cssText"),
         boa_engine::property::PropertyDescriptor::builder()
-            .value(JsValue::from(boa_engine::js_string!("")))
+            .get(style_css_text_get_fn)
             .set(style_css_text_set_fn)
             .enumerable(true)
             .configurable(true)
@@ -12011,11 +12028,42 @@ fn make_element_handle(
                         pd(JsValue::from(boa_engine::js_string!(value.clone()))),
                     );
                 }
-                // Also set the attribute as a direct property.
-                let _ = o.insert_property(
-                    boa_engine::js_string!(name.clone()),
-                    pd(JsValue::from(boa_engine::js_string!(value.clone()))),
-                );
+                // `style` is special: the handle carries a style OBJECT
+                // (installed by `make_element_handle`) whose `cssText` the
+                // page reads back. Inserting a string data property here
+                // overwrote that object — `el.style` became a primitive and
+                // every later `el.style.cssText = …` silently no-op'ed
+                // (L940). Update the object instead.
+                if name == "style" {
+                    if let Ok(style_val) = o.get(boa_engine::js_string!("style"), ctx)
+                        && let Some(style_obj) = style_val.as_object()
+                    {
+                        // Route through the cssText ACCESSOR (`JsObject::set`
+                        // fires its setter): a data-property insert here would
+                        // replace the setter and silently no-op every later
+                        // `el.style.cssText = …`. The setter re-pushes an
+                        // identical SetAttr op — idempotent under drain.
+                        let _ = style_obj.set(
+                            boa_engine::js_string!("cssText"),
+                            JsValue::from(boa_engine::js_string!(value.clone())),
+                            false,
+                            ctx,
+                        );
+                    } else {
+                        // No style object (defensive): fall back to the
+                        // generic data property.
+                        let _ = o.insert_property(
+                            boa_engine::js_string!(name.clone()),
+                            pd(JsValue::from(boa_engine::js_string!(value.clone()))),
+                        );
+                    }
+                } else {
+                    // Also set the attribute as a direct property.
+                    let _ = o.insert_property(
+                        boa_engine::js_string!(name.clone()),
+                        pd(JsValue::from(boa_engine::js_string!(value.clone()))),
+                    );
+                }
                 // Update the attributes NamedNodeMap: find or create the Attr.
                 if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
                     if let Some(attrs) = attrs_val.as_object() {
@@ -17115,5 +17163,102 @@ mod set_html_tests {
             text, "carried",
             "a detached setHTML write must ride the pending tuple"
         );
+    }
+}
+
+#[cfg(test)]
+mod style_shadowing_tests {
+    //! L940 S2 (#79 R3): `setAttribute('style', v)` inserted a STRING data
+    //! property over the style OBJECT, so `el.style` became a primitive and
+    //! every later `el.style.cssText = …` silently no-op'ed.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn setup(script: &str) -> (HtmlDocument, String, String) {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">x</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let dom_style = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .and_then(|(id, _)| doc.get_node(id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("style"))
+                    .map(|v| v.to_string())
+            })
+            .unwrap_or_default();
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        (doc, dom_style, res)
+    }
+
+    #[test]
+    fn set_attribute_style_keeps_the_style_object() {
+        let (_, dom_style, res) = setup(
+            r#"
+            var el = document.getElementById('out');
+            el.setAttribute('style', 'color:blue');
+            var kind = typeof el.style;
+            var css = (typeof el.style === 'object' && el.style.cssText !== undefined)
+                ? String(el.style.cssText) : 'UNDEFINED';
+            document.getElementById('res').setText(kind + '|' + css);
+            "#,
+        );
+        assert_eq!(
+            dom_style, "color:blue",
+            "the DOM style attribute must be set"
+        );
+        assert_eq!(
+            res, "object|color:blue",
+            "el.style must stay an object with the cssText reflected"
+        );
+    }
+
+    #[test]
+    fn css_text_write_after_set_attribute_still_works() {
+        // The exact silent-no-op shape: setAttribute first, then cssText.
+        let (_, dom_style, res) = setup(
+            r#"
+            var el = document.getElementById('out');
+            el.setAttribute('style', 'color:blue');
+            el.style.cssText = 'color:red';
+            var css = String(el.style.cssText);
+            document.getElementById('res').setText(css);
+            "#,
+        );
+        assert_eq!(
+            dom_style, "color:red",
+            "the later cssText write must win in the DOM"
+        );
+        assert_eq!(res, "color:red", "and the cssText readback must agree");
+    }
+
+    #[test]
+    fn plain_attribute_writes_are_unaffected() {
+        let (_, dom_style, res) = setup(
+            r#"
+            var el = document.getElementById('out');
+            el.setAttribute('title', 'v1');
+            el.setAttribute('title', 'v2');
+            document.getElementById('res').setText(el.getAttribute('title'));
+            "#,
+        );
+        assert_eq!(dom_style, "", "no style attribute should exist");
+        assert_eq!(res, "v2", "non-style attributes keep their path");
     }
 }
