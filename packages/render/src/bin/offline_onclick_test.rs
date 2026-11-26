@@ -128,7 +128,9 @@ fn main() {
     //
     // ROOT CAUSE: `JsRuntime::apply_ops` clones the op log and never clears it,
     // so every call REPLAYS every op recorded so far; `Op::AppendChild` mints a
-    // fresh node each time it is applied. `bind_and_run` calls `apply_ops`
+    // fresh node each time it is applied.
+    // MUT: apply-ops-drain — adding the drain changes the pinned child count
+    //   below, so the assertions there are the check. `bind_and_run` calls `apply_ops`
     // twice (once on entry, once after evaluating), so one inline onclick that
     // appends lands two nodes, and each further click adds four more — an
     // unbounded leak. A plain script path (one `bind_and_run`) appends once.
@@ -140,8 +142,8 @@ fn main() {
     //
     // The retired `js_interactive` bridge avoided both by running its own
     // mutator session, which is exactly why guarding it never surfaced them.
-    // comment-gate-ok: same pin as above — the assertions in this case are the
-    //   mutation surface.
+    // MUT: bridge-unretired — re-adding a side bridge would re-hide this; the
+    //   pinned assertions below are the check.
     // This test therefore asserts only what the production path guarantees
     // today — the append reaches the document — and pins the child count so a
     // future fix has to update it deliberately.
