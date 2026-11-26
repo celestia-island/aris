@@ -4,10 +4,12 @@
 //! lifetime, so listeners registered during `<script>` execution (and element
 //! handles from `getElementById`) survive to be fired on click.
 //!
-//! Listener handlers are stashed as named globals on the context (e.g.
-//! `__aris_listener_<node>_<idx>`), which keeps them GC-rooted without us
-//! holding raw `JsFunction`s across calls. The registry maps node id → list of
-//! global names.
+//! Listener handlers are stashed as named globals on the context
+//! (`__aris_listener_<node>_<type>_<seq>`), which keeps them GC-rooted without
+//! us holding raw `JsFunction`s across calls. `JsRuntime::listeners` maps node
+//! id → its registrations (event type + global name), and the bridge's
+//! `listener_registry` holds (node, type, name, handler) so removal can match
+//! by handler identity.
 //!
 //! Scope: `addEventListener('click', fn)`, `getElementById`, `createElement`,
 //! `appendChild`, `setAttribute`, `textContent` — the same bridge operations as
@@ -12101,18 +12103,16 @@ fn make_element_handle(
                 let _ = arr
                     .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
             }
-            // Fire_click registration (L940 leftover ①): stash the callback
-            // under a deterministic per-(node, type) global name — GC-rooted via
-            // the global object, so the handler outlives the handle object it
-            // was registered on — and record (node, name) on the bridge for
-            // harvest. On master the push into new_listeners was never written,
-            // so registered listeners silently vanished. Known limitation:
-            // two handlers on the same (node, type) collide on one name and
-            // only the last survives (multi-handler needs a registry
-            // redesign — see L940).
+            // Fire_click registration: stash the callback under a
+            // per-registration global name — GC-rooted via the global object,
+            // so the handler outlives the handle object it was registered on —
+            // and record (node, type, name, handler) for harvest. Several
+            // handlers may listen to one (node, type); each gets its own slot.
+            // Note: a page script re-run (resize / zoom / reload) still
+            // registers again — that pre-existing defect is tracked in L940.
             if let Some(nid) = read_handle_id(this) {
-                // Unique per registration: several handlers may listen to
-                // the same (node, type) (L940 registry redesign).
+                // Unique per registration so several handlers on one
+                // (node, type) each get a distinct GC root.
                 let seq = {
                     let mut bb = b.borrow_mut();
                     bb.next_listener_reg = bb.next_listener_reg.wrapping_add(1);
