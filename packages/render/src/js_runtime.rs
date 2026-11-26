@@ -169,6 +169,10 @@ struct NodePropSnapshot {
     attrs: Vec<(String, String)>,
     /// Child node IDs (in document order).
     child_ids: Vec<u64>,
+    /// The subset of `child_ids` that are ELEMENTS, in order. `children` /
+    /// `childElementCount` must count only these — counting the total would
+    /// report text nodes as elements (round-2 S2).
+    element_child_ids: Vec<u64>,
     /// Parent node ID (0 = no parent / root).
     parent_id: u64,
 }
@@ -992,6 +996,17 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
             })
             .unwrap_or_default();
         let child_ids: Vec<u64> = node.children.iter().map(|&c| c.as_u64()).collect();
+        let element_child_ids: Vec<u64> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| {
+                doc.get_node(c)
+                    .map(|cn| cn.element_data().is_some())
+                    .unwrap_or(false)
+            })
+            .map(|c| c.as_u64())
+            .collect();
         let parent_id = node.parent.map(|p| p.as_u64()).unwrap_or(0);
         r.insert(
             id.as_u64(),
@@ -1003,6 +1018,7 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
                 node_type,
                 attrs,
                 child_ids,
+                element_child_ids,
                 parent_id,
             },
         );
@@ -1459,30 +1475,23 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         boa_engine::js_string!("childNodes"),
         pd(child_arr.clone().into()),
     );
-    // children (HTMLCollection of ELEMENT children) — derived from the same
-    // ids, skipping text nodes.
+    // children / childElementCount count ELEMENT children only — using the
+    // total child count would report text nodes as elements (round-2 S2).
     let elem_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-    let mut elem_n = 0u32;
-    for (i, &cid) in s.child_ids.iter().enumerate() {
-        // Text nodes have no tag; the snapshot's own text node marker is
-        // node_type 3. We only know the id here, so use the child handle's
-        // tag heuristic: ids whose snapshot we do not hold are treated as
-        // elements (the common case) except when the parent's text equals
-        // the concatenation — kept simple and honest: include only ids the
-        // caller can distinguish, here all ids (matches master's
-        // childNodes-equals-children simplification).
-        let _ = i;
+    for (i, &cid) in s.element_child_ids.iter().enumerate() {
         let child_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
         let _ =
             child_obj.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(cid)));
-        let _ = elem_arr.insert_property(elem_n, pd(child_obj.into()));
-        elem_n += 1;
+        let _ = elem_arr.insert_property(i as u32, pd(child_obj.into()));
     }
-    let _ = elem_arr.insert_property(boa_engine::js_string!("length"), pd(JsValue::from(elem_n)));
+    let _ = elem_arr.insert_property(
+        boa_engine::js_string!("length"),
+        pd(JsValue::from(s.element_child_ids.len() as u32)),
+    );
     let _ = obj.insert_property(boa_engine::js_string!("children"), pd(elem_arr.into()));
     let _ = obj.insert_property(
         boa_engine::js_string!("childElementCount"),
-        pd(JsValue::from(elem_n)),
+        pd(JsValue::from(s.element_child_ids.len() as u32)),
     );
     // (childElementCount is set above from the derived element count.)
     // firstElementChild / lastElementChild / nextElementSibling / previousElementSibling
@@ -17928,6 +17937,44 @@ mod child_nodes_accessor_tests {
         assert_eq!(
             out, "children=2|count=2",
             "children and childElementCount must follow the parsed tree"
+        );
+    }
+
+    #[test]
+    fn children_counts_only_element_children_not_text_nodes() {
+        // Round-2 S2: `children` / `childElementCount` must count ELEMENTS.
+        // `text<b>x</b>more` has 3 children but 1 element child.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="m">text<b>x</b>more</div><div id="all">only text</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.getElementById('m');
+            var all = document.getElementById('all');
+            document.getElementById('res').setText(
+                'cn=' + m.childNodes.length +
+                '|ch=' + m.children.length +
+                '|cec=' + m.childElementCount +
+                '|textonly_cec=' + all.childElementCount
+            );
+            "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "cn=3|ch=1|cec=1|textonly_cec=0",
+            "children/childElementCount must exclude text nodes"
         );
     }
 
