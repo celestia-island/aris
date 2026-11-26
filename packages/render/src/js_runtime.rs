@@ -311,6 +311,10 @@ impl JsRuntime {
         if replay {
             self.reconcile_slots();
         }
+        // The page run is over: further registrations are ad-hoc (inline
+        // onclick) and must not consume page slots. Leaving the flag set
+        // relied on every entry point re-assigning it — made explicit here.
+        self.bridge.borrow_mut().slots_active = false;
         self.harvest_timers();
     }
 
