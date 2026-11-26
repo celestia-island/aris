@@ -339,11 +339,16 @@ impl JsRuntime {
         }
         for entry in entries {
             let name = entry.name.clone();
-            // `this` is the node the LISTENER is attached to (DOM
-            // currentTarget), not the click target.
+            // For a FUNCTION listener, `this` is the node the listener is
+            // attached to (DOM currentTarget), not the click target. A
+            // `handleEvent` OBJECT instead gets `this` = the listener object
+            // (DOM), so it receives no node handle at all — and this runtime
+            // passes no event argument either, so such a listener cannot see
+            // which element fired (L940: event-object model follow-up).
             let this_node = entry.node_id;
-            // Look up the stashed global function and call it with a fresh
-            // element handle as `this`.
+            // Look up the stashed callback and call it with a fresh element
+            // handle as `this` (functions) or with the listener object as
+            // `this` (handleEvent objects).
             let mut this = match make_element_handle(
                 &mut self.ctx,
                 Gc::clone(&self.bridge),
@@ -451,7 +456,9 @@ impl JsRuntime {
                 && let Some(hf) = h.as_object()
                 && hf.is_callable()
             {
-                // DOM: inside `handleEvent`, `this` is the listener object.
+                // DOM: inside `handleEvent`, `this` is the listener object
+                // (not the document). No event argument is passed yet, so the
+                // listener cannot read the event/currentTarget — see L940.
                 let listener = JsValue::from(f.clone());
                 let _ = hf.call(&listener, &[], &mut self.ctx);
             }
