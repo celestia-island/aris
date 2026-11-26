@@ -345,8 +345,10 @@ impl JsRuntime {
     }
 
     /// Run the document's `click` listeners (the `_js_listeners` entries on
-    /// the document object). Kept separate from the node registry because the
-    /// document is not a blitz node.
+    /// the document object). Kept separate from the node walk because the
+    /// document is not a blitz node: `fire_click` starts from a node id and
+    /// the walk steps through `node.parent`, so the document object is never
+    /// reachable as a walk step (it has no `_arisId` and no parent).
     fn dispatch_document_click(&mut self) {
         let Ok(doc_val) = self
             .ctx
