@@ -378,6 +378,9 @@ impl JsRuntime {
             // the latter (L940 follow-up).
             if func.is_callable() {
                 let _ = func.call(&this_val, &[], &mut self.ctx);
+            // The `is_callable()` check is defence in depth: invoking a
+            // non-callable would throw a TypeError that the `let _ =` below
+            // swallows, so it is not page-observable on its own.
             } else if let Ok(h) = func.get(boa_engine::js_string!("handleEvent"), &mut self.ctx)
                 && let Some(hf) = h.as_object()
                 && hf.is_callable()
@@ -15329,16 +15332,23 @@ mod handle_event_tests {
     }
 
     #[test]
-    fn plain_object_without_handle_event_is_ignored() {
+    fn non_callable_handle_event_is_silently_ignored() {
+        // An object whose `handleEvent` is not callable must register without
+        // error and must not fire. NOTE (round-3 S3): the `is_callable()`
+        // guard itself is NOT observable — invoking a non-callable throws a
+        // TypeError that this dispatcher swallows with `let _ =`, so removing
+        // the guard leaves behaviour identical. The guard is defence in depth;
+        // this test pins the end-to-end contract, not the guard.
         let out = click_and_read(
             r#"
-            var log = '';
-            document.getElementById('btn').addEventListener('click', {foo: 1});
+            var log = 'start|';
+            document.getElementById('btn').addEventListener('click', {handleEvent: 42});
+            log += 'registered';
         "#,
         );
         assert_eq!(
-            out, "",
-            "an object without handleEvent must not throw or fire"
+            out, "start|registered",
+            "a non-callable handleEvent must not fire or surface an error"
         );
     }
 }
