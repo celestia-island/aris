@@ -339,11 +339,16 @@ impl JsRuntime {
         }
         for entry in entries {
             let name = entry.name.clone();
-            // `this` is the node the LISTENER is attached to (DOM
-            // currentTarget), not the click target.
+            // For a FUNCTION listener, `this` is the node the listener is
+            // attached to (DOM currentTarget), not the click target. A
+            // `handleEvent` OBJECT instead gets `this` = the listener object
+            // (DOM), so it receives no node handle at all — and this runtime
+            // passes no event argument either, so such a listener cannot see
+            // which element fired (L940: event-object model follow-up).
             let this_node = entry.node_id;
-            // Look up the stashed global function and call it with a fresh
-            // element handle as `this`.
+            // Look up the stashed callback and call it with a fresh element
+            // handle as `this` (functions) or with the listener object as
+            // `this` (handleEvent objects).
             let mut this = match make_element_handle(
                 &mut self.ctx,
                 Gc::clone(&self.bridge),
@@ -367,10 +372,23 @@ impl JsRuntime {
             let Some(func) = func_val.as_object() else {
                 continue;
             };
-            if !func.is_callable() {
-                continue;
+            let this_val = JsValue::from(this);
+            // DOM: an event listener is either a function or an object with a
+            // `handleEvent` method. The callable-only guard silently dropped
+            // the latter (L940 follow-up).
+            if func.is_callable() {
+                let _ = func.call(&this_val, &[], &mut self.ctx);
+            // The `is_callable()` check is defence in depth: invoking a
+            // non-callable would throw a TypeError that the `let _ =` below
+            // swallows, so it is not page-observable on its own.
+            } else if let Ok(h) = func.get(boa_engine::js_string!("handleEvent"), &mut self.ctx)
+                && let Some(hf) = h.as_object()
+                && hf.is_callable()
+            {
+                // DOM: inside `handleEvent`, `this` is the listener object.
+                let listener = JsValue::from(func.clone());
+                let _ = hf.call(&listener, &[], &mut self.ctx);
             }
-            let _ = func.call(&JsValue::from(this), &[], &mut self.ctx);
         }
         // 3. Document-level listeners: they live on the document object's
         // `_js_listeners` map (installed by the document's own
@@ -433,10 +451,19 @@ impl JsRuntime {
             .get(boa_engine::js_string!("document"), &mut self.ctx)
             .unwrap_or(JsValue::null());
         for cb in handlers {
-            if let Some(f) = cb.as_object()
-                && f.is_callable()
-            {
+            let Some(f) = cb.as_object() else { continue };
+            // DOM: function or object with `handleEvent`.
+            if f.is_callable() {
                 let _ = f.call(&this_val, &[], &mut self.ctx);
+            } else if let Ok(h) = f.get(boa_engine::js_string!("handleEvent"), &mut self.ctx)
+                && let Some(hf) = h.as_object()
+                && hf.is_callable()
+            {
+                // DOM: inside `handleEvent`, `this` is the listener object
+                // (not the document). No event argument is passed yet, so the
+                // listener cannot read the event/currentTarget — see L940.
+                let listener = JsValue::from(f.clone());
+                let _ = hf.call(&listener, &[], &mut self.ctx);
             }
         }
     }
@@ -15207,6 +15234,121 @@ mod document_listener_lifecycle_tests {
         assert_eq!(
             out, "doc",
             "this inside a document listener must be the document"
+        );
+    }
+}
+
+#[cfg(test)]
+mod handle_event_tests {
+    //! DOM: an event listener is a function OR an object with a `handleEvent`
+    //! method. The callable-only guard used to drop the latter, so such a
+    //! listener registered fine but never ran (L940 follow-up).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_and_read(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn handle_event_object_runs_on_element_listener() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            var listener = {
+                handleEvent: function () { log += 'H'; }
+            };
+            document.getElementById('btn').addEventListener('click', listener);
+        "#,
+        );
+        assert_eq!(
+            out, "H",
+            "an object with handleEvent must be invoked for a click"
+        );
+    }
+
+    #[test]
+    fn handle_event_this_is_the_listener_object() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            var listener = {
+                name: 'L',
+                handleEvent: function () { log += this.name; }
+            };
+            document.getElementById('btn').addEventListener('click', listener);
+        "#,
+        );
+        assert_eq!(
+            out, "L",
+            "inside handleEvent, `this` must be the listener object"
+        );
+    }
+
+    #[test]
+    fn handle_event_object_runs_on_document_listener() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            var listener = {
+                name: 'D',
+                handleEvent: function () { log += this.name; }
+            };
+            document.addEventListener('click', listener);
+        "#,
+        );
+        assert_eq!(
+            out, "D",
+            "a handleEvent object registered on the document must be invoked"
+        );
+    }
+
+    #[test]
+    fn non_callable_handle_event_is_silently_ignored() {
+        // An object whose `handleEvent` is not callable must register without
+        // error and must not fire. NOTE (round-3 S3): the `is_callable()`
+        // guard itself is NOT observable — invoking a non-callable throws a
+        // TypeError that this dispatcher swallows with `let _ =`, so removing
+        // the guard leaves behaviour identical. The guard is defence in depth;
+        // this test pins the end-to-end contract, not the guard.
+        let out = click_and_read(
+            r#"
+            var log = 'start|';
+            document.getElementById('btn').addEventListener('click', {handleEvent: 42});
+            log += 'registered';
+        "#,
+        );
+        assert_eq!(
+            out, "start|registered",
+            "a non-callable handleEvent must not fire or surface an error"
         );
     }
 }
