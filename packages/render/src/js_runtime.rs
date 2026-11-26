@@ -215,6 +215,35 @@ impl JsRuntime {
     /// As [`bind_and_run`] but also installs/reinstalls the `window` global
     /// with `location.href` set to the current document URL.
     pub fn bind_and_run_with_url(&mut self, doc: &mut BaseDocument, script_src: &str, url: &str) {
+        self.bind_and_run_with_url_mode(doc, script_src, url, false)
+    }
+
+    /// Run the PAGE's `<script>` blocks. `replay` marks a re-run of scripts
+    /// this document already executed (resize / zoom / reload): the
+    /// per-registration counter is reset so identical registrations land on
+    /// the same global names and the harvest collapses them instead of
+    /// stacking a duplicate. Prefer this over [`Self::bind_and_run_with_url`]
+    /// for page scripts; that entry point keeps the counter monotonic for
+    /// ad-hoc script evaluation (an inline `onclick` must not collide with
+    /// the page's own registration slots).
+    pub fn bind_page_scripts(
+        &mut self,
+        doc: &mut BaseDocument,
+        scripts: &[String],
+        url: &str,
+        replay: bool,
+    ) {
+        let combined = scripts.join("\n;\n");
+        self.bind_and_run_with_url_mode(doc, &combined, url, replay);
+    }
+
+    fn bind_and_run_with_url_mode(
+        &mut self,
+        doc: &mut BaseDocument,
+        script_src: &str,
+        url: &str,
+        replay: bool,
+    ) {
         // Drain pending ops from any prior run first (none expected here).
         self.apply_ops(doc);
         // Refresh the id snapshot + query index by rebuilding the bridge.
@@ -234,6 +263,12 @@ impl JsRuntime {
             // re-registration must not be killed by a stale record
             // (R3 S1: cross-ticket remove→re-add left the listener dead).
             b.listener_actions.clear();
+            if replay {
+                // Restart per-registration naming so this run's registrations
+                // reuse the previous run's names; the harvest dedupe then
+                // collapses them (page-replay idempotence).
+                b.next_listener_reg = 0;
+            }
         }
         // Deliberately NOT clearing self.listeners here: this path re-runs
         // for every onclick-attribute click (fire_click → bind_and_run), and
@@ -530,8 +565,18 @@ impl JsRuntime {
                     }
                     {
                         let mut bb = self.bridge.borrow_mut();
-                        bb.listener_registry
-                            .push((node_id, event_type, name, handler));
+                        // A replayed script re-registers the same slot under
+                        // the same name — replace the row instead of stacking
+                        // a duplicate (registry half of the idempotence fix).
+                        let row = (node_id, event_type, name, handler);
+                        match bb
+                            .listener_registry
+                            .iter()
+                            .position(|(_, _, n, _)| *n == row.2)
+                        {
+                            Some(i) => bb.listener_registry[i] = row,
+                            None => bb.listener_registry.push(row),
+                        }
                     }
                 }
                 ListenerAction::Remove { node_id, name } => {
@@ -15727,5 +15772,140 @@ mod fragment_and_eventtarget_tests {
             t.dispatchEvent(new Event('ping'));
         "#);
         assert_eq!(out, "0", "a listener for another type must not run");
+    }
+}
+
+#[cfg(test)]
+mod replay_idempotence_tests {
+    //! The browser re-runs the page's `<script>` blocks on every resize /
+    //! zoom / reload (`build_doc`). Each run used to register the same
+    //! listener AGAIN under a fresh global name, so one click fired N times
+    //! after N re-runs. `bind_page_scripts(.., replay = true)` restarts the
+    //! per-registration counter so the names match and the harvest collapses
+    //! the duplicate (L940 registry idempotence).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_after_replays(script: &str, replays: usize) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        let scripts = vec![script.to_string()];
+        rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        for _ in 0..replays {
+            rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        }
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(count));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_replayed_script_fires_once() {
+        let out = click_after_replays(
+            r#"
+            var count = 0;
+            document.getElementById('btn').addEventListener('click', function () { count++; });
+        "#,
+            1,
+        );
+        assert_eq!(out, "1", "one replay must not double the handler");
+    }
+
+    #[test]
+    fn five_replays_still_fire_once() {
+        let out = click_after_replays(
+            r#"
+            var count = 0;
+            document.getElementById('btn').addEventListener('click', function () { count++; });
+        "#,
+            5,
+        );
+        assert_eq!(out, "1", "five replays must still fire the handler once");
+    }
+
+    #[test]
+    fn two_listeners_keep_their_order_across_replays() {
+        // Two handlers must stay A-then-B (registration order) and each fire
+        // exactly once after replays — not "ABAB" or "ABABAB".
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        let scripts = vec![
+            r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'A'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'B'; });
+            "#
+            .to_string(),
+        ];
+        for _ in 0..3 {
+            rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        }
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        let out = doc
+            .get_node(NodeId::from_u64(b_id))
+            .map(|_| ())
+            .and(Some(()))
+            .map(|_| ())
+            .and_then(|_| {
+                doc.get_node(NodeId::from_u64(
+                    doc.tree()
+                        .iter()
+                        .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                        .map(|(id, _)| id.as_u64())
+                        .expect("missing #out"),
+                ))
+            })
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        // The out div is still "0" (no script writes it), so read `log`
+        // through the runtime instead.
+        rt.bind_and_run(&mut doc, "document.getElementById('out').setText(log);");
+        let out2 = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        let _ = out;
+        assert_eq!(
+            out2, "AB",
+            "two handlers keep registration order and fire once each after replays"
+        );
     }
 }
