@@ -75,6 +75,10 @@ struct ListenerEntry {
     event_type: String,
     /// Global name holding the callback (GC root).
     name: String,
+    /// Node this listener is attached to — the dispatch loop uses it both as
+    /// the lookup key and as the `this` for the call, so an ancestor's
+    /// handler sees its own node, not the click target (DOM currentTarget).
+    node_id: u64,
 }
 
 /// A persistent JS runtime bound to one document.
@@ -335,17 +339,24 @@ impl JsRuntime {
         }
         for entry in entries {
             let name = entry.name.clone();
+            // `this` is the node the LISTENER is attached to (DOM
+            // currentTarget), not the click target.
+            let this_node = entry.node_id;
             // Look up the stashed global function and call it with a fresh
             // element handle as `this`.
-            let mut this =
-                match make_element_handle(&mut self.ctx, Gc::clone(&self.bridge), node_id, None) {
-                    Ok(o) => o,
-                    Err(_) => continue,
-                };
+            let mut this = match make_element_handle(
+                &mut self.ctx,
+                Gc::clone(&self.bridge),
+                this_node,
+                None,
+            ) {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
             // Populate the handle's properties from the node snapshot: a bare
             // make_element_handle leaves `id` / `tagName` / `textContent`
             // empty, so a handler branching on `this.id` silently saw "".
-            if let Some(snap) = self.bridge.borrow().node_props.get(&node_id).cloned() {
+            if let Some(snap) = self.bridge.borrow().node_props.get(&this_node).cloned() {
                 populate_props(&this, &snap, &mut self.ctx);
             }
             let key = boa_engine::js_string!(name.clone());
@@ -479,6 +490,7 @@ impl JsRuntime {
                         entry.push(ListenerEntry {
                             event_type: event_type.clone(),
                             name: name.clone(),
+                            node_id,
                         });
                     }
                     {
@@ -14924,6 +14936,54 @@ mod handler_this_props_tests {
         assert_eq!(
             out, "BUTTON/cta",
             "this.tagName and this.className must reflect the element"
+        );
+    }
+
+    #[test]
+    fn ancestor_listener_sees_its_own_node_not_the_target() {
+        // DOM: `this` (currentTarget) is the node the listener is attached
+        // to — an ancestor's handler must not see the click target.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="wrap"><button id="btn">go</button></div><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = '';
+            document.getElementById('wrap').addEventListener('click', function () {
+                log += 'wrap=' + this.id + ';';
+            });
+            document.getElementById('btn').addEventListener('click', function () {
+                log += 'btn=' + this.id + ';';
+            });
+            "#,
+        );
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "btn=btn;wrap=wrap;",
+            "the target's handler sees #btn and the ancestor's sees #wrap"
         );
     }
 
