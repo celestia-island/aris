@@ -2022,6 +2022,24 @@ fn install_event_api(ctx: &mut Context) {
                 .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
                 .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                 .unwrap_or_default();
+            // DOM sets target/currentTarget at dispatch start, BEFORE any
+            // listener lookup — an event dispatched on a listener-less target
+            // (or one with only other types) still has a target (round-3 S3).
+            if let Some(ev_obj) = event.as_object()
+                && let Some(o) = this.as_object()
+            {
+                let pd_ev = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                let t = JsValue::from(o.clone());
+                let _ = ev_obj.insert_property(boa_engine::js_string!("target"), pd_ev(t.clone()));
+                let _ = ev_obj.insert_property(boa_engine::js_string!("currentTarget"), pd_ev(t));
+            }
             if let Some(o) = this.as_object()
                 && let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx)
                 && let Some(lm) = lmap.as_object()
@@ -2042,26 +2060,6 @@ fn install_event_api(ctx: &mut Context) {
                     }
                 }
                 let this_val = JsValue::from(o.clone());
-                // DOM: dispatchEvent sets event.target/currentTarget to the
-                // target. Leaving them null made a listener on a self-made
-                // EventTarget unable to tell where the event came from
-                // (round-2 S2).
-                if let Some(ev_obj) = event.as_object() {
-                    let pd_ev = |val: JsValue| {
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(val)
-                            .writable(true)
-                            .enumerable(true)
-                            .configurable(true)
-                            .build()
-                    };
-                    let _ = ev_obj
-                        .insert_property(boa_engine::js_string!("target"), pd_ev(this_val.clone()));
-                    let _ = ev_obj.insert_property(
-                        boa_engine::js_string!("currentTarget"),
-                        pd_ev(this_val.clone()),
-                    );
-                }
                 for cb in handlers {
                     let Some(f) = cb.as_object() else { continue };
                     if f.is_callable() {
@@ -2073,6 +2071,18 @@ fn install_event_api(ctx: &mut Context) {
                         let _ = hf.call(&JsValue::from(f), std::slice::from_ref(&event), ctx);
                     }
                 }
+            }
+            // WHATWG: currentTarget is null once dispatch completes.
+            if let Some(ev_obj) = event.as_object() {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!("currentTarget"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::null())
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
             }
             Ok(JsValue::from(true))
         });
@@ -15656,6 +15666,54 @@ mod fragment_and_eventtarget_tests {
         assert_eq!(
             out, "TC",
             "dispatchEvent must set event.target and event.currentTarget"
+        );
+    }
+
+    #[test]
+    fn event_target_is_set_even_without_listeners() {
+        // Round-3 S3: the assignment used to sit inside the listener-array
+        // guard, so a listener-less target left event.target null.
+        let out = run(r#"
+            var t = new EventTarget();
+            var e = new Event('ping');
+            t.dispatchEvent(e);
+            document.getElementById('out').setText(e.target === t ? 'T' : 'null');
+        "#);
+        assert_eq!(out, "T", "dispatchEvent must set target unconditionally");
+    }
+
+    #[test]
+    fn current_target_is_null_after_dispatch() {
+        let out = run(r#"
+            var t = new EventTarget();
+            var during = 'unset';
+            var e = new Event('ping');
+            t.addEventListener('ping', function (ev) { during = ev.currentTarget === t ? 'C' : 'c'; });
+            t.dispatchEvent(e);
+            document.getElementById('out').setText(during + '|' + (e.currentTarget === null ? 'null' : 'stale'));
+        "#);
+        assert_eq!(
+            out, "C|null",
+            "currentTarget must be live during dispatch and null afterwards"
+        );
+    }
+
+    #[test]
+    fn html_document_fragment_last_child_is_the_last_one() {
+        // Round-3: the third fragment builder is REACHABLE via
+        // document.implementation.createHTMLDocument(...).
+        let out = run(r#"
+            var d = document.implementation.createHTMLDocument('t');
+            var frag = d.createDocumentFragment();
+            frag.appendChild(d.createTextNode('a'));
+            frag.appendChild(d.createTextNode('b'));
+            document.getElementById('out').setText(
+                'first=' + frag.firstChild.data + ' last=' + frag.lastChild.data
+            );
+        "#);
+        assert_eq!(
+            out, "first=a last=b",
+            "the createHTMLDocument fragment builder must report the last child"
         );
     }
 
