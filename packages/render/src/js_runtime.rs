@@ -271,8 +271,13 @@ impl JsRuntime {
             b.query_by_class = by_class;
             b.query_by_id = by_id_q;
             b.ops.clear();
+            // Keep `next_pending` MONOTONIC across binds: resetting it to 0
+            // re-issues pids that stale handles still hold, and their writes
+            // would land on a DIFFERENT, freshly-created node (round-2 S2 —
+            // a silent misroute, worse than the drop it replaced). Entries
+            // from the previous run are cleared, so those stale writes find
+            // no tuple and drop, exactly like master's dropped writes.
             b.pending.clear();
-            b.next_pending = 0;
             // Actions belong to the ticket that recorded them; a later
             // re-registration must not be killed by a stale record
             // (R3 S1: cross-ticket remove→re-add left the listener dead).
@@ -11680,10 +11685,9 @@ fn make_element_handle(
             // `nid == 0` is a PENDING handle (a `createElement` node with no
             // tree id yet). Pushing an op against it panics in blitz
             // (`SlotMap` invalid key), which is strictly worse than the caught
-            // JS TypeError this path used to raise. Skip the op and keep the
-            // value on the style object only; carrying it into the pending
-            // tuple so the attribute survives `appendChild` is a separate
-            // change (the pending map is not written by any caller today).
+            // JS TypeError this path used to raise. For a pending handle the
+            // value rides the pending tuple instead (branch below), so it
+            // survives `appendChild`.
             if nid != 0 {
                 b.borrow_mut().ops.push(Op::SetAttr {
                     node_id: nid,
@@ -11694,8 +11698,13 @@ fn make_element_handle(
                 // PENDING handle (`nid == 0`): carrying the write in the
                 // pending tuple lets a detached node's style survive its
                 // append; pushing an op against id 0 would panic in blitz.
-                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
-                    entry.2.push(("style".to_string(), value.clone()));
+                // Replace-by-name, same last-wins reasoning as setAttribute.
+                let mut bb = b.borrow_mut();
+                if let Some(entry) = bb.pending.get_mut(&pid) {
+                    match entry.2.iter().position(|(n, _)| n == "style") {
+                        Some(i) => entry.2[i] = ("style".to_string(), value.clone()),
+                        None => entry.2.push(("style".to_string(), value.clone())),
+                    }
                 }
             }
             if let Some(o) = this.as_object() {
@@ -11961,9 +11970,16 @@ fn make_element_handle(
             } else if let Some(pid) = read_pending(this) {
                 // PENDING handle: carry the attribute in the pending tuple so
                 // it lands when the node is attached (same source-drop fix as
-                // the textContent branch above).
-                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
-                    entry.2.push((name.clone(), value.clone()));
+                // the textContent branch above). Replace an existing entry of
+                // the same name — pushing would stack duplicates and the DOM
+                // resolves first-wins while getAttribute is last-wins (a
+                // silent JS-vs-DOM split, round-2 S1).
+                let mut bb = b.borrow_mut();
+                if let Some(entry) = bb.pending.get_mut(&pid) {
+                    match entry.2.iter().position(|(n, _)| *n == name) {
+                        Some(i) => entry.2[i] = (name.clone(), value.clone()),
+                        None => entry.2.push((name.clone(), value.clone())),
+                    }
                 }
             }
             // Update the attributes NamedNodeMap and JS-visible properties.
@@ -14348,11 +14364,11 @@ fn make_element_handle(
                 // snapshot in step, so "written empty" and "never written" stay
                 // distinguishable, and after a `textContent` / `setText` write
                 // every handle — fresh or held — reads back what the DOM holds
-                // (rounds 2-3). NOTE the precondition: paths that mutate the
-                // child list without a text write (appendChild / removeChild)
-                // are NOT reconciled with the op-applied tree; that known
-                // divergence is pinned by
-                // `append_after_a_text_write_is_a_known_divergence`.
+                // (rounds 2-3). NOTE the precondition: child-list mutations
+                // that never carried a text write (e.g. removeChild to empty)
+                // still read back from the snapshot; the create→set→append
+                // shape IS reconciled, asserted by
+                // `append_after_a_text_write_is_consistent`.
                 let local = collect_text_content(&o, ctx, 0);
                 if !local.is_empty() {
                     return Ok(JsValue::from(boa_engine::js_string!(local)));
@@ -16878,5 +16894,112 @@ mod pending_write_tests {
             style, "color:red",
             "a detached node's cssText must land as the style attribute"
         );
+    }
+}
+
+#[cfg(test)]
+mod pending_write_shape_tests {
+    //! Round-2 shapes: repeated attribute writes must be last-wins with a
+    //! single entry, and a handle captured before a rebind must NOT route its
+    //! write onto a different, freshly-created node.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn repeated_attribute_writes_are_last_wins_with_one_entry() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.setAttribute('title', 'v1');
+            d.setAttribute('title', 'v2');
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        let title = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("title")) == Some("v2"))
+            .and_then(|(id, _)| doc.get_node(id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("title"))
+                    .map(|v| v.to_string())
+            });
+        assert_eq!(title, Some("v2".to_string()), "the last write must win");
+        // exactly ONE title attribute on the node (no stacked duplicates)
+        let dupes = doc
+            .tree()
+            .iter()
+            .filter(|(_, n)| n.attr(blitz_dom::local_name!("title")).is_some())
+            .count();
+        assert_eq!(dupes, 1, "no duplicate title attributes may exist");
+    }
+
+    #[test]
+    fn a_stale_handle_write_after_rebind_does_not_misroute() {
+        // Round-2 S2: pending ids used to restart at 0 on every bind, so a
+        // handle captured in run 1 wrote onto run 2's freshly-created node.
+        // Monotonic ids mean the stale write finds no tuple and drops.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var stale = document.createElement('div');
+            stale.textContent = 'OLD';
+            document.getElementById('stale-home').appendChild(stale);
+            "#
+            .replace("stale-home", "list")
+            .as_str(),
+        );
+        // rebind: the page script re-runs and creates a NEW node
+        rt.bind_page_scripts(
+            &mut doc,
+            &vec![
+                r#"
+            var fresh = document.createElement('div');
+            fresh.textContent = 'FRESH';
+            document.getElementById('list').appendChild(fresh);
+            "#
+                .to_string(),
+            ],
+            "",
+            true,
+        );
+        // the stale handle writes again — it must NOT land on the fresh node
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            stale.textContent = 'HIJACK';
+            "#,
+        );
+        let hijack = doc
+            .tree()
+            .iter()
+            .filter(|(_, n)| n.text_content() == "HIJACK")
+            .count();
+        assert_eq!(
+            hijack, 0,
+            "a stale handle's write must not reach any live node"
+        );
+        // Count ELEMENT nodes only: a text child mirrors its parent's text,
+        // so a naive text match counts the div and its text node as two.
+        let fresh = doc
+            .tree()
+            .iter()
+            .filter(|(_, n)| n.text_content() == "FRESH" && !n.children.is_empty())
+            .count();
+        assert_eq!(fresh, 1, "the fresh node must be untouched");
     }
 }
