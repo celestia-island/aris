@@ -75,6 +75,10 @@ struct ListenerEntry {
     event_type: String,
     /// Global name holding the callback (GC root).
     name: String,
+    /// Node this listener is attached to — the dispatch loop uses it both as
+    /// the lookup key and as the `this` for the call, so an ancestor's
+    /// handler sees its own node, not the click target (DOM currentTarget).
+    node_id: u64,
 }
 
 /// A persistent JS runtime bound to one document.
@@ -275,7 +279,28 @@ impl JsRuntime {
                     .map(|s| s.to_string())
             });
         if let Some(src) = onclick_src {
-            self.bind_and_run(doc, &src);
+            // DOM: an inline handler's `this` is the element. Evaluate it as a
+            // function invoked with the element handle, not as bare global
+            // script (where `this` would be the global object).
+            let mut handle =
+                make_element_handle(&mut self.ctx, Gc::clone(&self.bridge), node_id, None)
+                    .unwrap_or_else(|_| {
+                        boa_engine::object::JsObject::with_object_proto(self.ctx.intrinsics())
+                    });
+            if let Some(snap) = self.bridge.borrow().node_props.get(&node_id).cloned() {
+                populate_props(&handle, &snap, &mut self.ctx);
+            }
+            let wrapped = format!("(function(){{ {src}\n}}).call(__aris_this);");
+            let _ = self.ctx.global_object().insert_property(
+                boa_engine::js_string!("__aris_this"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(handle)
+                    .writable(true)
+                    .enumerable(false)
+                    .configurable(true)
+                    .build(),
+            );
+            self.bind_and_run(doc, &wrapped);
         }
 
         // 2. Registered addEventListener listeners for "click", target first,
@@ -314,13 +339,26 @@ impl JsRuntime {
         }
         for entry in entries {
             let name = entry.name.clone();
+            // `this` is the node the LISTENER is attached to (DOM
+            // currentTarget), not the click target.
+            let this_node = entry.node_id;
             // Look up the stashed global function and call it with a fresh
             // element handle as `this`.
-            let this =
-                match make_element_handle(&mut self.ctx, Gc::clone(&self.bridge), node_id, None) {
-                    Ok(o) => o,
-                    Err(_) => continue,
-                };
+            let mut this = match make_element_handle(
+                &mut self.ctx,
+                Gc::clone(&self.bridge),
+                this_node,
+                None,
+            ) {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+            // Populate the handle's properties from the node snapshot: a bare
+            // make_element_handle leaves `id` / `tagName` / `textContent`
+            // empty, so a handler branching on `this.id` silently saw "".
+            if let Some(snap) = self.bridge.borrow().node_props.get(&this_node).cloned() {
+                populate_props(&this, &snap, &mut self.ctx);
+            }
             let key = boa_engine::js_string!(name.clone());
             let func_val = match self.ctx.global_object().get(key.clone(), &mut self.ctx) {
                 Ok(v) => v,
@@ -452,6 +490,7 @@ impl JsRuntime {
                         entry.push(ListenerEntry {
                             event_type: event_type.clone(),
                             name: name.clone(),
+                            node_id,
                         });
                     }
                     {
@@ -14824,5 +14863,162 @@ mod document_listener_tests {
             out, "BWD",
             "bubbling order: target, then ancestors outward, then document"
         );
+    }
+}
+
+#[cfg(test)]
+mod handler_this_props_tests {
+    //! `this` inside an event listener must carry the element's properties.
+    //! `fire_click` used to hand out a bare handle whose `id` / `tagName` were
+    //! empty, so any handler branching on `this.id` silently took the empty
+    //! branch (L940 follow-up).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_and_read(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn" class="cta">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn this_id_is_populated() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () {
+                log = this.id;
+            });
+        "#,
+        );
+        assert_eq!(
+            out, "btn",
+            "this.id inside a listener must be the element id"
+        );
+    }
+
+    #[test]
+    fn this_tag_name_and_class_are_populated() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () {
+                log = this.tagName + '/' + this.className;
+            });
+        "#,
+        );
+        assert_eq!(
+            out, "BUTTON/cta",
+            "this.tagName and this.className must reflect the element"
+        );
+    }
+
+    #[test]
+    fn ancestor_listener_sees_its_own_node_not_the_target() {
+        // DOM: `this` (currentTarget) is the node the listener is attached
+        // to — an ancestor's handler must not see the click target.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="wrap"><button id="btn">go</button></div><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = '';
+            document.getElementById('wrap').addEventListener('click', function () {
+                log += 'wrap=' + this.id + ';';
+            });
+            document.getElementById('btn').addEventListener('click', function () {
+                log += 'btn=' + this.id + ';';
+            });
+            "#,
+        );
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "btn=btn;wrap=wrap;",
+            "the target's handler sees #btn and the ancestor's sees #wrap"
+        );
+    }
+
+    #[test]
+    fn this_works_for_inline_onclick_too() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="btn" onclick="mark = this.id;">go</button>
+            <div id="out">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, "var mark = '';");
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(mark));"#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(out, "btn", "inline onclick's this.id must be populated");
     }
 }
