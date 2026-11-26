@@ -10666,6 +10666,14 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 for (i, v) in kept.iter().enumerate() {
                     let _ = arr.insert_property(i as u32, pd_rm(v.clone()));
                 }
+                // Drop any tail indices left over from the longer array —
+                // insert_property bypasses array [[Set]], so shrinking
+                // `length` alone leaves the old own properties behind (they
+                // are page-visible through Object.keys).
+                for stale in kept.len() as u32..len {
+                    let _ = arr
+                        .delete_property_or_throw(boa_engine::js_string!(stale.to_string()), ctx);
+                }
                 let _ = arr.insert_property(
                     boa_engine::js_string!("length"),
                     pd_rm(JsValue::from(kept.len() as u32)),
@@ -15154,6 +15162,35 @@ mod document_listener_lifecycle_tests {
         "#,
         );
         assert_eq!(out, "B", "only the removed document listener stops firing");
+    }
+
+    #[test]
+    fn removal_leaves_no_stale_tail_entries() {
+        // insert_property bypasses array [[Set]], so shrinking `length` alone
+        // would leave the old indices behind as page-visible own properties.
+        // The surviving listener fires on the click, so the measured value
+        // lives in its own variable (`log` is appended to by the listener).
+        let out = click_and_read(
+            r#"
+            var log = '';
+            var report = 'unset';
+            function a() {}
+            function b() {}
+            document.addEventListener('click', a);
+            document.addEventListener('click', b);
+            document.removeEventListener('click', b);
+            var arr = document._js_listeners.click;
+            // Count own INDICES only: `length` is an own property too.
+            var idx = 0;
+            for (var k in arr) { if (k !== 'length') idx++; }
+            report = 'len=' + arr.length + '|idx=' + idx;
+            log = report;
+        "#,
+        );
+        assert_eq!(
+            out, "len=1|idx=1",
+            "the removed entry must leave no stale own property behind"
+        );
     }
 
     #[test]
