@@ -120,17 +120,25 @@ fn main() {
         "#list children: {} -> {}",
         list_children_before, list_children_after
     );
-    // KNOWN LIMITATION (pre-existing, and NOT caused by the migration):
-    // `fire_click` applies pending ops at BOTH its entry and its internal
-    // bind_and_run, so one inline onclick that calls appendChild lands the
-    // append twice; each further click on the same page adds four more (a
-    // plain script path appends exactly once). The appended node also loses
-    // its `textContent`, since a detached `createElement` node carries no tree
-    // id at write time. The retired `js_interactive` bridge avoided both by
-    // running its own mutator session, which is precisely why guarding it
-    // never surfaced them. This test therefore asserts only what the
-    // production path guarantees today — the append reaches the document —
-    // and pins the child count so a future fix has to update it deliberately.
+    // KNOWN LIMITATION (pre-existing, and NOT caused by the migration).
+    //
+    // ROOT CAUSE: `JsRuntime::apply_ops` clones the op log and never clears it,
+    // so every call REPLAYS every op recorded so far; `Op::AppendChild` mints a
+    // fresh node each time it is applied. `bind_and_run` calls `apply_ops`
+    // twice (once on entry, once after evaluating), so one inline onclick that
+    // appends lands two nodes, and each further click adds four more — an
+    // unbounded leak. A plain script path (one `bind_and_run`) appends once.
+    //
+    // The appended node's text is separately absent because the `textContent`
+    // setter only pushes an op when `read_handle_id` yields a tree id, and a
+    // pending `createElement` handle has none — the text is dropped at the
+    // source, not lost in transit.
+    //
+    // The retired `js_interactive` bridge avoided both by running its own
+    // mutator session, which is exactly why guarding it never surfaced them.
+    // This test therefore asserts only what the production path guarantees
+    // today — the append reaches the document — and pins the child count so a
+    // future fix has to update it deliberately.
     if list_children_after <= list_children_before {
         println!("FAIL: createElement+appendChild did not add a child to #list");
         std::process::exit(2);
