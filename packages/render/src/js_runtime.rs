@@ -283,6 +283,13 @@ impl JsRuntime {
         // the document only ever saw `dispatchEvent` before, so
         // `document.addEventListener('click', fn)` never fired on a real
         // click (L940 follow-up).
+        //
+        // Phase note: only the BUBBLE phase exists here. A handler registered
+        // with `capture: true` is dispatched at its bubble position (target
+        // first, then outward), not before the target — DOM would run it in
+        // the capture phase. `capture` is not read anywhere in this runtime;
+        // implementing real capture/`stopPropagation` is a separate item
+        // (L940), not a regression introduced by this walk.
         let mut entries: Vec<ListenerEntry> = Vec::new();
         {
             let mut cur = Some(blitz_traits::NodeId::from_u64(node_id));
