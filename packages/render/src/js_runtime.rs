@@ -13,7 +13,8 @@
 //!
 //! Scope: `addEventListener('click', fn)`, `getElementById`, `createElement`,
 //! `appendChild`, `setAttribute`, `textContent` — the same bridge operations as
-//! `js_interactive`, but persistent so `<script>`-registered listeners fire.
+//! the retired one-shot bridge, but persistent so `<script>`-registered
+//! listeners survive to fire on click.
 
 #![cfg(feature = "js")]
 
@@ -895,7 +896,7 @@ fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
     });
 }
 
-// ── DOM helpers (shared with js_interactive) ───────────────
+// ── DOM helpers ────────────────────────────────────────────
 
 fn collect_ids(doc: &BaseDocument) -> HashMap<String, u64> {
     let mut r = HashMap::new();
@@ -11656,6 +11657,58 @@ fn make_element_handle(
     // Pre-create objects that need ctx.intrinsics() before borrowing ctx mutably.
     let empty_arr1 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
     let empty_arr2 = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    // `el.style` — a style object whose `cssText` writes the element's
+    // `style` attribute. Without it `el.style.cssText = v` threw a TypeError
+    // ("cannot convert 'null' to object"), and the retired `js_interactive`
+    // bridge hid that by rewriting the source to `setAttribute('style', v)`.
+    // Only `cssText` is implemented; per-property access (`el.style.color`)
+    // is a separate, larger surface. Built before `init` because `init` takes
+    // a mutable borrow of `ctx`.
+    let style_css_text_set = NativeFunction::from_copy_closure_with_captures(
+        move |this, args, b, _ctx| {
+            let value = arg_string(args, 0);
+            // `nid == 0` is a PENDING handle (a `createElement` node with no
+            // tree id yet). Pushing an op against it panics in blitz
+            // (`SlotMap` invalid key), which is strictly worse than the caught
+            // JS TypeError this path used to raise. Skip the op and keep the
+            // value on the style object only; carrying it into the pending
+            // tuple so the attribute survives `appendChild` is a separate
+            // change (the pending map is not written by any caller today).
+            if nid != 0 {
+                b.borrow_mut().ops.push(Op::SetAttr {
+                    node_id: nid,
+                    name: "style".to_string(),
+                    value: value.clone(),
+                });
+            }
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("cssText"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(boa_engine::js_string!(value)))
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
+    let style_css_text_set_fn =
+        boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), style_css_text_set).build();
+    let style_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    let _ = style_obj.insert_property(
+        boa_engine::js_string!("cssText"),
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(JsValue::from(boa_engine::js_string!("")))
+            .set(style_css_text_set_fn)
+            .enumerable(true)
+            .configurable(true)
+            .build(),
+    );
+
     let mut init = ObjectInitializer::new(ctx);
     init.property(
         boa_engine::js_string!("_arisId"),
@@ -11991,6 +12044,11 @@ fn make_element_handle(
         Gc::clone(&bridge),
     );
     init.function(set_attr, boa_engine::js_string!("setAttribute"), 2);
+    init.property(
+        boa_engine::js_string!("style"),
+        style_obj,
+        boa_engine::property::Attribute::all(),
+    );
 
     // getAttribute — reads from JS-visible properties (snapshot from creation).
     let get_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
@@ -16518,5 +16576,95 @@ mod text_content_assignment_tests {
             "[]",
             "and the getter must not resurrect the parsed text"
         );
+    }
+}
+
+#[cfg(test)]
+mod style_css_text_tests {
+    //! `el.style.cssText = v` used to throw (`style` was undefined), and the
+    //! retired `js_interactive` bridge hid that by rewriting the source to
+    //! `setAttribute('style', v)`. The production path now exposes a style
+    //! object whose `cssText` writes the attribute.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    #[test]
+    fn css_text_assigns_the_style_attribute() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">x</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').style.cssText = 'color:#ff0000';"#,
+        );
+        let style = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .and_then(|(id, _)| doc.get_node(id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("style"))
+                    .map(|v| v.to_string())
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            style, "color:#ff0000",
+            "cssText must write the style attribute"
+        );
+    }
+
+    #[test]
+    fn styling_a_pending_create_element_handle_does_not_panic() {
+        // Round-2 S1: a `createElement` handle has no tree id yet (`nid == 0`),
+        // and pushing an op against it panicked inside blitz. Master raised a
+        // caught JS TypeError here; the fix must not turn that into a crash.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.style.cssText = 'color:red';
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        // Reaching here at all is the assertion: no panic.
+        assert!(
+            doc.tree()
+                .iter()
+                .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
+        );
+    }
+
+    #[test]
+    fn css_text_is_readable_back() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">x</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.style.cssText = 'color:red';
+            document.getElementById('res').setText(el.style.cssText);
+            "#,
+        );
+        let res = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+            .and_then(|(id, _)| doc.get_node(id))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(res, "color:red", "cssText must read back what was written");
     }
 }
