@@ -11819,23 +11819,21 @@ fn make_element_handle(
         |this, args, b, _ctx| {
             let v = arg_string(args, 0);
             if let Some(nid) = read_handle_id(this) {
-                b.borrow_mut().ops.push(Op::SetText {
+                let mut bb = b.borrow_mut();
+                // Keep the node snapshot in step so a freshly-fetched handle
+                // reads the new text (round-4 S2: without this, `setText` left
+                // the snapshot stale while the DOM moved on).
+                if let Some(snap) = bb.node_props.get_mut(&nid) {
+                    snap.text_content = v.clone();
+                }
+                bb.ops.push(Op::SetText {
                     node_id: nid,
                     value: v.clone(),
                 });
             }
-            // Also update the JS-visible textContent property.
-            let _ = this.as_object().map(|o| {
-                o.insert_property(
-                    boa_engine::js_string!("textContent"),
-                    boa_engine::property::PropertyDescriptor::builder()
-                        .value(JsValue::from(boa_engine::js_string!(v)))
-                        .writable(true)
-                        .enumerable(true)
-                        .configurable(true)
-                        .build(),
-                )
-            });
+            // Do NOT write a `textContent` data property here: that would
+            // replace the accessor installed by `make_element_handle` and
+            // silently break later reads through this handle (round-4 S2).
             Ok(JsValue::undefined())
         },
         Gc::clone(&bridge),
@@ -16429,6 +16427,68 @@ mod text_content_assignment_tests {
             read(&doc, "res"),
             "NEW",
             "a handle captured before the write must also observe it"
+        );
+    }
+
+    /// KNOWN LIMITATION (pre-existing, identical on master): after a
+    /// `textContent` write, a subsequent `appendChild` updates the handle's
+    /// own child list but the two do not agree with the rendered document, so
+    /// `textContent` can report more than the page shows. Fixing that means
+    /// reconciling the JS-side child list with the op-applied tree, which is a
+    /// separate change. This test pins the CURRENT behaviour so a future fix
+    /// has to update it deliberately.
+    #[test]
+    fn append_after_a_text_write_is_a_known_divergence() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var c = document.getElementById('c');
+            c.textContent = 'A';
+            var b = document.createElement('b');
+            b.textContent = 'B';
+            c.appendChild(b);
+            document.getElementById('res').setText(c.textContent);
+            "#,
+        );
+        // The DOM only holds the text the setter applied; the appended child
+        // never reached it.
+        assert_eq!(read(&doc, "c"), "A", "documented divergence: DOM holds 'A'");
+        // The handle's textContent reflects its own child list (A + the <b>B</b>),
+        // so it is WIDER than the document. Pinned, not endorsed.
+        assert_eq!(
+            read(&doc, "res"),
+            "AB",
+            "documented divergence: textContent reports the JS-side child list"
+        );
+    }
+
+    #[test]
+    fn set_text_is_visible_to_a_freshly_fetched_handle() {
+        // Round-4 S2: `setText` used to leave the node snapshot stale (and to
+        // overwrite the textContent accessor with a data property), so a new
+        // handle read the pre-write value.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('c').setText('M');
+            document.getElementById('res').setText(document.getElementById('c').textContent);
+            "#,
+        );
+        assert_eq!(read(&doc, "c"), "M", "the DOM must hold the setText value");
+        assert_eq!(
+            read(&doc, "res"),
+            "M",
+            "a fresh handle must read the setText value, not the parsed text"
         );
     }
 
