@@ -11671,6 +11671,9 @@ fn make_element_handle(
     // Only `cssText` is implemented; per-property access (`el.style.color`)
     // is a separate, larger surface. Built before `init` because `init` takes
     // a mutable borrow of `ctx`.
+    // Capture the pending pid for the style object's writes: `this` inside
+    // the closure is the style object itself, which carries no `_pending`.
+    let style_pending = pending;
     let style_css_text_set = NativeFunction::from_copy_closure_with_captures(
         move |this, args, b, _ctx| {
             let value = arg_string(args, 0);
@@ -11687,6 +11690,13 @@ fn make_element_handle(
                     name: "style".to_string(),
                     value: value.clone(),
                 });
+            } else if let Some(pid) = style_pending {
+                // PENDING handle (`nid == 0`): carrying the write in the
+                // pending tuple lets a detached node's style survive its
+                // append; pushing an op against id 0 would panic in blitz.
+                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
+                    entry.2.push(("style".to_string(), value.clone()));
+                }
             }
             if let Some(o) = this.as_object() {
                 let _ = o.insert_property(
@@ -11890,6 +11900,15 @@ fn make_element_handle(
                     node_id: nid,
                     value: v.clone(),
                 });
+            } else if let Some(pid) = read_pending(this) {
+                // PENDING handle (a detached `createElement` node): the write
+                // must ride the pending tuple so `Op::AppendChild` carries it
+                // into the tree when the node is attached. Previously dropped
+                // at the source — the most common dynamic-DOM pattern
+                // (create → set text → append) silently produced empty nodes.
+                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
+                    entry.1 = v.clone();
+                }
             }
             // Do NOT write a `textContent` data property here: that would
             // replace the accessor installed by `make_element_handle` and
@@ -11939,6 +11958,13 @@ fn make_element_handle(
                     name: name.clone(),
                     value: value.clone(),
                 });
+            } else if let Some(pid) = read_pending(this) {
+                // PENDING handle: carry the attribute in the pending tuple so
+                // it lands when the node is attached (same source-drop fix as
+                // the textContent branch above).
+                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
+                    entry.2.push((name.clone(), value.clone()));
+                }
             }
             // Update the attributes NamedNodeMap and JS-visible properties.
             if let Some(o) = this.as_object() {
@@ -14446,6 +14472,16 @@ fn make_element_handle(
                 // applied from script but the rendered document never changed
                 // (the retired `js_interactive` bridge masked this by rewriting
                 // the source to `setText`).
+                if read_handle_id(this).is_none()
+                    && let Some(pid) = read_pending(this)
+                {
+                    // PENDING handle: the write must ride the pending tuple so
+                    // `Op::AppendChild` carries it into the tree (create → set
+                    // text → append previously produced an empty node).
+                    if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
+                        entry.1 = s_for_op.clone();
+                    }
+                }
                 if let Some(nid) = read_handle_id(this) {
                     {
                         let mut bb = b.borrow_mut();
@@ -16496,15 +16532,11 @@ mod text_content_assignment_tests {
         );
     }
 
-    /// KNOWN LIMITATION (pre-existing, identical on master): after a
-    /// `textContent` write, a subsequent `appendChild` updates the handle's
-    /// own child list but the two do not agree with the rendered document, so
-    /// `textContent` can report more than the page shows. Fixing that means
-    /// reconciling the JS-side child list with the op-applied tree, which is a
-    /// separate change. This test pins the CURRENT behaviour so a future fix
-    /// has to update it deliberately.
+    /// FIXED by the pending-tuple carry (was the #76 known divergence): a
+    /// child created with `createElement`, given text, and appended now lands
+    /// WITH its text, so the DOM and the getter agree.
     #[test]
-    fn append_after_a_text_write_is_a_known_divergence() {
+    fn append_after_a_text_write_is_consistent() {
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
             DocumentConfig::default(),
@@ -16521,15 +16553,15 @@ mod text_content_assignment_tests {
             document.getElementById('res').setText(c.textContent);
             "#,
         );
-        // The DOM only holds the text the setter applied; the appended child
-        // never reached it.
-        assert_eq!(read(&doc, "c"), "A", "documented divergence: DOM holds 'A'");
-        // The handle's textContent reflects its own child list (A + the <b>B</b>),
-        // so it is WIDER than the document. Pinned, not endorsed.
+        assert_eq!(
+            read(&doc, "c"),
+            "AB",
+            "the DOM must hold A and the appended B"
+        );
         assert_eq!(
             read(&doc, "res"),
             "AB",
-            "documented divergence: textContent reports the JS-side child list"
+            "textContent must agree with the DOM now that the pending write lands"
         );
     }
 
@@ -16722,5 +16754,129 @@ mod apply_ops_drain_tests {
                 "click {expected}: the list must grow by exactly one per click"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_write_tests {
+    //! L940 (#78 residual): a detached `createElement` handle has no tree id,
+    //! so `textContent` / `setAttribute` / `style.cssText` writes used to be
+    //! dropped at the source — the most common dynamic-DOM pattern
+    //! (create → set → append) produced empty nodes. The writes now ride the
+    //! pending tuple and land when the node is attached.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn read_list_child(doc: &HtmlDocument) -> (usize, String) {
+        let node = doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing #list"),
+        ));
+        match node {
+            Some(n) => match n.children.last() {
+                Some(&cid) => (
+                    n.children.len(),
+                    doc.get_node(cid)
+                        .map(|c| c.text_content())
+                        .unwrap_or_default(),
+                ),
+                None => (n.children.len(), String::new()),
+            },
+            None => (0, String::new()),
+        }
+    }
+
+    #[test]
+    fn detached_text_content_lands_on_append() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.textContent = 'hello';
+            document.getElementById('list').appendChild(d);
+            document.getElementById('out').setText(d.textContent);
+            "#,
+        );
+        let (n, text) = read_list_child(&doc);
+        assert_eq!(n, 1, "the node must be appended");
+        assert_eq!(text, "hello", "the detached write must land");
+    }
+
+    #[test]
+    fn detached_set_attribute_lands_on_append() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.setAttribute('title', 'v1');
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        // Read the attribute from the live tree: the JS-side `children`/
+        // `lastChild` mirrors are empty on getElementById handles (pre-existing
+        // gap), so a JS read-back cannot see the appended node at all.
+        let k = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("title")) == Some("v1"))
+            .map(|_| "v1")
+            .unwrap_or("MISSING");
+        assert_eq!(
+            k, "v1",
+            "an attribute set before append must land on the attached node"
+        );
+    }
+
+    #[test]
+    fn detached_style_css_text_lands_on_append() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.style.cssText = 'color:red';
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        let style = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| {
+                n.parent.is_some()
+                    && doc
+                        .get_node(n.parent.expect("parent"))
+                        .map(|p| p.attr(blitz_dom::local_name!("id")) == Some("list"))
+                        .unwrap_or(false)
+            })
+            .and_then(|(id, _)| doc.get_node(id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("style"))
+                    .map(|v| v.to_string())
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            style, "color:red",
+            "a detached node's cssText must land as the style attribute"
+        );
     }
 }

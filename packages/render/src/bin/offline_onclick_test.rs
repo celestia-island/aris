@@ -154,13 +154,12 @@ fn main() {
             .get_node(cid)
             .map(|n| n.text_content())
             .unwrap_or_default();
-        if !text.is_empty() {
-            println!("FAIL: child[{i}] unexpectedly carries text {text:?}");
+        if text != "Added by JS" {
+            println!("FAIL: child[{i}] text was {text:?}, expected \"Added by JS\"");
             std::process::exit(2);
         }
     }
     println!(
-        "OK: createElement+appendChild landed exactly once ({} child, text dropped — known limitation)",
-        list_children_after
+        "OK: createElement+appendChild landed exactly once, carrying its text (1 child, \"Added by JS\")"
     );
 }
