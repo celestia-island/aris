@@ -754,7 +754,9 @@ impl JsRuntime {
             self.apply_ops(doc);
             self.harvest_listeners();
             self.harvest_timers();
-            self.harvest_timers();
+            // (A second `harvest_timers()` used to sit here — dead: the first
+            // call `std::mem::take`s `new_timers`, so the second always took
+            // an empty vec. Removed, PR #81 R2.)
         }
         fired
     }
