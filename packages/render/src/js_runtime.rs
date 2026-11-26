@@ -16946,8 +16946,14 @@ mod pending_write_shape_tests {
     #[test]
     fn a_stale_handle_write_after_rebind_does_not_misroute() {
         // Round-2 S2: pending ids used to restart at 0 on every bind, so a
-        // handle captured in run 1 wrote onto run 2's freshly-created node.
+        // handle captured in run 1 shared its pid with run 2's freshly-created
+        // node — the stale write POISONED the new node's tuple before the
+        // append applied, and the fresh node landed with the stale text.
         // Monotonic ids mean the stale write finds no tuple and drops.
+        //
+        // Shape (round-3): the stale write must happen in the SAME bind as
+        // fresh's create/append — before apply_ops runs — or the bind-entry
+        // pending clear hides the collision entirely.
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><div id="list"></div></body></html>"#,
             DocumentConfig::default(),
@@ -16958,43 +16964,36 @@ mod pending_write_shape_tests {
             r#"
             var stale = document.createElement('div');
             stale.textContent = 'OLD';
-            document.getElementById('stale-home').appendChild(stale);
-            "#
-            .replace("stale-home", "list")
-            .as_str(),
+            document.getElementById('list').appendChild(stale);
+            "#,
         );
-        // rebind: the page script re-runs and creates a NEW node
+        // rebind: ONE bind does fresh's create + append AND the stale write,
+        // so with a pid reset the stale write poisons fresh's tuple.
         rt.bind_page_scripts(
             &mut doc,
             &vec![
                 r#"
-            var fresh = document.createElement('div');
-            fresh.textContent = 'FRESH';
-            document.getElementById('list').appendChild(fresh);
+            var f = document.createElement('div');
+            f.textContent = 'FRESH';
+            document.getElementById('list').appendChild(f);
+            stale.textContent = 'HIJACK';
             "#
                 .to_string(),
             ],
             "",
             true,
         );
-        // the stale handle writes again — it must NOT land on the fresh node
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            stale.textContent = 'HIJACK';
-            "#,
-        );
+        // Count ELEMENT nodes only: a text child mirrors its parent's text,
+        // so a naive text match counts the div and its text node as two.
         let hijack = doc
             .tree()
             .iter()
-            .filter(|(_, n)| n.text_content() == "HIJACK")
+            .filter(|(_, n)| n.text_content() == "HIJACK" && !n.children.is_empty())
             .count();
         assert_eq!(
             hijack, 0,
-            "a stale handle's write must not reach any live node"
+            "a stale handle's write must not poison the fresh node"
         );
-        // Count ELEMENT nodes only: a text child mirrors its parent's text,
-        // so a naive text match counts the div and its text node as two.
         let fresh = doc
             .tree()
             .iter()
