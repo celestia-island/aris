@@ -1353,8 +1353,15 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
             if let Ok(style_val) = obj.get(boa_engine::js_string!("style"), ctx)
                 && let Some(style_obj) = style_val.as_object()
             {
-                let _ = style_obj
-                    .insert_property(boa_engine::js_string!("_arisCssTextCache"), pd(s_str(v)));
+                let _ = style_obj.insert_property(
+                    boa_engine::js_string!("_arisCssTextCache"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(boa_engine::js_string!(v.clone())))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
             }
             continue;
         }
@@ -12396,7 +12403,12 @@ fn make_element_handle(
                 {
                     let _ = style_obj.insert_property(
                         boa_engine::js_string!("_arisCssTextCache"),
-                        pd_clear(JsValue::from(boa_engine::js_string!(""))),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(boa_engine::js_string!("")))
+                            .writable(true)
+                            .enumerable(false)
+                            .configurable(true)
+                            .build(),
                     );
                 }
             } else {
@@ -17312,6 +17324,50 @@ mod style_shadowing_fresh_handle_tests {
     use blitz_dom::DocumentConfig;
     use blitz_html::HtmlDocument;
     use blitz_traits::NodeId;
+
+    #[test]
+    fn the_cache_property_is_hidden_from_object_keys_on_all_paths() {
+        // Round-4: two of the three cache-write sites still used enumerable
+        // descriptors (populate_props seed / removeAttribute clear), so
+        // Object.keys(el.style) leaked the internal name on fresh,
+        // parsed-style and post-removeAttribute handles.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="out" style="color:blue">x</div>
+            <div id="out2">y</div>
+            <div id="res"></div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var parsed = document.getElementById('out');
+            parsed.setAttribute('style', 'color:green');   // live-handle write
+            var fresh = document.getElementById('out');    // fresh handle
+            document.getElementById('out').removeAttribute('style');
+            // fresh keys after all three write paths
+            var k1 = Object.keys(parsed.style).join(',');
+            var k2 = Object.keys(fresh.style).join(',');
+            document.getElementById('res').setText('P[' + k1 + ']F[' + k2 + ']');
+            "#,
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            res, "P[cssText]F[cssText]",
+            "the cache must be hidden from Object.keys on every path"
+        );
+    }
 
     #[test]
     fn a_fresh_handle_keeps_the_style_object_from_a_parsed_style_attribute() {
