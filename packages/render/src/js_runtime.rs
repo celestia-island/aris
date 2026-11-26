@@ -169,6 +169,10 @@ struct NodePropSnapshot {
     attrs: Vec<(String, String)>,
     /// Child node IDs (in document order).
     child_ids: Vec<u64>,
+    /// The subset of `child_ids` that are ELEMENTS, in order. `children` /
+    /// `childElementCount` must count only these — counting the total would
+    /// report text nodes as elements (round-2 S2).
+    element_child_ids: Vec<u64>,
     /// Parent node ID (0 = no parent / root).
     parent_id: u64,
 }
@@ -992,6 +996,17 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
             })
             .unwrap_or_default();
         let child_ids: Vec<u64> = node.children.iter().map(|&c| c.as_u64()).collect();
+        let element_child_ids: Vec<u64> = node
+            .children
+            .iter()
+            .copied()
+            .filter(|&c| {
+                doc.get_node(c)
+                    .map(|cn| cn.element_data().is_some())
+                    .unwrap_or(false)
+            })
+            .map(|c| c.as_u64())
+            .collect();
         let parent_id = node.parent.map(|p| p.as_u64()).unwrap_or(0);
         r.insert(
             id.as_u64(),
@@ -1003,6 +1018,7 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
                 node_type,
                 attrs,
                 child_ids,
+                element_child_ids,
                 parent_id,
             },
         );
@@ -1447,18 +1463,37 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         );
         let _ = child_arr.insert_property(i as u32, pd(child_obj.into()));
     }
-    let _ = obj.insert_property(boa_engine::js_string!("childNodes"), pd(child_arr.into()));
-    // children (HTMLCollection of element children) — simplified to same as childNodes.
-    let _ = obj.insert_property(
-        boa_engine::js_string!("children"),
-        pd(JsValue::from(
-            boa_engine::object::JsObject::with_object_proto(ctx.intrinsics()),
-        )),
+    // `childNodes` is an array-like: without `length` the page reads
+    // `undefined` and the whole collection is unusable (L940 F3 — a fresh
+    // handle had `childNodes.length === undefined` while the parsed tree did
+    // have children).
+    let _ = child_arr.insert_property(
+        boa_engine::js_string!("length"),
+        pd(JsValue::from(s.child_ids.len() as u32)),
     );
+    let _ = obj.insert_property(
+        boa_engine::js_string!("childNodes"),
+        pd(child_arr.clone().into()),
+    );
+    // children / childElementCount count ELEMENT children only — using the
+    // total child count would report text nodes as elements (round-2 S2).
+    let elem_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+    for (i, &cid) in s.element_child_ids.iter().enumerate() {
+        let child_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ =
+            child_obj.insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(cid)));
+        let _ = elem_arr.insert_property(i as u32, pd(child_obj.into()));
+    }
+    let _ = elem_arr.insert_property(
+        boa_engine::js_string!("length"),
+        pd(JsValue::from(s.element_child_ids.len() as u32)),
+    );
+    let _ = obj.insert_property(boa_engine::js_string!("children"), pd(elem_arr.into()));
     let _ = obj.insert_property(
         boa_engine::js_string!("childElementCount"),
-        pd(JsValue::from(0u32)),
+        pd(JsValue::from(s.element_child_ids.len() as u32)),
     );
+    // (childElementCount is set above from the derived element count.)
     // firstElementChild / lastElementChild / nextElementSibling / previousElementSibling
     let _ = obj.insert_property(
         boa_engine::js_string!("firstElementChild"),
@@ -1637,13 +1672,28 @@ fn clone_node_js(src: Option<&JsObject>, deep: bool, ctx: &mut Context) -> JsRes
             if let Some(arr) = val.as_object() {
                 let new_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                 let arr_keys = arr.own_property_keys(ctx).unwrap_or_default();
-                for (i, ak) in arr_keys.iter().enumerate() {
-                    if let Ok(child_val) = arr.get(ak.clone(), ctx) {
-                        if let Some(child_obj) = child_val.as_object() {
-                            let child_clone = clone_node_js(Some(&child_obj), true, ctx)?;
-                            let _ = new_arr.insert_property(i as u32, pd(child_clone));
-                        }
+                // Copy each entry under the SAME numeric key it had, and carry
+                // `length` across explicitly: `length` is a number, so the
+                // object-only filter below silently dropped it, leaving a clone
+                // whose `childNodes.length` was `undefined` and whose
+                // `hasChildNodes()` therefore reported false for a node that
+                // demonstrably had children (round-4 S1).
+                for ak in arr_keys.iter() {
+                    let Ok(child_val) = arr.get(ak.clone(), ctx) else {
+                        continue;
+                    };
+                    if let Some(child_obj) = child_val.as_object() {
+                        let child_clone = clone_node_js(Some(&child_obj), true, ctx)?;
+                        let _ = new_arr.insert_property(ak.clone(), pd(child_clone));
                     }
+                }
+                if let Ok(len_val) = arr.get(boa_engine::js_string!("length"), ctx)
+                    && let Some(len) = len_val.as_number()
+                {
+                    let _ = new_arr.insert_property(
+                        boa_engine::js_string!("length"),
+                        pd(JsValue::from(len as u32)),
+                    );
                 }
                 let _ = clone.insert_property(key, pd(new_arr.into()));
                 continue;
@@ -17848,5 +17898,148 @@ mod set_text_replace_tests {
             res, "new|new",
             "held and freshly-fetched handles must agree after a replace"
         );
+    }
+}
+
+#[cfg(test)]
+mod child_nodes_accessor_tests {
+    //! L940 F3: `populate_props` built a `childNodes` array WITHOUT a `length`
+    //! property and an always-empty `children`, so a freshly-fetched handle
+    //! read `childNodes.length === undefined` even when the parsed element
+    //! really had children.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li>a</li><li>b</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing #res"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_fresh_handle_reports_child_nodes_length() {
+        let out = run(r#"
+            var el = document.getElementById('list');
+            document.getElementById('res').setText('n=' + el.childNodes.length);
+            "#);
+        assert_eq!(out, "n=2", "a parsed element with two <li> must report 2");
+    }
+
+    #[test]
+    fn children_reflects_the_same_count() {
+        let out = run(r#"
+            var el = document.getElementById('list');
+            document.getElementById('res').setText(
+                'children=' + el.children.length +
+                '|count=' + el.childElementCount
+            );
+            "#);
+        assert_eq!(
+            out, "children=2|count=2",
+            "children and childElementCount must follow the parsed tree"
+        );
+    }
+
+    #[test]
+    fn children_counts_only_element_children_not_text_nodes() {
+        // Round-2 S2: `children` / `childElementCount` must count ELEMENTS.
+        // `text<b>x</b>more` has 3 children but 1 element child.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="m">text<b>x</b>more</div><div id="all">only text</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.getElementById('m');
+            var all = document.getElementById('all');
+            document.getElementById('res').setText(
+                'cn=' + m.childNodes.length +
+                '|ch=' + m.children.length +
+                '|cec=' + m.childElementCount +
+                '|textonly_cec=' + all.childElementCount
+            );
+            "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "cn=3|ch=1|cec=1|textonly_cec=0",
+            "children/childElementCount must exclude text nodes"
+        );
+    }
+
+    #[test]
+    fn a_deep_clone_keeps_its_collection_lengths() {
+        // Round-4 S1: cloneNode(true) rebuilt the arrays copying only OBJECT
+        // values, so `length` (a number) was dropped — the clone read
+        // childNodes.length === undefined and hasChildNodes() answered FALSE
+        // for a node with children. That is exactly the symptom this PR fixes,
+        // re-created through the clone path.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="m">text<b>x</b>more</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.getElementById('m');
+            var c = m.cloneNode(true);
+            document.getElementById('res').setText(
+                'cn=' + c.childNodes.length +
+                '|ch=' + c.children.length +
+                '|cec=' + c.childElementCount +
+                '|has=' + c.hasChildNodes()
+            );
+            "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "cn=3|ch=1|cec=1|has=true",
+            "a deep clone must keep its collection lengths and answer hasChildNodes()"
+        );
+    }
+
+    #[test]
+    fn an_element_without_children_reports_zero() {
+        let out = run(r#"
+            var el = document.getElementById('res');
+            document.getElementById('res').setText('n=' + el.childNodes.length);
+            "#);
+        assert_eq!(out, "n=0", "an empty element must report 0, not undefined");
     }
 }
