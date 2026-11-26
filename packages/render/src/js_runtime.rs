@@ -14252,15 +14252,16 @@ fn make_element_handle(
                 // Has this handle's text been written from script yet? A parsed
                 // element has no `_children` text, so the snapshot is the only
                 // source — but once script writes (INCLUDING writing ""),
-                // `_children` is authoritative and must win even when empty.
-                // Keying the fallback off "text is empty" would resurrect the
-                // parsed value after a deliberate clear (round-2 S1:
-                // `el.textContent=''; el.textContent=n`).
                 // `_children` is authoritative once it holds text; when it is
-                // empty the node snapshot is the source. The setter keeps that
+                // empty the node snapshot is the source. Both setters keep that
                 // snapshot in step, so "written empty" and "never written" stay
-                // distinguishable and every handle — fresh or held — agrees with
-                // the DOM (rounds 2-3).
+                // distinguishable, and after a `textContent` / `setText` write
+                // every handle — fresh or held — reads back what the DOM holds
+                // (rounds 2-3). NOTE the precondition: paths that mutate the
+                // child list without a text write (appendChild / removeChild)
+                // are NOT reconciled with the op-applied tree; that known
+                // divergence is pinned by
+                // `append_after_a_text_write_is_a_known_divergence`.
                 let local = collect_text_content(&o, ctx, 0);
                 if !local.is_empty() {
                     return Ok(JsValue::from(boa_engine::js_string!(local)));
