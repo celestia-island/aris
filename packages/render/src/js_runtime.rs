@@ -120,8 +120,9 @@ struct Bridge {
     /// add→remove or remove→add collapses to the final script state instead
     /// of an arbitrary pass order (L940 leftover ②-cycle, R3/R4 findings).
     listener_actions: Vec<ListenerAction>,
-    /// Monotonic counter for per-registration global names, so several
-    /// handlers on one (node, type) get distinct GC roots.
+    /// Monotonic counter for AD-HOC registrations only (inline `onclick` and
+    /// other one-off evaluation). Page-script registrations are numbered by
+    /// `listener_slots` instead; this counter keeps the two ranges disjoint.
     next_listener_reg: u32,
     /// Per-(node, type) slot index for THIS run. A replay re-uses the same
     /// slot numbers, which is what makes a fixed-order page idempotent; a
@@ -229,14 +230,15 @@ impl JsRuntime {
         self.bind_and_run_with_url_mode(doc, script_src, url, false)
     }
 
-    /// Run the PAGE's `<script>` blocks. `replay` marks a re-run of scripts
-    /// this document already executed (resize / zoom / reload): the
-    /// per-registration counter is reset so identical registrations land on
-    /// the same global names and the harvest collapses them instead of
-    /// stacking a duplicate. Prefer this over [`Self::bind_and_run_with_url`]
-    /// for page scripts; that entry point keeps the counter monotonic for
-    /// ad-hoc script evaluation (an inline `onclick` must not collide with
-    /// the page's own registration slots).
+    /// Run the PAGE's `<script>` blocks. `replay` marks a run whose
+    /// registrations should be idempotent against the previous one (resize /
+    /// zoom / reload re-execute the same scripts): slots are numbered per
+    /// (node, type) and start from zero, so an unchanged page re-uses the
+    /// same global names, and the bind then reconciles any slot the run did
+    /// not re-declare. Prefer this over [`Self::bind_and_run_with_url`] for
+    /// page scripts; that entry point registers in a separate ad-hoc slot
+    /// range for one-off evaluation (an inline `onclick` must not consume or
+    /// trim the page's own slots).
     pub fn bind_page_scripts(
         &mut self,
         doc: &mut BaseDocument,
@@ -12684,8 +12686,9 @@ fn make_element_handle(
             // so the handler outlives the handle object it was registered on —
             // and record (node, type, name, handler) for harvest. Several
             // handlers may listen to one (node, type); each gets its own slot.
-            // Note: a page script re-run (resize / zoom / reload) still
-            // registers again — that pre-existing defect is tracked in L940.
+            // A page script re-run (resize / zoom / reload) re-registers into
+            // the SAME slot numbers, and the bind reconciles afterwards, so a
+            // replay collapses instead of stacking (see `reconcile_slots`).
             if let Some(nid) = read_handle_id(this) {
                 // Unique per registration so several handlers on one
                 // (node, type) each get a distinct GC root.
@@ -15886,9 +15889,10 @@ mod replay_idempotence_tests {
     //! The browser re-runs the page's `<script>` blocks on every resize /
     //! zoom / reload (`build_doc`). Each run used to register the same
     //! listener AGAIN under a fresh global name, so one click fired N times
-    //! after N re-runs. `bind_page_scripts(.., replay = true)` restarts the
-    //! per-registration counter so the names match and the harvest collapses
-    //! the duplicate (L940 registry idempotence).
+    //! after N re-runs. `bind_page_scripts(.., replay = true)` numbers slots
+    //! per (node, type) from zero and reconciles after the run, so an
+    //! unchanged page re-uses the same names and collapses (L940 registry
+    //! idempotence).
 
     use super::JsRuntime;
     use blitz_dom::DocumentConfig;
