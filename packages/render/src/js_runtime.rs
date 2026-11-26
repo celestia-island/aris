@@ -1020,25 +1020,24 @@ fn collect_query_index(
 
 fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
     let nid = blitz_traits::NodeId::from_u64(node_id);
-    // Mutator session: reuse the node's first text child when present
-    // (damage + devtools records), else append a text child with the full
-    // materialization the parse-time path gets.
+    // REPLACE semantics, per DOM: assigning `textContent` removes every child
+    // and inserts a single text node holding the new value. The previous
+    // implementation only rewrote the first text child (or appended one), so
+    // old element children survived and the DOM ended up holding old + new
+    // while the JS mirror held exactly the new value — the held/fresh handle
+    // split L940 recorded.
     let mut mutator = doc.mutate();
-    let first_text = mutator.doc.get_node(nid).and_then(|n| {
-        n.children.iter().copied().find(|&c| {
-            mutator
-                .doc
-                .get_node(c)
-                .map(|cn| cn.text_data().is_some())
-                .unwrap_or(false)
-        })
-    });
-    match first_text {
-        Some(text_id) => mutator.set_node_text(text_id, value),
-        None => {
-            let text_id = mutator.create_text_node(value);
-            mutator.append_children(nid, &[text_id]);
+    // Remove every existing child first. `remove_node` also detaches it from
+    // the tree's bookkeeping, so the replacement is a true replace.
+    if let Some(node) = mutator.doc.get_node(nid) {
+        let existing: Vec<blitz_traits::NodeId> = node.children.iter().copied().collect();
+        for child in existing {
+            mutator.remove_and_drop_node(child);
         }
+    }
+    if !value.is_empty() {
+        let text_id = mutator.create_text_node(value);
+        mutator.append_children(nid, &[text_id]);
     }
 }
 
@@ -17639,6 +17638,133 @@ mod text_setter_mirror_tests {
         assert_eq!(
             dom, "three",
             "the DOM must hold the last write after interleaved setters"
+        );
+    }
+}
+
+#[cfg(test)]
+mod set_text_replace_tests {
+    //! L940 (#83 R2 S2): assigning `textContent` must REPLACE children, per
+    //! DOM. The old implementation only rewrote the first text child, so old
+    //! element children survived — the DOM held old+new while the JS mirror
+    //! held exactly the new value, and a held handle vs a freshly-fetched one
+    //! answered differently.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn dom_text_and_tags(doc: &HtmlDocument, id: &str) -> (String, Vec<String>) {
+        let nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| i)
+            .expect("missing node");
+        let node = doc.get_node(nid).expect("missing node data");
+        let text = node.text_content();
+        let tags: Vec<String> = node
+            .children
+            .iter()
+            .filter_map(|&c| doc.get_node(c))
+            .map(|cn| {
+                if cn.text_data().is_some() {
+                    "#text".to_string()
+                } else {
+                    cn.element_data()
+                        .map(|e| e.name.local.to_string())
+                        .unwrap_or_else(|| "?".to_string())
+                }
+            })
+            .collect();
+        (text, tags)
+    }
+
+    #[test]
+    fn set_text_replaces_element_children() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out"><p>a</p><p>b</p></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText('new');"#,
+        );
+        let (text, tags) = dom_text_and_tags(&doc, "out");
+        assert_eq!(text, "new", "the DOM must hold only the new text");
+        assert_eq!(
+            tags,
+            vec!["#text".to_string()],
+            "the old <p> children must be gone (replace, not append)"
+        );
+    }
+
+    #[test]
+    fn text_content_assignment_replaces_element_children() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out"><p>a</p><p>b</p></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').textContent = 'new';"#,
+        );
+        let (text, tags) = dom_text_and_tags(&doc, "out");
+        assert_eq!(text, "new", "textContent must replace the children");
+        assert_eq!(tags, vec!["#text".to_string()], "old children removed");
+    }
+
+    #[test]
+    fn set_text_empty_clears_parsed_element_children() {
+        // The shape L940 recorded: an empty write must clear the element's
+        // parsed children, not leave them behind while the mirror says empty.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">Hello <b>world</b></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, r#"document.getElementById('out').setText('');"#);
+        let (text, tags) = dom_text_and_tags(&doc, "out");
+        assert_eq!(text, "", "the DOM must be empty");
+        assert!(
+            tags.is_empty(),
+            "every child (including the parsed <b>) must be removed, got {tags:?}"
+        );
+    }
+
+    #[test]
+    fn a_held_and_a_fresh_handle_agree_after_a_replace() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out"><p>a</p></div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.setText('new');
+            var held = el.textContent;
+            var fresh = document.getElementById('out').textContent;
+            document.getElementById('res').setText(held + '|' + fresh);
+            "#,
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            res, "new|new",
+            "held and freshly-fetched handles must agree after a replace"
         );
     }
 }
