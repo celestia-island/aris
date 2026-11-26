@@ -424,11 +424,19 @@ impl JsRuntime {
                 handlers.push(cb);
             }
         }
+        // DOM: `this` in a document listener is the document object. Passing
+        // null would be coerced to the global object by sloppy-mode functions
+        // (a page-observable wrong-object bug), so pass the document itself.
+        let this_val = self
+            .ctx
+            .global_object()
+            .get(boa_engine::js_string!("document"), &mut self.ctx)
+            .unwrap_or(JsValue::null());
         for cb in handlers {
             if let Some(f) = cb.as_object()
                 && f.is_callable()
             {
-                let _ = f.call(&JsValue::null(), &[], &mut self.ctx);
+                let _ = f.call(&this_val, &[], &mut self.ctx);
             }
         }
     }
@@ -10608,8 +10616,72 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             },
             doc_for_disp,
         );
-        let rm_ev =
-            NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+        // removeEventListener on the document: drop the matching entry from
+        // the document's _js_listeners array. Previously a no-op stub, so a
+        // document listener could never be removed (L940 follow-up).
+        let rm_ev = NativeFunction::from_copy_closure_with_captures(
+            move |_this, args, doc_for_rm, ctx| {
+                let event_type = arg_string(args, 0);
+                let handler_obj = args.get(1).and_then(|v| v.as_object());
+                let lmap = doc_for_rm
+                    .get(boa_engine::js_string!("_js_listeners"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let Some(lm) = lmap else {
+                    return Ok(JsValue::undefined());
+                };
+                let Ok(type_val) = lm.get(boa_engine::js_string!(event_type.clone()), ctx) else {
+                    return Ok(JsValue::undefined());
+                };
+                let Some(arr) = type_val.as_object() else {
+                    return Ok(JsValue::undefined());
+                };
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                let mut kept: Vec<JsValue> = Vec::new();
+                for i in 0..len {
+                    let Ok(entry) = arr.get(i, ctx) else { continue };
+                    let matches = entry
+                        .as_object()
+                        .and_then(|o| o.get(boa_engine::js_string!("callback"), ctx).ok())
+                        .and_then(|cb| cb.as_object())
+                        .zip(handler_obj.as_ref())
+                        .map(|(cb, wanted)| boa_engine::object::JsObject::equals(&cb, wanted))
+                        .unwrap_or(false);
+                    if !matches {
+                        kept.push(entry);
+                    }
+                }
+                let pd_rm = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                for (i, v) in kept.iter().enumerate() {
+                    let _ = arr.insert_property(i as u32, pd_rm(v.clone()));
+                }
+                // Drop any tail indices left over from the longer array —
+                // insert_property bypasses array [[Set]], so shrinking
+                // `length` alone leaves the old own properties behind (they
+                // are page-visible through Object.keys).
+                for stale in kept.len() as u32..len {
+                    let _ = arr
+                        .delete_property_or_throw(boa_engine::js_string!(stale.to_string()), ctx);
+                }
+                let _ = arr.insert_property(
+                    boa_engine::js_string!("length"),
+                    pd_rm(JsValue::from(kept.len() as u32)),
+                );
+                Ok(JsValue::undefined())
+            },
+            doc_ref.clone(),
+        );
         let _ = document.insert_property(
             boa_engine::js_string!("addEventListener"),
             pd(JsValue::from(
@@ -15020,5 +15092,121 @@ mod handler_this_props_tests {
             .map(|n| n.text_content())
             .unwrap_or_default();
         assert_eq!(out, "btn", "inline onclick's this.id must be populated");
+    }
+}
+
+#[cfg(test)]
+mod document_listener_lifecycle_tests {
+    //! L940 follow-up: the document listener surface must behave like the DOM
+    //! contract — `removeEventListener` actually unregisters, and `this`
+    //! inside a document listener is the document object (passing null was
+    //! coerced to the global object by sloppy-mode functions).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_and_read(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn document_remove_event_listener_unregisters() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            function onD() { log += 'D'; }
+            document.addEventListener('click', onD);
+            document.removeEventListener('click', onD);
+        "#,
+        );
+        assert_eq!(out, "", "a removed document listener must not fire");
+    }
+
+    #[test]
+    fn document_remove_leaves_other_document_listeners() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            function a() { log += 'A'; }
+            function b() { log += 'B'; }
+            document.addEventListener('click', a);
+            document.addEventListener('click', b);
+            document.removeEventListener('click', a);
+        "#,
+        );
+        assert_eq!(out, "B", "only the removed document listener stops firing");
+    }
+
+    #[test]
+    fn removal_leaves_no_stale_tail_entries() {
+        // insert_property bypasses array [[Set]], so shrinking `length` alone
+        // would leave the old indices behind as page-visible own properties.
+        // The surviving listener fires on the click, so the measured value
+        // lives in its own variable (`log` is appended to by the listener).
+        let out = click_and_read(
+            r#"
+            var log = '';
+            var report = 'unset';
+            function a() {}
+            function b() {}
+            document.addEventListener('click', a);
+            document.addEventListener('click', b);
+            document.removeEventListener('click', b);
+            var arr = document._js_listeners.click;
+            // Count own INDICES only: `length` is an own property too.
+            var idx = 0;
+            for (var k in arr) { if (k !== 'length') idx++; }
+            report = 'len=' + arr.length + '|idx=' + idx;
+            log = report;
+        "#,
+        );
+        assert_eq!(
+            out, "len=1|idx=1",
+            "the removed entry must leave no stale own property behind"
+        );
+    }
+
+    #[test]
+    fn document_listener_this_is_the_document() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            document.addEventListener('click', function () {
+                // The document object is the only one with getElementById.
+                log = (typeof this.getElementById === 'function') ? 'doc' : 'not-doc';
+            });
+        "#,
+        );
+        assert_eq!(
+            out, "doc",
+            "this inside a document listener must be the document"
+        );
     }
 }
