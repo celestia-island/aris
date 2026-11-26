@@ -1891,24 +1891,201 @@ fn install_event_api(ctx: &mut Context) {
                 .build()
         };
         let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-        // addEventListener
-        let add_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        // The three methods used to be stubs: add/remove discarded their
+        // arguments and dispatchEvent always returned true, so a listener on
+        // a self-made EventTarget never ran (L940 follow-up). They now keep
+        // per-target `_js_listeners` (same shape as the document/element
+        // surfaces) and dispatch synchronously.
+        let add_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let event_type = arg_to_string(args, 0, ctx);
+            let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            if let Some(o) = this.as_object() {
+                let lmap = o
+                    .get(boa_engine::js_string!("_js_listeners"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let lm = match lmap {
+                    Some(m) => m,
+                    None => {
+                        let m = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = o.insert_property(
+                            boa_engine::js_string!("_js_listeners"),
+                            pd(m.clone().into()),
+                        );
+                        m
+                    }
+                };
+                let existing = lm
+                    .get(boa_engine::js_string!(event_type.clone()), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                let arr = match existing {
+                    Some(a) => a,
+                    None => {
+                        let a = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                        let _ = a.insert_property(
+                            boa_engine::js_string!("length"),
+                            pd(JsValue::from(0u32)),
+                        );
+                        let _ = lm.insert_property(
+                            boa_engine::js_string!(event_type.clone()),
+                            pd(a.clone().into()),
+                        );
+                        a
+                    }
+                };
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                let _ = arr.insert_property(len, pd(handler));
+                let _ = arr
+                    .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("addEventListener"),
             pd(JsValue::from(
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), add_fn).build(),
             )),
         );
-        // removeEventListener
-        let rm_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        // removeEventListener — drop the matching entry by handler identity.
+        let rm_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let event_type = arg_to_string(args, 0, ctx);
+            let handler_obj = args.get(1).and_then(|v| v.as_object());
+            if let Some(o) = this.as_object()
+                && let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx)
+                && let Some(lm) = lmap.as_object()
+                && let Ok(type_val) = lm.get(boa_engine::js_string!(event_type), ctx)
+                && let Some(arr) = type_val.as_object()
+            {
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                let mut kept: Vec<JsValue> = Vec::new();
+                for i in 0..len {
+                    if let Ok(entry) = arr.get(i, ctx) {
+                        let same = match (entry.as_object(), handler_obj.as_ref()) {
+                            (Some(e), Some(w)) => boa_engine::object::JsObject::equals(&e, w),
+                            _ => false,
+                        };
+                        if !same {
+                            kept.push(entry);
+                        }
+                    }
+                }
+                for (i, v) in kept.iter().enumerate() {
+                    let _ = arr.insert_property(i as u32, pd(v.clone()));
+                }
+                for stale in kept.len() as u32..len {
+                    let _ = arr
+                        .delete_property_or_throw(boa_engine::js_string!(stale.to_string()), ctx);
+                }
+                let _ = arr.insert_property(
+                    boa_engine::js_string!("length"),
+                    pd(JsValue::from(kept.len() as u32)),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("removeEventListener"),
             pd(JsValue::from(
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), rm_fn).build(),
             )),
         );
-        // dispatchEvent
-        let disp_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::from(true)));
+        // dispatchEvent — run this target's listeners for the event's type.
+        let disp_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+            let event = args.first().cloned().unwrap_or(JsValue::null());
+            let event_type = event
+                .as_object()
+                .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
+                .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
+                .unwrap_or_default();
+            // DOM sets target/currentTarget at dispatch start, BEFORE any
+            // listener lookup — an event dispatched on a listener-less target
+            // (or one with only other types) still has a target (round-3 S3).
+            if let Some(ev_obj) = event.as_object()
+                && let Some(o) = this.as_object()
+            {
+                let pd_ev = |val: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(val)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                let t = JsValue::from(o.clone());
+                let _ = ev_obj.insert_property(boa_engine::js_string!("target"), pd_ev(t.clone()));
+                let _ = ev_obj.insert_property(boa_engine::js_string!("currentTarget"), pd_ev(t));
+            }
+            if let Some(o) = this.as_object()
+                && let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx)
+                && let Some(lm) = lmap.as_object()
+                && let Ok(type_val) = lm.get(boa_engine::js_string!(event_type), ctx)
+                && let Some(arr) = type_val.as_object()
+            {
+                let len = arr
+                    .get(boa_engine::js_string!("length"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_number())
+                    .unwrap_or(0.0) as u32;
+                // Snapshot first: like the document surface, removal during
+                // dispatch does not cancel an already-snapshotted handler.
+                let mut handlers = Vec::new();
+                for i in 0..len {
+                    if let Ok(v) = arr.get(i, ctx) {
+                        handlers.push(v);
+                    }
+                }
+                let this_val = JsValue::from(o.clone());
+                for cb in handlers {
+                    let Some(f) = cb.as_object() else { continue };
+                    if f.is_callable() {
+                        let _ = f.call(&this_val, std::slice::from_ref(&event), ctx);
+                    } else if let Ok(h) = f.get(boa_engine::js_string!("handleEvent"), ctx)
+                        && let Some(hf) = h.as_object()
+                        && hf.is_callable()
+                    {
+                        let _ = hf.call(&JsValue::from(f), std::slice::from_ref(&event), ctx);
+                    }
+                }
+            }
+            // WHATWG: currentTarget is null once dispatch completes.
+            if let Some(ev_obj) = event.as_object() {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!("currentTarget"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::null())
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::from(true))
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("dispatchEvent"),
             pd(JsValue::from(
@@ -3277,10 +3454,34 @@ fn install_dom_globals(ctx: &mut Context) {
                 }
                 Ok(JsValue::from(new_array(ctx)))
             });
+            let lc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let len = ca
+                                .get(boa_engine::js_string!("length"), ctx)
+                                .ok()
+                                .and_then(|v| v.as_number())
+                                .unwrap_or(0.0) as u32;
+                            if len == 0 {
+                                return Ok(JsValue::null());
+                            }
+                            let v = ca.get(len - 1, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() {
+                                return Ok(JsValue::null());
+                            }
+                            return Ok(v);
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
             let fc_fn2 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
             let cn_fn2 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+            let lc_fn2 =
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lc_get).build();
             let _ = df.insert_property(
                 boa_engine::js_string!("firstChild"),
                 boa_engine::property::PropertyDescriptor::builder()
@@ -3292,7 +3493,7 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = df.insert_property(
                 boa_engine::js_string!("lastChild"),
                 boa_engine::property::PropertyDescriptor::builder()
-                    .get(fc_fn2)
+                    .get(lc_fn2)
                     .enumerable(true)
                     .configurable(true)
                     .build(),
@@ -4118,8 +4319,32 @@ fn install_dom_globals(ctx: &mut Context) {
             });
             let fc_fn3 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), fc_get).build();
+            let lc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
+                if let Some(o) = this.as_object() {
+                    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                        if let Some(ca) = cv.as_object() {
+                            let len = ca
+                                .get(boa_engine::js_string!("length"), ctx)
+                                .ok()
+                                .and_then(|v| v.as_number())
+                                .unwrap_or(0.0) as u32;
+                            if len == 0 {
+                                return Ok(JsValue::null());
+                            }
+                            let v = ca.get(len - 1, ctx).unwrap_or(JsValue::null());
+                            if v.is_undefined() {
+                                return Ok(JsValue::null());
+                            }
+                            return Ok(v);
+                        }
+                    }
+                }
+                Ok(JsValue::null())
+            });
             let cn_fn3 =
                 boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), cn_get).build();
+            let lc_fn3 =
+                boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), lc_get).build();
             let _ = obj.insert_property(
                 boa_engine::js_string!("firstChild"),
                 boa_engine::property::PropertyDescriptor::builder()
@@ -4131,7 +4356,7 @@ fn install_dom_globals(ctx: &mut Context) {
             let _ = obj.insert_property(
                 boa_engine::js_string!("lastChild"),
                 boa_engine::property::PropertyDescriptor::builder()
-                    .get(fc_fn3)
+                    .get(lc_fn3)
                     .enumerable(true)
                     .configurable(true)
                     .build(),
@@ -15350,5 +15575,157 @@ mod handle_event_tests {
             out, "start|registered",
             "a non-callable handleEvent must not fire or surface an error"
         );
+    }
+}
+
+#[cfg(test)]
+mod fragment_and_eventtarget_tests {
+    //! Two L940 screening findings:
+    //!  - `document.createDocumentFragment().lastChild` was bound to the
+    //!    firstChild getter, so it returned the FIRST child.
+    //!  - `new EventTarget()`'s three methods were stubs: listeners were
+    //!    discarded and dispatchEvent always returned true.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn fragment_last_child_is_the_last_one() {
+        let out = run(r#"
+            var frag = document.createDocumentFragment();
+            frag.appendChild(document.createTextNode('a'));
+            frag.appendChild(document.createTextNode('b'));
+            document.getElementById('out').setText(
+                'first=' + frag.firstChild.data + ' last=' + frag.lastChild.data
+            );
+        "#);
+        assert_eq!(
+            out, "first=a last=b",
+            "lastChild must be the last child, not the first"
+        );
+    }
+
+    #[test]
+    fn event_target_listener_runs() {
+        let out = run(r#"
+            var t = new EventTarget();
+            t.addEventListener('ping', function () {
+                document.getElementById('out').setText('fired');
+            });
+            t.dispatchEvent(new Event('ping'));
+        "#);
+        assert_eq!(
+            out, "fired",
+            "a listener on a self-made EventTarget must run"
+        );
+    }
+
+    #[test]
+    fn event_target_removal_stops_the_listener() {
+        let out = run(r#"
+            var t = new EventTarget();
+            function h() { document.getElementById('out').setText('fired'); }
+            t.addEventListener('ping', h);
+            t.removeEventListener('ping', h);
+            t.dispatchEvent(new Event('ping'));
+        "#);
+        assert_eq!(out, "0", "a removed EventTarget listener must not run");
+    }
+
+    #[test]
+    fn event_target_sets_event_target_and_current_target() {
+        let out = run(r#"
+            var t = new EventTarget();
+            var seen = 'unset';
+            t.addEventListener('ping', function (e) {
+                seen = (e.target === t ? 'T' : 't') + (e.currentTarget === t ? 'C' : 'c');
+            });
+            t.dispatchEvent(new Event('ping'));
+            document.getElementById('out').setText(seen);
+        "#);
+        assert_eq!(
+            out, "TC",
+            "dispatchEvent must set event.target and event.currentTarget"
+        );
+    }
+
+    #[test]
+    fn event_target_is_set_even_without_listeners() {
+        // Round-3 S3: the assignment used to sit inside the listener-array
+        // guard, so a listener-less target left event.target null.
+        let out = run(r#"
+            var t = new EventTarget();
+            var e = new Event('ping');
+            t.dispatchEvent(e);
+            document.getElementById('out').setText(e.target === t ? 'T' : 'null');
+        "#);
+        assert_eq!(out, "T", "dispatchEvent must set target unconditionally");
+    }
+
+    #[test]
+    fn current_target_is_null_after_dispatch() {
+        let out = run(r#"
+            var t = new EventTarget();
+            var during = 'unset';
+            var e = new Event('ping');
+            t.addEventListener('ping', function (ev) { during = ev.currentTarget === t ? 'C' : 'c'; });
+            t.dispatchEvent(e);
+            document.getElementById('out').setText(during + '|' + (e.currentTarget === null ? 'null' : 'stale'));
+        "#);
+        assert_eq!(
+            out, "C|null",
+            "currentTarget must be live during dispatch and null afterwards"
+        );
+    }
+
+    #[test]
+    fn html_document_fragment_last_child_is_the_last_one() {
+        // Round-3: the third fragment builder is REACHABLE via
+        // document.implementation.createHTMLDocument(...).
+        let out = run(r#"
+            var d = document.implementation.createHTMLDocument('t');
+            var frag = d.createDocumentFragment();
+            frag.appendChild(d.createTextNode('a'));
+            frag.appendChild(d.createTextNode('b'));
+            document.getElementById('out').setText(
+                'first=' + frag.firstChild.data + ' last=' + frag.lastChild.data
+            );
+        "#);
+        assert_eq!(
+            out, "first=a last=b",
+            "the createHTMLDocument fragment builder must report the last child"
+        );
+    }
+
+    #[test]
+    fn event_target_dispatches_only_the_matching_type() {
+        let out = run(r#"
+            var t = new EventTarget();
+            t.addEventListener('other', function () {
+                document.getElementById('out').setText('WRONG');
+            });
+            t.dispatchEvent(new Event('ping'));
+        "#);
+        assert_eq!(out, "0", "a listener for another type must not run");
     }
 }
