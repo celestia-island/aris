@@ -11737,7 +11737,7 @@ fn make_element_handle(
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(value)))
                         .writable(true)
-                        .enumerable(true)
+                        .enumerable(false)
                         .configurable(true)
                         .build(),
                 );
