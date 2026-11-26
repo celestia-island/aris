@@ -1342,8 +1342,22 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         pd(JsValue::from(s.text_content.chars().count() as u32)),
     );
 
-    // Store all attributes as JS properties.
+    // Store all attributes as JS properties. `style` is special: the handle
+    // carries a style OBJECT whose `cssText` getter reads the
+    // `_arisCssTextCache` — inserting a string data property here would
+    // clobber that object on EVERY freshly-fetched handle (getElementById),
+    // the exact symptom this PR fixes for setAttribute. Seeding the cache
+    // also gives parsed style attributes a cssText readback.
     for (k, v) in &s.attrs {
+        if k == "style" {
+            if let Ok(style_val) = obj.get(boa_engine::js_string!("style"), ctx)
+                && let Some(style_obj) = style_val.as_object()
+            {
+                let _ = style_obj
+                    .insert_property(boa_engine::js_string!("_arisCssTextCache"), pd(s_str(v)));
+            }
+            continue;
+        }
         let _ = obj.insert_property(boa_engine::js_string!(k.clone()), pd(s_str(v)));
     }
 
@@ -11689,11 +11703,21 @@ fn make_element_handle(
             // value rides the pending tuple instead (branch below), so it
             // survives `appendChild`.
             if nid != 0 {
-                b.borrow_mut().ops.push(Op::SetAttr {
+                let mut bb = b.borrow_mut();
+                bb.ops.push(Op::SetAttr {
                     node_id: nid,
                     name: "style".to_string(),
                     value: value.clone(),
                 });
+                // Keep the snapshot attrs in step so a FRESHLY-FETCHED handle
+                // (getElementById) seeds its style object's cssText from the
+                // snapshot and sees this write (round-2 S2).
+                if let Some(snap) = bb.node_props.get_mut(&nid) {
+                    match snap.attrs.iter().position(|(n, _)| n == "style") {
+                        Some(i) => snap.attrs[i] = ("style".to_string(), value.clone()),
+                        None => snap.attrs.push(("style".to_string(), value.clone())),
+                    }
+                }
             } else if let Some(pid) = style_pending {
                 // PENDING handle (`nid == 0`): carrying the write in the
                 // pending tuple lets a detached node's style survive its
@@ -12361,6 +12385,20 @@ fn make_element_handle(
                     pd_clear(JsValue::from(boa_engine::js_string!(""))),
                 );
                 let _ = o.insert_property(boa_engine::js_string!("id"), pd_clear(JsValue::null()));
+            } else if name == "style" {
+                // Clear the style OBJECT's cache — writing `style: null` on
+                // the handle would clobber the style object and make the
+                // next `el.style.cssText` read THROW (round-2 S2). The style
+                // object itself stays; DOM-wise removing the style
+                // attribute leaves an empty CSSStyleDeclaration.
+                if let Ok(style_val) = o.get(boa_engine::js_string!("style"), ctx)
+                    && let Some(style_obj) = style_val.as_object()
+                {
+                    let _ = style_obj.insert_property(
+                        boa_engine::js_string!("_arisCssTextCache"),
+                        pd_clear(JsValue::from(boa_engine::js_string!(""))),
+                    );
+                }
             } else {
                 // Clear the direct property.
                 let _ = o.insert_property(
@@ -17260,5 +17298,143 @@ mod style_shadowing_tests {
         );
         assert_eq!(dom_style, "", "no style attribute should exist");
         assert_eq!(res, "v2", "non-style attributes keep their path");
+    }
+}
+
+#[cfg(test)]
+mod style_shadowing_fresh_handle_tests {
+    //! Round-2 S2: the two paths that defeated the fix on FRESHLY-FETCHED
+    //! handles (the `getElementById` case — the most common). Both are
+    //! one-line special-cases of the same shape the PR already implemented
+    //! for `setAttribute`.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn a_fresh_handle_keeps_the_style_object_from_a_parsed_style_attribute() {
+        // parse-time style="color:blue": a fresh `getElementById` handle must
+        // carry the style OBJECT (not a string) with the parsed value seeded
+        // as its cssText.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out" style="color:blue">x</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            var kind = typeof el.style;
+            var css = String(el.style.cssText);
+            document.getElementById('res').setText(kind + '|' + css);
+            "#,
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            res, "object|color:blue",
+            "a fresh handle must carry the style object with the parsed cssText"
+        );
+    }
+
+    #[test]
+    fn remove_attribute_style_keeps_the_style_object_readable() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out" style="color:blue">x</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.removeAttribute('style');
+            var kind = typeof el.style;
+            var css = 'THROWS';
+            try { css = String(el.style.cssText); } catch (e) { /* stays THROWS */ }
+            var written = 'THROWS';
+            try { el.style.cssText = 'color:red'; written = String(el.style.cssText); } catch (e) { /* stays */ }
+            document.getElementById('res').setText(kind + '|' + css + '|' + written);
+            "#,
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            res, "object||color:red",
+            "removeAttribute('style') must keep the style object usable"
+        );
+        let dom_style = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .and_then(|(id, _)| doc.get_node(id))
+            .and_then(|n| {
+                n.attr(blitz_dom::local_name!("style"))
+                    .map(|v| v.to_string())
+            })
+            .unwrap_or_else(|| "__present__".to_string());
+        // PINNED production behaviour: `removeAttribute` is a JS-side mirror
+        // (it pushes no op), so the DOM keeps the old style attribute. The
+        // JS-side object/readback contract is what this test pins; DOM removal
+        // belongs to the pending-setattr gap.
+        assert_eq!(
+            dom_style, "color:blue",
+            "pinned: removeAttribute is JS-mirror only — DOM keeps the value"
+        );
+    }
+
+    #[test]
+    fn a_fresh_handle_sees_css_text_written_via_set_attribute() {
+        // The exact gap: setAttribute('style') on ONE handle, then a FRESH
+        // getElementById handle must see the style (both an object and the
+        // attribute).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">x</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('out').setAttribute('style', 'color:blue');
+            var el = document.getElementById('out');   // FRESH handle
+            var kind = typeof el.style;
+            var css = String(el.style.cssText);
+            document.getElementById('res').setText(kind + '|' + css);
+            "#,
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            res, "object|color:blue",
+            "a fresh handle must reflect the setAttribute style"
+        );
     }
 }
