@@ -11933,22 +11933,29 @@ fn make_element_handle(
         |this, args, b, _ctx| {
             let text = strip_tags(&arg_string(args, 0));
             if let Some(nid) = read_handle_id(this) {
-                b.borrow_mut().ops.push(Op::SetText {
+                let mut bb = b.borrow_mut();
+                // Keep the node snapshot in step so a freshly-fetched handle
+                // reads the new text (same reason as `setText`, round-4 S2).
+                if let Some(snap) = bb.node_props.get_mut(&nid) {
+                    snap.text_content = text.clone();
+                }
+                bb.ops.push(Op::SetText {
                     node_id: nid,
                     value: text.clone(),
                 });
+            } else if let Some(pid) = read_pending(this) {
+                // PENDING handle (a detached `createElement` node): the write
+                // rides the pending tuple so it lands when the node is
+                // attached — same source-drop fix as the textContent / setText
+                // branches.
+                if let Some(entry) = b.borrow_mut().pending.get_mut(&pid) {
+                    entry.1 = text.clone();
+                }
             }
-            let _ = this.as_object().map(|o| {
-                o.insert_property(
-                    boa_engine::js_string!("textContent"),
-                    boa_engine::property::PropertyDescriptor::builder()
-                        .value(JsValue::from(boa_engine::js_string!(text)))
-                        .writable(true)
-                        .enumerable(true)
-                        .configurable(true)
-                        .build(),
-                )
-            });
+            // Do NOT write a `textContent` data property here: it would
+            // replace the accessor installed by `make_element_handle` and
+            // silently break later reads through this handle (the same
+            // clobber `setText` had, fixed in its round-4 S2).
             Ok(JsValue::undefined())
         },
         Gc::clone(&bridge),
@@ -17000,5 +17007,113 @@ mod pending_write_shape_tests {
             .filter(|(_, n)| n.text_content() == "FRESH" && !n.children.is_empty())
             .count();
         assert_eq!(fresh, 1, "the fresh node must be untouched");
+    }
+}
+
+#[cfg(test)]
+mod set_html_tests {
+    //! Two L940 defects on the `setHTML` (innerHTML) surface, both of the
+    //! classes already fixed for `setText` / `textContent`:
+    //! - a detached `createElement` write was dropped at the source (no tree
+    //!   id, no pending tuple write) — the text never landed on append;
+    //! - the setter inserted a `textContent` DATA property, replacing the
+    //!   accessor and silently breaking later reads through the same handle.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn read_out(doc: &HtmlDocument) -> String {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn set_html_updates_the_dom_and_the_handle_readback() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">empty</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.setHTML('<b>hi</b>');
+            document.getElementById('out').setText(el.textContent);
+            "#,
+        );
+        // DOM: the stripped text landed.
+        assert_eq!(
+            read_out(&doc),
+            "hi",
+            "setHTML must update the rendered document (tags stripped)"
+        );
+    }
+
+    #[test]
+    fn set_html_does_not_clobber_the_text_content_accessor() {
+        // Round-2 class: the data-property insert replaced the accessor, so a
+        // later `el.textContent` read through the SAME handle returned the
+        // stale data property forever.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">empty</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.setHTML('x');
+            el.textContent = 'fresh';
+            document.getElementById('res').setText(el.textContent);
+            "#,
+        );
+        assert_eq!(
+            read_out(&doc),
+            "fresh",
+            "a textContent write after setHTML must still reach the DOM"
+        );
+    }
+
+    #[test]
+    fn detached_set_html_lands_on_append() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="list"></div><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var d = document.createElement('div');
+            d.setHTML('carried');
+            document.getElementById('list').appendChild(d);
+            "#,
+        );
+        let text = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #list"),
+            ))
+            .and_then(|n| n.children.last().and_then(|&cid| doc.get_node(cid)))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            text, "carried",
+            "a detached setHTML write must ride the pending tuple"
+        );
     }
 }
