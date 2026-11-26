@@ -120,9 +120,21 @@ struct Bridge {
     /// add→remove or remove→add collapses to the final script state instead
     /// of an arbitrary pass order (L940 leftover ②-cycle, R3/R4 findings).
     listener_actions: Vec<ListenerAction>,
-    /// Monotonic counter for per-registration global names, so several
-    /// handlers on one (node, type) get distinct GC roots.
+    /// Monotonic counter for AD-HOC registrations only (inline `onclick` and
+    /// other one-off evaluation). Page-script registrations are numbered by
+    /// `listener_slots` instead; this counter keeps the two ranges disjoint.
     next_listener_reg: u32,
+    /// Per-(node, type) slot index for THIS run. A replay re-uses the same
+    /// slot numbers, which is what makes a fixed-order page idempotent; a
+    /// changed pattern is reconciled after the run (see `reconcile_slots`).
+    listener_slots: std::collections::HashMap<(u64, String), u32>,
+    /// How many slots each (node, type) held at the END of the previous run,
+    /// so a re-run that registers FEWER listeners can drop the stale tail
+    /// instead of leaving old handlers firing.
+    listener_slots_prev: std::collections::HashMap<(u64, String), u32>,
+    /// True only while a PAGE script run is executing: ad-hoc evaluation
+    /// (inline onclick) must not consume the page's registration slots.
+    slots_active: bool,
     /// Authoritative registration table (node, type, name, handler) so
     /// removeEventListener can match by handler identity and drop exactly
     /// one registration.
@@ -215,6 +227,36 @@ impl JsRuntime {
     /// As [`bind_and_run`] but also installs/reinstalls the `window` global
     /// with `location.href` set to the current document URL.
     pub fn bind_and_run_with_url(&mut self, doc: &mut BaseDocument, script_src: &str, url: &str) {
+        self.bind_and_run_with_url_mode(doc, script_src, url, false)
+    }
+
+    /// Run the PAGE's `<script>` blocks. `replay` marks a run whose
+    /// registrations should be idempotent against the previous one (resize /
+    /// zoom / reload re-execute the same scripts): slots are numbered per
+    /// (node, type) and start from zero, so an unchanged page re-uses the
+    /// same global names, and the bind then reconciles any slot the run did
+    /// not re-declare. Prefer this over [`Self::bind_and_run_with_url`] for
+    /// page scripts; that entry point registers in a separate ad-hoc slot
+    /// range for one-off evaluation (an inline `onclick` must not consume or
+    /// trim the page's own slots).
+    pub fn bind_page_scripts(
+        &mut self,
+        doc: &mut BaseDocument,
+        scripts: &[String],
+        url: &str,
+        replay: bool,
+    ) {
+        let combined = scripts.join("\n;\n");
+        self.bind_and_run_with_url_mode(doc, &combined, url, replay);
+    }
+
+    fn bind_and_run_with_url_mode(
+        &mut self,
+        doc: &mut BaseDocument,
+        script_src: &str,
+        url: &str,
+        replay: bool,
+    ) {
         // Drain pending ops from any prior run first (none expected here).
         self.apply_ops(doc);
         // Refresh the id snapshot + query index by rebuilding the bridge.
@@ -234,6 +276,12 @@ impl JsRuntime {
             // re-registration must not be killed by a stale record
             // (R3 S1: cross-ticket remove→re-add left the listener dead).
             b.listener_actions.clear();
+            b.slots_active = replay;
+            if replay {
+                // A page run starts a fresh slot generation; the previous
+                // run's shape lives in listener_slots_prev for reconciliation.
+                b.listener_slots.clear();
+            }
         }
         // Deliberately NOT clearing self.listeners here: this path re-runs
         // for every onclick-attribute click (fire_click → bind_and_run), and
@@ -262,6 +310,13 @@ impl JsRuntime {
         }
         self.apply_ops(doc);
         self.harvest_listeners();
+        if replay {
+            self.reconcile_slots();
+        }
+        // The page run is over: further registrations are ad-hoc (inline
+        // onclick) and must not consume page slots. Leaving the flag set
+        // relied on every entry point re-assigning it — made explicit here.
+        self.bridge.borrow_mut().slots_active = false;
         self.harvest_timers();
     }
 
@@ -478,6 +533,72 @@ impl JsRuntime {
         }
     }
 
+    /// Drop slot entries the current run did not re-declare.
+    ///
+    /// Slots are numbered per (node, type). A replay that registers the SAME
+    /// number reuses every name and the harvest collapses it; a replay that
+    /// registers FEWER leaves the previous run's higher slots behind, and
+    /// those old handlers would keep firing alongside the new ones. This
+    /// trims that stale tail and records the shape for the next run.
+    fn reconcile_slots(&mut self) {
+        let (cur, prev) = {
+            let bb = self.bridge.borrow();
+            (bb.listener_slots.clone(), bb.listener_slots_prev.clone())
+        };
+        for ((node_id, type_name), prev_n) in prev.iter() {
+            let cur_n = cur
+                .get(&(*node_id, type_name.clone()))
+                .copied()
+                .unwrap_or(0);
+            if cur_n >= *prev_n {
+                continue;
+            }
+            // Slots cur_n..prev_n of the previous run are stale.
+            if let Some(list) = self.listeners.get_mut(node_id) {
+                let mut kept: Vec<ListenerEntry> = Vec::with_capacity(list.len());
+                for e in list.iter() {
+                    let stale = e.event_type == *type_name
+                        && match slot_of(&e.name) {
+                            Some(i) => i >= cur_n && i < *prev_n,
+                            None => false,
+                        };
+                    if !stale {
+                        kept.push(e.clone());
+                    }
+                }
+                *list = kept;
+                if list.is_empty() {
+                    self.listeners.remove(node_id);
+                }
+            }
+            let removed: Vec<String> = {
+                let bb = self.bridge.borrow();
+                bb.listener_registry
+                    .iter()
+                    .filter(|(nid, ty, name, _)| {
+                        nid == node_id
+                            && ty == type_name
+                            && match slot_of(name) {
+                                Some(i) => i >= cur_n && i < *prev_n,
+                                None => false,
+                            }
+                    })
+                    .map(|(_, _, name, _)| name.clone())
+                    .collect()
+            };
+            for name in removed {
+                let global = self.ctx.global_object();
+                let _ = global
+                    .delete_property_or_throw(boa_engine::js_string!(name.clone()), &mut self.ctx);
+                let mut bb = self.bridge.borrow_mut();
+                bb.listener_registry.retain(|(_, _, n, _)| *n != name);
+            }
+        }
+        let mut bb = self.bridge.borrow_mut();
+        bb.listener_slots_prev = cur;
+        bb.listener_slots.clear();
+    }
+
     /// Pull newly-registered listeners out of the bridge into self.listeners.
     /// The handler objects were already stashed as named globals during
     /// addEventListener; here we just record node → name.
@@ -530,8 +651,18 @@ impl JsRuntime {
                     }
                     {
                         let mut bb = self.bridge.borrow_mut();
-                        bb.listener_registry
-                            .push((node_id, event_type, name, handler));
+                        // A replayed script re-registers the same slot under
+                        // the same name — replace the row instead of stacking
+                        // a duplicate (registry half of the idempotence fix).
+                        let row = (node_id, event_type, name, handler);
+                        match bb
+                            .listener_registry
+                            .iter()
+                            .position(|(_, _, n, _)| *n == row.2)
+                        {
+                            Some(i) => bb.listener_registry[i] = row,
+                            None => bb.listener_registry.push(row),
+                        }
                     }
                 }
                 ListenerAction::Remove { node_id, name } => {
@@ -1065,6 +1196,14 @@ fn tag_to_html_element_class(tag: &str) -> String {
         _ => "HTMLElement",
     }
     .to_string()
+}
+
+/// Trailing `_<slot>` of a listener global name
+/// (`__aris_listener_<node>_<type>_<slot>`). The slot is always the last
+/// `_`-separated component, so a type containing `_` is harmless.
+fn slot_of(name: &str) -> Option<u32> {
+    name.rsplit_once('_')
+        .and_then(|(_, tail)| tail.parse().ok())
 }
 
 fn arg_string(args: &[JsValue], idx: usize) -> String {
@@ -12547,15 +12686,30 @@ fn make_element_handle(
             // so the handler outlives the handle object it was registered on —
             // and record (node, type, name, handler) for harvest. Several
             // handlers may listen to one (node, type); each gets its own slot.
-            // Note: a page script re-run (resize / zoom / reload) still
-            // registers again — that pre-existing defect is tracked in L940.
+            // A page script re-run (resize / zoom / reload) re-registers into
+            // the SAME slot numbers, and the bind reconciles afterwards, so a
+            // replay collapses instead of stacking (see `reconcile_slots`).
             if let Some(nid) = read_handle_id(this) {
                 // Unique per registration so several handlers on one
                 // (node, type) each get a distinct GC root.
+                // Slot numbering is PER (node, type), not global: a replay
+                // then lands on exactly the same names for a fixed-order
+                // page, which is what makes the harvest collapse duplicates.
+                // A changed registration pattern re-uses the same slot range
+                // and is reconciled after the run (see `reconcile_slots`).
                 let seq = {
                     let mut bb = b.borrow_mut();
-                    bb.next_listener_reg = bb.next_listener_reg.wrapping_add(1);
-                    bb.next_listener_reg
+                    if bb.slots_active {
+                        let key = (nid, event_type.clone());
+                        let slot = bb.listener_slots.entry(key).or_insert(0);
+                        *slot += 1;
+                        *slot - 1
+                    } else {
+                        bb.next_listener_reg = bb.next_listener_reg.wrapping_add(1);
+                        // Offset so an ad-hoc registration cannot alias a
+                        // page slot (which starts at 0).
+                        1_000_000 + bb.next_listener_reg
+                    }
                 };
                 let name = format!("__aris_listener_{nid}_{event_type}_{seq}");
                 b.borrow_mut().listener_actions.push(ListenerAction::Add {
@@ -15727,5 +15881,323 @@ mod fragment_and_eventtarget_tests {
             t.dispatchEvent(new Event('ping'));
         "#);
         assert_eq!(out, "0", "a listener for another type must not run");
+    }
+}
+
+#[cfg(test)]
+mod replay_idempotence_tests {
+    //! The browser re-runs the page's `<script>` blocks on every resize /
+    //! zoom / reload (`build_doc`). Each run used to register the same
+    //! listener AGAIN under a fresh global name, so one click fired N times
+    //! after N re-runs. `bind_page_scripts(.., replay = true)` numbers slots
+    //! per (node, type) from zero and reconciles after the run, so an
+    //! unchanged page re-uses the same names and collapses (L940 registry
+    //! idempotence).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_after_replays(script: &str, replays: usize) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        let scripts = vec![script.to_string()];
+        rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        for _ in 0..replays {
+            rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        }
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(count));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_replayed_script_fires_once() {
+        let out = click_after_replays(
+            r#"
+            var count = 0;
+            document.getElementById('btn').addEventListener('click', function () { count++; });
+        "#,
+            1,
+        );
+        assert_eq!(out, "1", "one replay must not double the handler");
+    }
+
+    #[test]
+    fn five_replays_still_fire_once() {
+        let out = click_after_replays(
+            r#"
+            var count = 0;
+            document.getElementById('btn').addEventListener('click', function () { count++; });
+        "#,
+            5,
+        );
+        assert_eq!(out, "1", "five replays must still fire the handler once");
+    }
+
+    #[test]
+    fn two_listeners_keep_their_order_across_replays() {
+        // Two handlers must stay A-then-B (registration order) and each fire
+        // exactly once after replays — not "ABAB" or "ABABAB".
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        let scripts = vec![
+            r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'A'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'B'; });
+            "#
+            .to_string(),
+        ];
+        for _ in 0..3 {
+            rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        }
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        let out = doc
+            .get_node(NodeId::from_u64(b_id))
+            .map(|_| ())
+            .and(Some(()))
+            .map(|_| ())
+            .and_then(|_| {
+                doc.get_node(NodeId::from_u64(
+                    doc.tree()
+                        .iter()
+                        .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                        .map(|(id, _)| id.as_u64())
+                        .expect("missing #out"),
+                ))
+            })
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        // The out div is still "0" (no script writes it), so read `log`
+        // through the runtime instead.
+        rt.bind_and_run(&mut doc, "document.getElementById('out').setText(log);");
+        let out2 = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        let _ = out;
+        assert_eq!(
+            out2, "AB",
+            "two handlers keep registration order and fire once each after replays"
+        );
+    }
+}
+
+#[cfg(test)]
+mod replay_shape_change_tests {
+    //! Round-2 S1 repros: a page whose re-run registers a DIFFERENT shape.
+    //! The bare counter reset silently dropped or stranded listeners here;
+    //! slot reconciliation must keep the run's own set exactly.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn run_replays(script: &str, replays: usize) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        let scripts = vec![script.to_string()];
+        rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        for _ in 0..replays {
+            rt.bind_page_scripts(&mut doc, &scripts, "", true);
+        }
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            "document.getElementById('out').setText(String(log));",
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_later_run_that_registers_fewer_drops_the_stale_tail() {
+        // Run 1 registers two handlers; later runs register one. The second
+        // run's handler must NOT keep firing (round-2 S1 stale-extra).
+        let out = run_replays(
+            r#"
+            var log = '';
+            var count = 0;
+            document.getElementById('btn').addEventListener('click', function () { log += 'A'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'B'; });
+            "#,
+            0,
+        );
+        assert_eq!(out, "AB", "baseline: both handlers fire once");
+
+        // Now a page whose first run registers two and whose replays register
+        // one (a conditional that has since flipped).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_page_scripts(
+            &mut doc,
+            &vec![r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'ONCE'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'TWICE'; });
+            "#
+            .to_string()],
+            "",
+            true,
+        );
+        rt.bind_page_scripts(
+            &mut doc,
+            &vec![
+                r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'NEW'; });
+            "#
+                .to_string(),
+            ],
+            "",
+            true,
+        );
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            "document.getElementById('out').setText(String(log));",
+        );
+        let after = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            after, "NEW",
+            "a later run with fewer listeners must drop the stale tail"
+        );
+    }
+
+    #[test]
+    fn an_order_swap_keeps_both_handlers() {
+        // Round-2 S1: with a bare counter reset, a same-count but different
+        // order made the displaced handler vanish. Per-(node,type) slots mean
+        // the second run simply re-owns slots 0..n, so BOTH handlers survive
+        // and the new registration order wins.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="btn">go</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_page_scripts(
+            &mut doc,
+            &vec![
+                r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'A'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'B'; });
+            "#
+                .to_string(),
+            ],
+            "",
+            true,
+        );
+        // Same count, swapped order.
+        rt.bind_page_scripts(
+            &mut doc,
+            &vec![
+                r#"
+            var log = '';
+            document.getElementById('btn').addEventListener('click', function () { log += 'B'; });
+            document.getElementById('btn').addEventListener('click', function () { log += 'A'; });
+            "#
+                .to_string(),
+            ],
+            "",
+            true,
+        );
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            "document.getElementById('out').setText(String(log));",
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "BA",
+            "both handlers survive an order swap and the new order wins"
+        );
     }
 }

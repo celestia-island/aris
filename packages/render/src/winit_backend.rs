@@ -477,7 +477,6 @@ impl App {
         #[cfg(feature = "js")]
         {
             let scripts = aris_js::extract_scripts(&self.active_tab().current_html);
-            let combined = scripts.join("\n;\n");
             let url = self
                 .active_tab()
                 .current_url
@@ -488,7 +487,12 @@ impl App {
                 .active_tab_mut()
                 .js
                 .get_or_insert_with(crate::js_runtime::JsRuntime::new);
-            rt.bind_and_run_with_url(&mut doc, &combined, &url);
+            // This path runs the page's own <script> blocks, and it re-runs
+            // them on every resize / zoom / reload. `replay` makes a re-run
+            // idempotent: identical addEventListener calls land on the same
+            // global names, so the harvest collapses them instead of stacking
+            // a duplicate and firing the handler N times after N re-runs.
+            rt.bind_page_scripts(&mut doc, &scripts, &url, true);
         }
 
         self.active_tab_mut().doc = Some(doc);
