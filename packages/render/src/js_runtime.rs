@@ -905,8 +905,10 @@ fn apply_op(
         | Op::AttachCanvas {
             parent_id: node_id, ..
         }
+        // RemoveChild's guard target is the CHILD (it is the one that must
+        // still resolve; the parent is not indexed by remove_and_drop_node).
         | Op::RemoveChild {
-            parent_id: node_id, ..
+            child_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -936,10 +938,16 @@ fn apply_op(
             child_id,
         } => {
             // The child must leave the TREE, not just the JS mirror.
-            // `remove_and_drop_node` frees the slot; `node_is_live` above
-            // already guards later writes through a stale handle (#84).
-            doc.mutate()
-                .remove_and_drop_node(blitz_traits::NodeId::from_u64(*child_id));
+            // Guard the CHILD, not the parent: `remove_and_drop_node`
+            // indexes `doc.nodes[id]` and PANICS on a freed key, so a second
+            // removal of the same node would abort the process (#84's lesson
+            // applied to this op — master's no-op was safe only because it
+            // pushed nothing).
+            let child = blitz_traits::NodeId::from_u64(*child_id);
+            if !node_is_live(doc, *child_id) {
+                return;
+            }
+            doc.mutate().remove_and_drop_node(child);
         }
     }
 }
@@ -13485,10 +13493,21 @@ fn make_element_handle(
                 // Also check bridge snapshot for parsed DOM nodes.
                 let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
                 let child_id = read_handle_id(&child);
-                if parent_id.is_some() && child_id.is_some() {
-                    // Both are bridge nodes — assume it's in the tree.
-                    // (We can't easily check the bridge tree here.)
-                } else {
+                // Compare the child's REAL parent instead of assuming
+                // membership: the old "assume it's in the tree" fallback let
+                // `removeChild(cousin)` silently destroy an unrelated live
+                // node (round-2 S1), and its unreachable else is what made a
+                // double removal panic reachable.
+                let in_tree = match (parent_id, child_id) {
+                    (Some(pid), Some(cid)) => b
+                        .borrow()
+                        .node_props
+                        .get(&cid)
+                        .map(|snap| snap.parent_id == pid)
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if !in_tree {
                     return Err(boa_engine::JsNativeError::typ()
                         .with_message(
                             "NotFoundError: The node to be removed is not a child of this node",
@@ -18123,6 +18142,63 @@ mod remove_child_dom_tests {
             2,
             "removeChild must actually remove the node from the tree"
         );
+    }
+
+    #[test]
+    fn removing_the_same_child_twice_does_not_panic() {
+        // Round-2 S0: the op was pushed twice and `remove_and_drop_node`
+        // indexes the (now freed) slab key -> the process aborted. Master's
+        // no-op was safe only because it pushed nothing.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var b = document.getElementById('b');
+            list.removeChild(b);
+            var second = 'ok';
+            try { list.removeChild(b); } catch (e) { second = 'threw'; }
+            document.getElementById('res').setText('second=' + second);
+            "#,
+        );
+        // Reaching here at all is the assertion (no panic).
+        assert_eq!(
+            child_count(&doc, "list"),
+            1,
+            "only one removal may take effect"
+        );
+    }
+
+    #[test]
+    fn removing_a_node_that_is_not_a_child_throws_and_destroys_nothing() {
+        // Round-2 S1: the "assume it's in the tree" fallback silently deleted
+        // an UNRELATED live node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li></ul><ul id="other"><li id="cousin">c</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var cousin = document.getElementById('cousin');
+            list.removeChild(cousin);
+            "#,
+        );
+        let cousin_alive = doc
+            .tree()
+            .iter()
+            .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("cousin"));
+        assert!(
+            cousin_alive,
+            "a non-child removal must not delete an unrelated live node"
+        );
+        assert_eq!(child_count(&doc, "list"), 1, "the parent keeps its child");
     }
 
     #[test]
