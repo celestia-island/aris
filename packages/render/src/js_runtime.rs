@@ -278,20 +278,40 @@ impl JsRuntime {
             self.bind_and_run(doc, &src);
         }
 
-        // 2. Registered addEventListener listeners for "click".
-        let entries: Vec<ListenerEntry> = match self.listeners.get(&node_id) {
-            Some(list) => list
-                .iter()
-                .filter(|e| e.event_type.is_empty() || e.event_type == "click")
-                .cloned()
-                .collect(),
-            None => {
-                self.apply_ops(doc);
-                self.harvest_listeners();
-                self.harvest_timers();
-                return;
+        // 2. Registered addEventListener listeners for "click", target first,
+        // then bubbling up the ancestor chain to `document` — a listener on
+        // the document only ever saw `dispatchEvent` before, so
+        // `document.addEventListener('click', fn)` never fired on a real
+        // click (L940 follow-up).
+        //
+        // Phase note: only the BUBBLE phase exists here. A handler registered
+        // with `capture: true` is dispatched at its bubble position (target
+        // first, then outward), not before the target — DOM would run it in
+        // the capture phase. `capture` is not read anywhere in this runtime;
+        // implementing real capture/`stopPropagation` is a separate item
+        // (L940), not a regression introduced by this walk.
+        let mut entries: Vec<ListenerEntry> = Vec::new();
+        {
+            let mut cur = Some(blitz_traits::NodeId::from_u64(node_id));
+            while let Some(id) = cur {
+                if let Some(list) = self.listeners.get(&id.as_u64()) {
+                    entries.extend(
+                        list.iter()
+                            .filter(|e| e.event_type.is_empty() || e.event_type == "click")
+                            .cloned(),
+                    );
+                }
+                cur = doc.get_node(id).and_then(|n| n.parent);
             }
-        };
+        }
+        if entries.is_empty() {
+            // Even with no node-level listener the document may have one.
+            self.dispatch_document_click();
+            self.apply_ops(doc);
+            self.harvest_listeners();
+            self.harvest_timers();
+            return;
+        }
         for entry in entries {
             let name = entry.name.clone();
             // Look up the stashed global function and call it with a fresh
@@ -314,9 +334,65 @@ impl JsRuntime {
             }
             let _ = func.call(&JsValue::from(this), &[], &mut self.ctx);
         }
+        // 3. Document-level listeners: they live on the document object's
+        // `_js_listeners` map (installed by the document's own
+        // addEventListener), not in this registry, so they are dispatched
+        // separately at the end of the bubble path.
+        self.dispatch_document_click();
         self.apply_ops(doc);
         self.harvest_listeners();
         self.harvest_timers();
+    }
+
+    /// Run the document's `click` listeners (the `_js_listeners` entries on
+    /// the document object). Kept separate from the node walk because the
+    /// document is not a blitz node: `fire_click` starts from a node id and
+    /// the walk steps through `node.parent`, so the document object is never
+    /// reachable as a walk step (it has no `_arisId` and no parent).
+    fn dispatch_document_click(&mut self) {
+        let Ok(doc_val) = self
+            .ctx
+            .global_object()
+            .get(boa_engine::js_string!("document"), &mut self.ctx)
+        else {
+            return;
+        };
+        let Some(doc_obj) = doc_val.as_object() else {
+            return;
+        };
+        let Ok(lmap) = doc_obj.get(boa_engine::js_string!("_js_listeners"), &mut self.ctx) else {
+            return;
+        };
+        let Some(lm) = lmap.as_object() else {
+            return;
+        };
+        let Ok(arr) = lm.get(boa_engine::js_string!("click"), &mut self.ctx) else {
+            return;
+        };
+        let Some(arr) = arr.as_object() else {
+            return;
+        };
+        let len = arr
+            .get(boa_engine::js_string!("length"), &mut self.ctx)
+            .ok()
+            .and_then(|v| v.as_number())
+            .unwrap_or(0.0) as u32;
+        let mut handlers = Vec::new();
+        for i in 0..len {
+            if let Ok(entry) = arr.get(i, &mut self.ctx)
+                && let Some(obj) = entry.as_object()
+                && let Ok(cb) = obj.get(boa_engine::js_string!("callback"), &mut self.ctx)
+            {
+                handlers.push(cb);
+            }
+        }
+        for cb in handlers {
+            if let Some(f) = cb.as_object()
+                && f.is_callable()
+            {
+                let _ = f.call(&JsValue::null(), &[], &mut self.ctx);
+            }
+        }
     }
 
     /// Move pending ops from the bridge into the document.
@@ -14675,6 +14751,78 @@ mod onclick_single_eval_tests {
         assert_eq!(
             out, "n=1",
             "an inline onclick handler must run exactly once per click"
+        );
+    }
+}
+
+#[cfg(test)]
+mod document_listener_tests {
+    //! L940 follow-up: a click listener registered on `document` must fire
+    //! when a page element is clicked (event bubbling / capture to the
+    //! document). `fire_click` used to look only at the target node, so
+    //! `document.addEventListener('click', fn)` never ran on a real click.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn click_and_read(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="wrap"><button id="b">b</button></div><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn document_click_listener_fires_on_element_click() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            document.addEventListener('click', function () { log += 'D'; });
+        "#,
+        );
+        assert_eq!(
+            out, "D",
+            "a document-level click listener must fire for an element click"
+        );
+    }
+
+    #[test]
+    fn ancestor_listener_fires_before_document() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            document.addEventListener('click', function () { log += 'D'; });
+            document.getElementById('wrap').addEventListener('click', function () { log += 'W'; });
+            document.getElementById('b').addEventListener('click', function () { log += 'B'; });
+        "#,
+        );
+        assert_eq!(
+            out, "BWD",
+            "bubbling order: target, then ancestors outward, then document"
         );
     }
 }
