@@ -1022,14 +1022,13 @@ impl App {
                 if let Some(tab) = self.tabs.get_mut(self.active)
                     && let (Some(rt), Some(doc)) = (tab.js.as_mut(), tab.doc.as_mut())
                 {
-                    // onclick attribute (inline handler): eval its source in the
-                    // runtime so it shares the document bridge.
-                    let onclick_src = doc
-                        .get_node(target)
-                        .and_then(|n| n.attr(blitz_dom::local_name!("onclick")))
-                        .map(|s| s.to_string());
-                    rt.bind_and_run(doc, onclick_src.as_deref().unwrap_or(""));
-                    // Registered click listeners.
+                    // fire_click runs BOTH surfaces itself: the inline
+                    // onclick attribute (evaluated in this runtime so it
+                    // shares the document bridge) and the registered
+                    // addEventListener listeners. Pre-evaluating the
+                    // attribute here too made every inline handler run
+                    // twice per click (a pre-existing defect the L940
+                    // listener work surfaced).
                     rt.fire_click(doc, target.as_u64());
                     self.active_tab_mut().needs_rerender = true;
                 }

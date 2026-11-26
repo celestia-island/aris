@@ -14626,3 +14626,53 @@ mod multi_handler_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod onclick_single_eval_tests {
+    //! An inline `onclick` attribute must run exactly once per click. The
+    //! winit click path used to evaluate it itself and then call
+    //! `fire_click`, which evaluates it again (two runs per click).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    #[test]
+    fn inline_onclick_runs_once_per_click() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <button id="b" onclick="probe = (probe || 0) + 1;">go</button>
+            <div id="out">0</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        // Simulate the winit click path: fire_click is the single entry point.
+        rt.bind_and_run(&mut doc, "var probe = 0;");
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText('probe=' + probe);"#,
+        );
+        let out = doc
+            .get_node(blitz_traits::NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "probe=1",
+            "an inline onclick handler must run exactly once per click"
+        );
+    }
+}
