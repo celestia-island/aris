@@ -121,6 +121,10 @@ fn main() {
         list_children_before, list_children_after
     );
     // KNOWN LIMITATION (pre-existing, and NOT caused by the migration).
+    // comment-gate-ok: the behaviour claims below are pinned by this test's own
+    //   executable assertions (child count and empty texts, asserted at the
+    //   bottom of this case); the mutation surface for a future drain fix is
+    //   exactly those assertions.
     //
     // ROOT CAUSE: `JsRuntime::apply_ops` clones the op log and never clears it,
     // so every call REPLAYS every op recorded so far; `Op::AppendChild` mints a
@@ -136,6 +140,8 @@ fn main() {
     //
     // The retired `js_interactive` bridge avoided both by running its own
     // mutator session, which is exactly why guarding it never surfaced them.
+    // comment-gate-ok: same pin as above — the assertions in this case are the
+    //   mutation surface.
     // This test therefore asserts only what the production path guarantees
     // today — the append reaches the document — and pins the child count so a
     // future fix has to update it deliberately.
