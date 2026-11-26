@@ -14629,39 +14629,41 @@ mod multi_handler_tests {
 
 #[cfg(test)]
 mod onclick_single_eval_tests {
-    //! An inline `onclick` attribute must run exactly once per click. The
-    //! winit click path used to evaluate it itself and then call
-    //! `fire_click`, which evaluates it again (two runs per click).
+    //! An inline `onclick` attribute must run exactly once per click, driven
+    //! through the SAME helper the winit click path uses
+    //! (`winit_backend::fire_page_click`) — a test calling `fire_click`
+    //! directly cannot see a caller-side regression (the bug lived in the
+    //! caller, which pre-evaluated the attribute and then fired it again).
+    //!
+    //! The counter lives in the DOM (`#out` text), not a JS `var`: a
+    //! `bind_and_run` re-run would reset a script-scoped variable and hide
+    //! the duplicate.
 
     use super::JsRuntime;
     use blitz_dom::DocumentConfig;
     use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
 
     #[test]
     fn inline_onclick_runs_once_per_click() {
         let mut doc = HtmlDocument::from_html(
             r#"<html><body>
-            <button id="b" onclick="probe = (probe || 0) + 1;">go</button>
-            <div id="out">0</div>
+            <button id="b" onclick="var o = document.getElementById('out'); o.setText('n=' + ((parseInt(o.textContent.split('=')[1]) || 0) + 1));">go</button>
+            <div id="out">n=0</div>
             </body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
-        // Simulate the winit click path: fire_click is the single entry point.
-        rt.bind_and_run(&mut doc, "var probe = 0;");
+        rt.bind_and_run(&mut doc, "");
         let b_id = doc
             .tree()
             .iter()
             .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
             .map(|(id, _)| id.as_u64())
             .expect("missing #b");
-        rt.fire_click(&mut doc, b_id);
-        rt.bind_and_run(
-            &mut doc,
-            r#"document.getElementById('out').setText('probe=' + probe);"#,
-        );
+        crate::winit_backend::fire_page_click(&mut rt, &mut doc, NodeId::from_u64(b_id));
         let out = doc
-            .get_node(blitz_traits::NodeId::from_u64(
+            .get_node(NodeId::from_u64(
                 doc.tree()
                     .iter()
                     .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
@@ -14671,7 +14673,7 @@ mod onclick_single_eval_tests {
             .map(|n| n.text_content())
             .unwrap_or_default();
         assert_eq!(
-            out, "probe=1",
+            out, "n=1",
             "an inline onclick handler must run exactly once per click"
         );
     }
