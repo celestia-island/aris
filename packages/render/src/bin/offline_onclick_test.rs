@@ -127,11 +127,10 @@ fn main() {
     // (MUT: apply-ops-clone — restoring the clone instead of the drain reds
     //   the assertions below: children 2/6/10 instead of 1/2/3).
     //
-    // Still a known limitation: the appended node carries no text, because a
-    // detached `createElement` handle has no tree id and the `textContent`
-    // setter only pushes an op when `read_handle_id` yields one — dropped at
-    // the source (MUT: pending-settext — carrying the text into the pending
-    //   tuple would make the assertions below assert a non-empty text).
+    // The appended node also carries its text: a detached `createElement`
+    // handle's `textContent` write rides the pending tuple now (MUT:
+    //   pending-settext — removing the pending branch reds the text assertion
+    //   below: child text "").
     if list_children_after <= list_children_before {
         println!("FAIL: createElement+appendChild did not add a child to #list");
         std::process::exit(2);
@@ -154,13 +153,12 @@ fn main() {
             .get_node(cid)
             .map(|n| n.text_content())
             .unwrap_or_default();
-        if !text.is_empty() {
-            println!("FAIL: child[{i}] unexpectedly carries text {text:?}");
+        if text != "Added by JS" {
+            println!("FAIL: child[{i}] text was {text:?}, expected \"Added by JS\"");
             std::process::exit(2);
         }
     }
     println!(
-        "OK: createElement+appendChild landed exactly once ({} child, text dropped — known limitation)",
-        list_children_after
+        "OK: createElement+appendChild landed exactly once, carrying its text (1 child, \"Added by JS\")"
     );
 }
