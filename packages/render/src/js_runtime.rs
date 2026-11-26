@@ -4,10 +4,12 @@
 //! lifetime, so listeners registered during `<script>` execution (and element
 //! handles from `getElementById`) survive to be fired on click.
 //!
-//! Listener handlers are stashed as named globals on the context (e.g.
-//! `__aris_listener_<node>_<idx>`), which keeps them GC-rooted without us
-//! holding raw `JsFunction`s across calls. The registry maps node id → list of
-//! global names.
+//! Listener handlers are stashed as named globals on the context
+//! (`__aris_listener_<node>_<type>_<seq>`), which keeps them GC-rooted without
+//! us holding raw `JsFunction`s across calls. `JsRuntime::listeners` maps node
+//! id → its registrations (event type + global name), and the bridge's
+//! `listener_registry` holds (node, type, name, handler) so removal can match
+//! by handler identity.
 //!
 //! Scope: `addEventListener('click', fn)`, `getElementById`, `createElement`,
 //! `appendChild`, `setAttribute`, `textContent` — the same bridge operations as
@@ -66,11 +68,21 @@ fn new_array(ctx: &mut Context) -> JsArray {
 use boa_engine::{Context, JsObject, JsResult, JsValue, NativeFunction, Source};
 use boa_gc::{Finalize, Gc, GcRefCell, Trace};
 
+/// One `addEventListener` registration in the fire_click registry.
+#[derive(Clone)]
+struct ListenerEntry {
+    /// Event type this handler listens for (e.g. "click").
+    event_type: String,
+    /// Global name holding the callback (GC root).
+    name: String,
+}
+
 /// A persistent JS runtime bound to one document.
 pub struct JsRuntime {
     ctx: Context,
-    /// node id → list of global function names registered as listeners.
-    listeners: HashMap<u64, Vec<String>>,
+    /// node id → its registrations, in registration order. Several handlers
+    /// may listen to the same (node, type) (L940 registry redesign).
+    listeners: HashMap<u64, Vec<ListenerEntry>>,
     /// Shared bridge state used while a script or listener runs.
     bridge: Gc<GcRefCell<Bridge>>,
     /// Monotonic counter for listener global names.
@@ -104,6 +116,13 @@ struct Bridge {
     /// add→remove or remove→add collapses to the final script state instead
     /// of an arbitrary pass order (L940 leftover ②-cycle, R3/R4 findings).
     listener_actions: Vec<ListenerAction>,
+    /// Monotonic counter for per-registration global names, so several
+    /// handlers on one (node, type) get distinct GC roots.
+    next_listener_reg: u32,
+    /// Authoritative registration table (node, type, name, handler) so
+    /// removeEventListener can match by handler identity and drop exactly
+    /// one registration.
+    listener_registry: Vec<(u64, String, String, JsValue)>,
     new_timers: Vec<(String, u64, Option<u64>)>,
 }
 
@@ -113,6 +132,7 @@ enum ListenerAction {
     Add {
         node_id: u64,
         name: String,
+        event_type: String,
         handler: JsValue,
     },
     Remove {
@@ -258,9 +278,13 @@ impl JsRuntime {
             self.bind_and_run(doc, &src);
         }
 
-        // 2. Registered addEventListener listeners.
-        let names = match self.listeners.get(&node_id) {
-            Some(n) => n.clone(),
+        // 2. Registered addEventListener listeners for "click".
+        let entries: Vec<ListenerEntry> = match self.listeners.get(&node_id) {
+            Some(list) => list
+                .iter()
+                .filter(|e| e.event_type.is_empty() || e.event_type == "click")
+                .cloned()
+                .collect(),
             None => {
                 self.apply_ops(doc);
                 self.harvest_listeners();
@@ -268,7 +292,8 @@ impl JsRuntime {
                 return;
             }
         };
-        for name in names {
+        for entry in entries {
+            let name = entry.name.clone();
             // Look up the stashed global function and call it with a fresh
             // element handle as `this`.
             let this =
@@ -317,11 +342,14 @@ impl JsRuntime {
                 ListenerAction::Add {
                     node_id,
                     name,
+                    event_type,
                     handler,
                 } => {
                     let node_id = *node_id;
                     let name = name.clone();
+                    let event_type = event_type.clone();
                     let handler = handler.clone();
+                    let handler_for_stash = handler.clone();
                     // Re-stash when an earlier removal in this window deleted
                     // the global (remove → re-add in one ticket).
                     let global = self.ctx.global_object();
@@ -334,7 +362,7 @@ impl JsRuntime {
                         let _ = global.insert_property(
                             boa_engine::js_string!(name.clone()),
                             boa_engine::property::PropertyDescriptor::builder()
-                                .value(handler)
+                                .value(handler_for_stash)
                                 .writable(true)
                                 .enumerable(false)
                                 .configurable(true)
@@ -344,15 +372,27 @@ impl JsRuntime {
                     // Deterministic name: re-registering dedupes instead of
                     // stacking duplicate firings.
                     let entry = self.listeners.entry(node_id).or_default();
-                    if !entry.contains(&name) {
-                        entry.push(name);
+                    if !entry.iter().any(|e| e.name == name) {
+                        entry.push(ListenerEntry {
+                            event_type: event_type.clone(),
+                            name: name.clone(),
+                        });
+                    }
+                    {
+                        let mut bb = self.bridge.borrow_mut();
+                        bb.listener_registry
+                            .push((node_id, event_type, name, handler));
                     }
                 }
                 ListenerAction::Remove { node_id, name } => {
                     let node_id = *node_id;
                     let name: String = name.clone();
                     if let Some(entry) = self.listeners.get_mut(&node_id) {
-                        entry.retain(|n| n != &name);
+                        entry.retain(|e| e.name != name);
+                    }
+                    {
+                        let mut bb = self.bridge.borrow_mut();
+                        bb.listener_registry.retain(|(_, _, n, _)| *n != name);
                     }
                     let global = self.ctx.global_object();
                     let _ = global
@@ -12063,20 +12103,26 @@ fn make_element_handle(
                 let _ = arr
                     .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
             }
-            // Fire_click registration (L940 leftover ①): stash the callback
-            // under a deterministic per-(node, type) global name — GC-rooted via
-            // the global object, so the handler outlives the handle object it
-            // was registered on — and record (node, name) on the bridge for
-            // harvest. On master the push into new_listeners was never written,
-            // so registered listeners silently vanished. Known limitation:
-            // two handlers on the same (node, type) collide on one name and
-            // only the last survives (multi-handler needs a registry
-            // redesign — see L940).
+            // Fire_click registration: stash the callback under a
+            // per-registration global name — GC-rooted via the global object,
+            // so the handler outlives the handle object it was registered on —
+            // and record (node, type, name, handler) for harvest. Several
+            // handlers may listen to one (node, type); each gets its own slot.
+            // Note: a page script re-run (resize / zoom / reload) still
+            // registers again — that pre-existing defect is tracked in L940.
             if let Some(nid) = read_handle_id(this) {
-                let name = format!("__aris_listener_{nid}_{event_type}");
+                // Unique per registration so several handlers on one
+                // (node, type) each get a distinct GC root.
+                let seq = {
+                    let mut bb = b.borrow_mut();
+                    bb.next_listener_reg = bb.next_listener_reg.wrapping_add(1);
+                    bb.next_listener_reg
+                };
+                let name = format!("__aris_listener_{nid}_{event_type}_{seq}");
                 b.borrow_mut().listener_actions.push(ListenerAction::Add {
                     node_id: nid,
                     name: name.clone(),
+                    event_type: event_type.clone(),
                     handler: handler.clone(),
                 });
                 let _ = ctx.global_object().insert_property(
@@ -12257,25 +12303,54 @@ fn make_element_handle(
             // global, so removing an unrelated/undefined handler must not kill
             // a live listener (R3 S0).
             if let Some(nid) = read_handle_id(this) {
-                let name = format!("__aris_listener_{nid}_{event_type}");
-                let registered = ctx
-                    .global_object()
-                    .get(boa_engine::js_string!(name.clone()), ctx)
-                    .ok()
-                    .and_then(|v| v.as_object());
-                let same = match (&handler_obj, &registered) {
-                    (Some(wanted), Some(actual)) => {
-                        boa_engine::object::JsObject::equals(wanted, actual)
-                    }
-                    _ => false,
+                // Match by handler identity against the registration TABLE
+                // (not the stashed global): several (node, type) entries
+                // coexist now, and an Add re-stash in the same window would
+                // otherwise hide the row we need to drop.
+                let target = {
+                    let bb = b.borrow();
+                    // The row may still be pending in this window's action log
+                    // (add and remove in one script), so consult both: the
+                    // harvested table first, then the queued Adds.
+                    bb.listener_registry
+                        .iter()
+                        .find(|(node, ty, _, h)| {
+                            *node == nid
+                                && *ty == event_type
+                                && match (&handler_obj, h.as_object()) {
+                                    (Some(wanted), Some(actual)) => {
+                                        boa_engine::object::JsObject::equals(wanted, &actual)
+                                    }
+                                    _ => false,
+                                }
+                        })
+                        .map(|(_, _, name, _)| name.clone())
+                        .or_else(|| {
+                            bb.listener_actions.iter().rev().find_map(|a| match a {
+                                ListenerAction::Add {
+                                    node_id,
+                                    name,
+                                    event_type: ty,
+                                    handler,
+                                } if *node_id == nid
+                                    && ty == &event_type
+                                    && match (&handler_obj, handler.as_object()) {
+                                        (Some(wanted), Some(actual)) => {
+                                            boa_engine::object::JsObject::equals(wanted, &actual)
+                                        }
+                                        _ => false,
+                                    } =>
+                                {
+                                    Some(name.clone())
+                                }
+                                _ => None,
+                            })
+                        })
                 };
-                if same {
+                if let Some(name) = target {
                     b.borrow_mut()
                         .listener_actions
-                        .push(ListenerAction::Remove {
-                            node_id: nid,
-                            name: format!("__aris_listener_{nid}_{event_type}"),
-                        });
+                        .push(ListenerAction::Remove { node_id: nid, name });
                 }
             }
             if let Some(o) = this.as_object() {
@@ -14409,6 +14484,145 @@ mod idless_canvas_tests {
         assert!(
             alloc_has_content(alloc),
             "the fillRect must land in the scratch allocation {alloc} that CANVAS_HOME[0] names"
+        );
+    }
+}
+
+#[cfg(test)]
+mod multi_handler_tests {
+    //! L940 registry redesign: several handlers may listen to the same
+    //! (node, type), each removable independently by handler identity.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn click_and_read(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">b</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        doc.get_node(blitz_traits::NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                .map(|(id, _)| id.as_u64())
+                .expect("missing #out"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn two_handlers_same_type_both_fire() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            function h1() { log += '1'; }
+            function h2() { log += '2'; }
+            var b = document.getElementById('b');
+            b.addEventListener('click', h1);
+            b.addEventListener('click', h2);
+        "#,
+        );
+        assert_eq!(
+            out, "12",
+            "both handlers on one (node, type) must fire, in order"
+        );
+    }
+
+    #[test]
+    fn removing_one_of_two_keeps_the_other() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            function h1() { log += '1'; }
+            function h2() { log += '2'; }
+            var b = document.getElementById('b');
+            b.addEventListener('click', h1);
+            b.addEventListener('click', h2);
+            b.removeEventListener('click', h1);
+        "#,
+        );
+        assert_eq!(out, "2", "removing h1 must leave h2 registered");
+    }
+
+    #[test]
+    fn removing_an_unrelated_handler_leaves_both() {
+        let out = click_and_read(
+            r#"
+            var log = '';
+            function h1() { log += '1'; }
+            function h2() { log += '2'; }
+            function other() { log += 'X'; }
+            var b = document.getElementById('b');
+            b.addEventListener('click', h1);
+            b.addEventListener('click', h2);
+            b.removeEventListener('click', other);
+        "#,
+        );
+        assert_eq!(out, "12", "a foreign handler must not remove anything");
+    }
+
+    #[test]
+    fn a_later_script_can_remove_an_earlier_registration() {
+        // The registration table survives bind_and_run, so a script executed
+        // later can remove what an earlier one registered.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">b</button><div id="out">0</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = '';
+            function h1() { log += '1'; }
+            window.__h1 = h1;
+            document.getElementById('b').addEventListener('click', h1);
+        "#,
+        );
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('b').removeEventListener('click', window.__h1);"#,
+        );
+        let b_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(id, _)| id.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, b_id);
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').setText(String(log));"#,
+        );
+        let out = doc
+            .get_node(blitz_traits::NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(id, _)| id.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "",
+            "a later script must be able to remove an earlier registration"
         );
     }
 }
