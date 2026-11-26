@@ -864,11 +864,39 @@ impl Default for JsRuntime {
     }
 }
 
+/// Does this node id still resolve in the document tree?
+///
+/// A handle held across a child removal keeps its `_arisId`, but
+/// `remove_and_drop_node` FREES that slab slot — so an op carrying the stale
+/// id would index `doc.nodes[id]` inside blitz and panic ("invalid SlotMap
+/// key used"). Master never hit this because it never removed children;
+/// replacing `textContent` does. Dropping such ops matches the tree's own
+/// `get_node` semantics (absent ⇒ no-op) instead of aborting the process.
+fn node_is_live(doc: &BaseDocument, node_id: u64) -> bool {
+    doc.get_node(blitz_traits::NodeId::from_u64(node_id))
+        .is_some()
+}
+
 fn apply_op(
     doc: &mut BaseDocument,
     op: Op,
     pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
 ) {
+    // Every op carries a node id that a page handle captured earlier; that
+    // node may have been removed since (textContent replace, removeChild).
+    let target = match &op {
+        Op::SetText { node_id, .. }
+        | Op::SetAttr { node_id, .. }
+        | Op::AppendChild {
+            parent_id: node_id, ..
+        }
+        | Op::AttachCanvas {
+            parent_id: node_id, ..
+        } => *node_id,
+    };
+    if !node_is_live(doc, target) {
+        return;
+    }
     match &op {
         Op::SetText { node_id, value } => set_text_content(doc, *node_id, value),
         Op::SetAttr {
@@ -1027,8 +1055,11 @@ fn set_text_content(doc: &mut BaseDocument, node_id: u64, value: &str) {
     // while the JS mirror held exactly the new value — the held/fresh handle
     // split L940 recorded.
     let mut mutator = doc.mutate();
-    // Remove every existing child first. `remove_node` also detaches it from
-    // the tree's bookkeeping, so the replacement is a true replace.
+    // Remove every existing child first. NOTE: `remove_and_drop_node` also
+    // FREES the child's slab slot (unlike `remove_node`, which only detaches),
+    // so a handle the page captured earlier becomes dangling — `apply_op`'s
+    // `node_is_live` guard drops writes through such handles instead of
+    // letting blitz index a freed key and panic.
     if let Some(node) = mutator.doc.get_node(nid) {
         let existing: Vec<blitz_traits::NodeId> = node.children.iter().copied().collect();
         for child in existing {
@@ -17732,6 +17763,57 @@ mod set_text_replace_tests {
         assert!(
             tags.is_empty(),
             "every child (including the parsed <b>) must be removed, got {tags:?}"
+        );
+    }
+
+    #[test]
+    fn a_pre_held_child_handle_does_not_panic_after_a_replace() {
+        // Round-4 S0: removing children FREES their slab slots, but a handle
+        // the page captured earlier keeps its `_arisId`. Mutating through such
+        // a handle used to index `doc.nodes[id]` inside blitz and panic
+        // ("invalid SlotMap key used") — master survived because it never
+        // removed children. Reaching the end of this test is the assertion.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="pc"><button id="kid">b</button></div>
+            <div id="out">base</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var kid = document.getElementById('kid');   // pre-held child
+            document.getElementById('pc').setText('new'); // frees its slot
+            var pc = document.getElementById('pc');
+            kid.setAttribute('class', 'x');   // stale write: must be dropped
+            kid.setText('ZOMBIE');            // stale write: must be dropped
+            pc.appendChild(kid);              // stale append: must be dropped
+            document.getElementById('out').setText('survived');
+            "#,
+        );
+        let out = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            out, "survived",
+            "stale child writes must be dropped, not panic"
+        );
+        // The parent still holds exactly the replacement text.
+        let (text, tags) = dom_text_and_tags(&doc, "pc");
+        assert_eq!(text, "new", "the replace result must be intact");
+        assert_eq!(
+            tags,
+            vec!["#text".to_string()],
+            "no stale child re-attached"
         );
     }
 
