@@ -14258,15 +14258,14 @@ fn make_element_handle(
                 // Keying the fallback off "text is empty" would resurrect the
                 // parsed value after a deliberate clear (round-2 S1:
                 // `el.textContent=''; el.textContent=n`).
-                let materialized = o
-                    .get(boa_engine::js_string!("_arisTextMaterialized"), ctx)
-                    .ok()
-                    .and_then(|v| v.as_boolean())
-                    .unwrap_or(false);
-                if materialized {
-                    return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(
-                        &o, ctx, 0
-                    ))));
+                // `_children` is authoritative once it holds text; when it is
+                // empty the node snapshot is the source. The setter keeps that
+                // snapshot in step, so "written empty" and "never written" stay
+                // distinguishable and every handle — fresh or held — agrees with
+                // the DOM (rounds 2-3).
+                let local = collect_text_content(&o, ctx, 0);
+                if !local.is_empty() {
+                    return Ok(JsValue::from(boa_engine::js_string!(local)));
                 }
                 if let Some(nid) = read_handle_id(this)
                     && let Some(snap) = b.borrow().node_props.get(&nid).cloned()
@@ -14383,22 +14382,22 @@ fn make_element_handle(
                 // applied from script but the rendered document never changed
                 // (the retired `js_interactive` bridge masked this by rewriting
                 // the source to `setText`).
-                if let Some(o) = this.as_object() {
-                    let _ = o.insert_property(
-                        boa_engine::js_string!("_arisTextMaterialized"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(true))
-                            .writable(true)
-                            .enumerable(false)
-                            .configurable(true)
-                            .build(),
-                    );
-                }
                 if let Some(nid) = read_handle_id(this) {
-                    b.borrow_mut().ops.push(Op::SetText {
-                        node_id: nid,
-                        value: s_for_op,
-                    });
+                    {
+                        let mut bb = b.borrow_mut();
+                        // Keep the NODE snapshot in step with the write: the
+                        // snapshot is what a freshly-fetched handle reads when
+                        // its own `_children` is still empty (round-3 S1 —
+                        // `getElementById` mints a new handle per call, so a
+                        // per-handle notion of "written" cannot work).
+                        if let Some(snap) = bb.node_props.get_mut(&nid) {
+                            snap.text_content = s_for_op.clone();
+                        }
+                        bb.ops.push(Op::SetText {
+                            node_id: nid,
+                            value: s_for_op,
+                        });
+                    }
                 }
             }
             Ok(JsValue::undefined())
@@ -16383,6 +16382,54 @@ mod text_content_assignment_tests {
         );
         assert_eq!(read(&doc, "out"), "b", "the last assignment wins");
         assert_eq!(read(&doc, "res"), "b", "and the getter agrees");
+    }
+
+    #[test]
+    fn a_fresh_handle_sees_text_written_through_another_handle() {
+        // Round-3 S1: the write flag must be keyed by NODE. `getElementById`
+        // returns a new handle every call, so a per-handle flag let the DOM
+        // say "NEW" while a second handle read the parsed "5".
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('c').textContent = 'NEW';
+            // A DIFFERENT handle for the same node:
+            document.getElementById('res').setText(document.getElementById('c').textContent);
+            "#,
+        );
+        assert_eq!(read(&doc, "c"), "NEW", "the DOM must hold the write");
+        assert_eq!(
+            read(&doc, "res"),
+            "NEW",
+            "a freshly-fetched handle must read the written value, not the snapshot"
+        );
+    }
+
+    #[test]
+    fn a_handle_captured_before_the_write_sees_it_too() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="c">5</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var held = document.getElementById('c');   // captured BEFORE the write
+            document.getElementById('c').textContent = 'NEW';  // other handle writes
+            document.getElementById('res').setText(held.textContent);
+            "#,
+        );
+        assert_eq!(
+            read(&doc, "res"),
+            "NEW",
+            "a handle captured before the write must also observe it"
+        );
     }
 
     #[test]
