@@ -11682,6 +11682,93 @@ fn install_webrtc_stubs(ctx: &mut Context) {
     }
 }
 
+/// Replace `o`'s `_children` mirror with a single text node holding `s`
+/// (or clear it for an empty `s`). Shared by every element text setter
+/// (`textContent` accessor, `setText`, `setHTML`) so the JS-side mirror and
+/// the op-applied tree never disagree about the last write — before this,
+/// `setText`/`setHTML` updated the DOM but left the mirror stale, and the
+/// `textContent` getter (which prefers `_children`) read back the old value
+/// (L940 getter-precedence, three shapes).
+fn rebuild_children_mirror(o: &JsObject, s: &str, ctx: &mut Context) {
+    let pd = |val: JsValue| {
+        boa_engine::property::PropertyDescriptor::builder()
+            .value(val)
+            .writable(true)
+            .enumerable(true)
+            .configurable(true)
+            .build()
+    };
+    // Clear parentNode on all existing children.
+    if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+        if let Some(ca) = cv.as_object() {
+            let ca = ca.clone();
+            let len = ca
+                .get(boa_engine::js_string!("length"), ctx)
+                .ok()
+                .and_then(|v| v.as_number())
+                .unwrap_or(0.0) as u32;
+            for i in 0..len {
+                if let Ok(child) = ca.get(i as u32, ctx) {
+                    if let Some(co) = child.as_object() {
+                        let co = co.clone();
+                        let _ = co.insert_property(
+                            boa_engine::js_string!("parentNode"),
+                            pd(JsValue::null()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if s.is_empty() {
+        // Empty string → no children.
+        let empty_arr = new_array(ctx);
+        let _ = o.insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
+    } else {
+        // Replace all children with a single text node.
+        let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ =
+            text_node.insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("_data"),
+            pd(JsValue::from(boa_engine::js_string!(s.to_string()))),
+        );
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("data"),
+            pd(JsValue::from(boa_engine::js_string!(s.to_string()))),
+        );
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("nodeValue"),
+            pd(JsValue::from(boa_engine::js_string!(s.to_string()))),
+        );
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("textContent"),
+            pd(JsValue::from(boa_engine::js_string!(s.to_string()))),
+        );
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("nodeName"),
+            pd(JsValue::from(boa_engine::js_string!("#text"))),
+        );
+        let _ = text_node.insert_property(
+            boa_engine::js_string!("parentNode"),
+            pd(JsValue::from(o.clone())),
+        );
+        // Set Text.prototype so instanceof Text works.
+        if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx) {
+            if let Some(tc) = text_ctor.as_object() {
+                if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
+                    if let Some(proto) = proto_val.as_object() {
+                        let _ = text_node.set_prototype(Some(proto));
+                    }
+                }
+            }
+        }
+        let new_arr = new_array(ctx);
+        let _ = new_arr.push(JsValue::from(text_node), ctx);
+        let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+    }
+}
+
 fn make_element_handle(
     ctx: &mut Context,
     bridge: Gc<GcRefCell<Bridge>>,
@@ -11946,8 +12033,14 @@ fn make_element_handle(
 
     // setText / textContent setter
     let set_text = NativeFunction::from_copy_closure_with_captures(
-        |this, args, b, _ctx| {
+        |this, args, b, ctx| {
             let v = arg_string(args, 0);
+            // Keep the `_children` mirror in step (same as the textContent
+            // accessor setter): otherwise the getter — which prefers
+            // `_children` — reads the stale pre-write text.
+            if let Some(o) = this.as_object() {
+                rebuild_children_mirror(&o, &v, ctx);
+            }
             if let Some(nid) = read_handle_id(this) {
                 let mut bb = b.borrow_mut();
                 // Keep the node snapshot in step so a freshly-fetched handle
@@ -11981,8 +12074,12 @@ fn make_element_handle(
 
     // setHTML / innerHTML setter (strips tags)
     let set_html = NativeFunction::from_copy_closure_with_captures(
-        |this, args, b, _ctx| {
+        |this, args, b, ctx| {
             let text = strip_tags(&arg_string(args, 0));
+            // Mirror in step (see setText).
+            if let Some(o) = this.as_object() {
+                rebuild_children_mirror(&o, &text, ctx);
+            }
             if let Some(nid) = read_handle_id(this) {
                 let mut bb = b.borrow_mut();
                 // Keep the node snapshot in step so a freshly-fetched handle
@@ -14514,83 +14611,7 @@ fn make_element_handle(
                         .configurable(true)
                         .build()
                 };
-                // Clear parentNode on all existing children.
-                if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
-                    if let Some(ca) = cv.as_object() {
-                        let ca = ca.clone();
-                        let len = ca
-                            .get(boa_engine::js_string!("length"), ctx)
-                            .ok()
-                            .and_then(|v| v.as_number())
-                            .unwrap_or(0.0) as u32;
-                        for i in 0..len {
-                            if let Ok(child) = ca.get(i as u32, ctx) {
-                                if let Some(co) = child.as_object() {
-                                    let co = co.clone();
-                                    let _ = co.insert_property(
-                                        boa_engine::js_string!("parentNode"),
-                                        pd(JsValue::null()),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-                if s.is_empty() {
-                    // Empty string → no children.
-                    let empty_arr = new_array(ctx);
-                    let _ = o
-                        .insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
-                } else {
-                    // Replace all children with a single text node.
-                    let text_node =
-                        boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("nodeType"),
-                        pd(JsValue::from(3u32)),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("_data"),
-                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("data"),
-                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("nodeValue"),
-                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("textContent"),
-                        pd(JsValue::from(boa_engine::js_string!(s))),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("nodeName"),
-                        pd(JsValue::from(boa_engine::js_string!("#text"))),
-                    );
-                    let _ = text_node.insert_property(
-                        boa_engine::js_string!("parentNode"),
-                        pd(JsValue::from(o.clone())),
-                    );
-                    // Set Text.prototype so instanceof Text works.
-                    if let Ok(text_ctor) =
-                        ctx.global_object().get(boa_engine::js_string!("Text"), ctx)
-                    {
-                        if let Some(tc) = text_ctor.as_object() {
-                            if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx)
-                            {
-                                if let Some(proto) = proto_val.as_object() {
-                                    let _ = text_node.set_prototype(Some(proto));
-                                }
-                            }
-                        }
-                    }
-                    let new_arr = new_array(ctx);
-                    let _ = new_arr.push(JsValue::from(text_node), ctx);
-                    let _ =
-                        o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
-                }
+                rebuild_children_mirror(&o, &s, ctx);
                 // Push the DOM write. Without this the setter only rebuilt the
                 // JS-side `_children` mirror, so `el.textContent = x` looked
                 // applied from script but the rendered document never changed
@@ -17494,6 +17515,130 @@ mod style_shadowing_fresh_handle_tests {
         assert_eq!(
             res, "object|color:blue",
             "a fresh handle must reflect the setAttribute style"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_setter_mirror_tests {
+    //! L940 getter-precedence, three shapes: the `textContent` getter prefers
+    //! the `_children` mirror, so every element text setter must keep that
+    //! mirror in step. `setText` / `setHTML` used to update only the DOM +
+    //! snapshot, leaving the mirror stale — a held handle then read the
+    //! pre-write value while the DOM held the new one.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">base</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing #res"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn shape_i_text_then_set_html_is_visible_to_the_held_handle() {
+        let out = run(r#"
+            var el = document.getElementById('out');
+            el.textContent = 'AAA';
+            el.setHTML('BBB');
+            document.getElementById('res').setText(el.textContent);
+            "#);
+        assert_eq!(
+            out, "BBB",
+            "setHTML after a textContent write must update the mirror the getter reads"
+        );
+    }
+
+    #[test]
+    fn shape_iiia_set_text_as_the_last_write_is_readable() {
+        // The discriminating shape for setText's rebuild: the mirror was
+        // populated by an earlier textContent write; setText is the LAST
+        // write. Without setText's rebuild the getter reads the stale 'AAA'.
+        let out = run(r#"
+            var el = document.getElementById('out');
+            el.textContent = 'AAA';
+            el.setText('BBB');
+            document.getElementById('res').setText(el.textContent);
+            "#);
+        assert_eq!(
+            out, "BBB",
+            "setText as the last write must update the mirror the getter reads"
+        );
+    }
+
+    #[test]
+    fn shape_iii_set_text_then_read_via_held_handle() {
+        let out = run(r#"
+            var el = document.getElementById('out');
+            el.setText('AAA');
+            el.textContent = 'BBB';
+            document.getElementById('res').setText(el.textContent);
+            "#);
+        assert_eq!(
+            out, "BBB",
+            "textContent write after setText must win and be readable"
+        );
+    }
+
+    #[test]
+    fn set_text_then_set_html_last_wins() {
+        let out = run(r#"
+            var el = document.getElementById('out');
+            el.setText('AAA');
+            el.setHTML('BBB');
+            document.getElementById('res').setText(el.textContent);
+            "#);
+        assert_eq!(out, "BBB", "the last setter wins for both DOM and readback");
+    }
+
+    #[test]
+    fn interleaved_setters_stay_consistent_with_the_dom() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">base</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.setText('one');
+            el.setHTML('two');
+            el.textContent = 'three';
+            // DOM text via a marker (setText is known-good)
+            el.setText(el.textContent);
+            document.getElementById('res').setText(document.getElementById('out').textContent);
+            "#,
+        );
+        // DOM text is read via the same getter path the page uses.
+        let dom = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #out"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(
+            dom, "three",
+            "the DOM must hold the last write after interleaved setters"
         );
     }
 }
