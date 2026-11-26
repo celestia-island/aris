@@ -1293,10 +1293,9 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
         boa_engine::js_string!("localName"),
         pd(s_str(&s.tag_name.to_lowercase())),
     );
-    let _ = obj.insert_property(
-        boa_engine::js_string!("textContent"),
-        pd(s_str(&s.text_content)),
-    );
+    // Do NOT write `textContent` here: `make_element_handle` installs it as an
+    // accessor, and a data property would replace it — silently disabling the
+    // setter (`el.textContent = x` would then only change the JS object).
     let _ = obj.insert_property(boa_engine::js_string!("data"), pd(s_str(&s.text_content)));
     let _ = obj.insert_property(boa_engine::js_string!("id"), pd(s_str(&s.id)));
     let _ = obj.insert_property(
@@ -14249,106 +14248,143 @@ fn make_element_handle(
     );
 
     // textContent as accessor: getter concatenates descendant text, setter replaces children.
-    let tc_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
-        if let Some(o) = this.as_object() {
-            return Ok(JsValue::from(boa_engine::js_string!(collect_text_content(
-                &o, ctx, 0
-            ))));
-        }
-        Ok(JsValue::from(boa_engine::js_string!("")))
-    });
-    let tc_set = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(o) = this.as_object() {
-            let val = args.first().map(|v| v.clone()).unwrap_or(JsValue::null());
-            let s = if val.is_null() {
-                String::new()
-            } else {
-                val.to_string(ctx)
-                    .map(|s| s.to_std_string_escaped())
-                    .unwrap_or_default()
-            };
-            let pd = |v: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(v)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            // Clear parentNode on all existing children.
-            if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
-                if let Some(ca) = cv.as_object() {
-                    let ca = ca.clone();
-                    let len = ca
-                        .get(boa_engine::js_string!("length"), ctx)
-                        .ok()
-                        .and_then(|v| v.as_number())
-                        .unwrap_or(0.0) as u32;
-                    for i in 0..len {
-                        if let Ok(child) = ca.get(i as u32, ctx) {
-                            if let Some(co) = child.as_object() {
-                                let co = co.clone();
-                                let _ = co.insert_property(
-                                    boa_engine::js_string!("parentNode"),
-                                    pd(JsValue::null()),
-                                );
-                            }
-                        }
-                    }
+    let tc_get = NativeFunction::from_copy_closure_with_captures(
+        |this, _args, b, ctx| {
+            if let Some(o) = this.as_object() {
+                let text = collect_text_content(&o, ctx, 0);
+                if !text.is_empty() {
+                    return Ok(JsValue::from(boa_engine::js_string!(text)));
                 }
-            }
-            if s.is_empty() {
-                // Empty string → no children.
-                let empty_arr = new_array(ctx);
-                let _ =
-                    o.insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
-            } else {
-                // Replace all children with a single text node.
-                let text_node = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                let _ = text_node
-                    .insert_property(boa_engine::js_string!("nodeType"), pd(JsValue::from(3u32)));
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("_data"),
-                    pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                );
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("data"),
-                    pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                );
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("nodeValue"),
-                    pd(JsValue::from(boa_engine::js_string!(s.clone()))),
-                );
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("textContent"),
-                    pd(JsValue::from(boa_engine::js_string!(s))),
-                );
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("nodeName"),
-                    pd(JsValue::from(boa_engine::js_string!("#text"))),
-                );
-                let _ = text_node.insert_property(
-                    boa_engine::js_string!("parentNode"),
-                    pd(JsValue::from(o.clone())),
-                );
-                // Set Text.prototype so instanceof Text works.
-                if let Ok(text_ctor) = ctx.global_object().get(boa_engine::js_string!("Text"), ctx)
+                // `_children` carries no text: this handle was built before any
+                // child nodes existed, so fall back to the node snapshot. Without
+                // this the element's initial text (e.g. "0") read back empty
+                // once `textContent` became an accessor.
+                if let Some(nid) = read_handle_id(this)
+                    && let Some(snap) = b.borrow().node_props.get(&nid).cloned()
                 {
-                    if let Some(tc) = text_ctor.as_object() {
-                        if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx) {
-                            if let Some(proto) = proto_val.as_object() {
-                                let _ = text_node.set_prototype(Some(proto));
+                    return Ok(JsValue::from(boa_engine::js_string!(
+                        snap.text_content.clone()
+                    )));
+                }
+                return Ok(JsValue::from(boa_engine::js_string!("")));
+            }
+            Ok(JsValue::from(boa_engine::js_string!("")))
+        },
+        Gc::clone(&bridge),
+    );
+    let tc_set = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(o) = this.as_object() {
+                let val = args.first().map(|v| v.clone()).unwrap_or(JsValue::null());
+                let s = if val.is_null() {
+                    String::new()
+                } else {
+                    val.to_string(ctx)
+                        .map(|s| s.to_std_string_escaped())
+                        .unwrap_or_default()
+                };
+                let s_for_op = s.clone();
+                let pd = |v: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(v)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                // Clear parentNode on all existing children.
+                if let Ok(cv) = o.get(boa_engine::js_string!("_children"), ctx) {
+                    if let Some(ca) = cv.as_object() {
+                        let ca = ca.clone();
+                        let len = ca
+                            .get(boa_engine::js_string!("length"), ctx)
+                            .ok()
+                            .and_then(|v| v.as_number())
+                            .unwrap_or(0.0) as u32;
+                        for i in 0..len {
+                            if let Ok(child) = ca.get(i as u32, ctx) {
+                                if let Some(co) = child.as_object() {
+                                    let co = co.clone();
+                                    let _ = co.insert_property(
+                                        boa_engine::js_string!("parentNode"),
+                                        pd(JsValue::null()),
+                                    );
+                                }
                             }
                         }
                     }
                 }
-                let new_arr = new_array(ctx);
-                let _ = new_arr.push(JsValue::from(text_node), ctx);
-                let _ = o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+                if s.is_empty() {
+                    // Empty string → no children.
+                    let empty_arr = new_array(ctx);
+                    let _ = o
+                        .insert_property(boa_engine::js_string!("_children"), pd(empty_arr.into()));
+                } else {
+                    // Replace all children with a single text node.
+                    let text_node =
+                        boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("nodeType"),
+                        pd(JsValue::from(3u32)),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("_data"),
+                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("data"),
+                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("nodeValue"),
+                        pd(JsValue::from(boa_engine::js_string!(s.clone()))),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("textContent"),
+                        pd(JsValue::from(boa_engine::js_string!(s))),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("nodeName"),
+                        pd(JsValue::from(boa_engine::js_string!("#text"))),
+                    );
+                    let _ = text_node.insert_property(
+                        boa_engine::js_string!("parentNode"),
+                        pd(JsValue::from(o.clone())),
+                    );
+                    // Set Text.prototype so instanceof Text works.
+                    if let Ok(text_ctor) =
+                        ctx.global_object().get(boa_engine::js_string!("Text"), ctx)
+                    {
+                        if let Some(tc) = text_ctor.as_object() {
+                            if let Ok(proto_val) = tc.get(boa_engine::js_string!("prototype"), ctx)
+                            {
+                                if let Some(proto) = proto_val.as_object() {
+                                    let _ = text_node.set_prototype(Some(proto));
+                                }
+                            }
+                        }
+                    }
+                    let new_arr = new_array(ctx);
+                    let _ = new_arr.push(JsValue::from(text_node), ctx);
+                    let _ =
+                        o.insert_property(boa_engine::js_string!("_children"), pd(new_arr.into()));
+                }
+                // Push the DOM write. Without this the setter only rebuilt the
+                // JS-side `_children` mirror, so `el.textContent = x` looked
+                // applied from script but the rendered document never changed
+                // (the retired `js_interactive` bridge masked this by rewriting
+                // the source to `setText`).
+                if let Some(nid) = read_handle_id(this) {
+                    b.borrow_mut().ops.push(Op::SetText {
+                        node_id: nid,
+                        value: s_for_op,
+                    });
+                }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     let tc_get_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_get).build();
     let tc_set_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), tc_set).build();
     let _ = obj.insert_property(
@@ -16198,6 +16234,87 @@ mod replay_shape_change_tests {
         assert_eq!(
             out, "BA",
             "both handlers survive an order swap and the new order wins"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_content_assignment_tests {
+    //! L940 S1 (goal rounds 9-10): `el.textContent = x` is one of the most
+    //! common DOM writes in real pages, but the setter only rebuilt the
+    //! JS-side `_children` mirror — the rendered document never changed. The
+    //! retired `js_interactive` bridge masked the gap by rewriting the source
+    //! to `setText`, and `offline_onclick_test` guarded that dead path.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn read(doc: &HtmlDocument, id: &str) -> String {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn assigning_text_content_reaches_the_dom() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">empty</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').textContent = 'Hello aris';"#,
+        );
+        assert_eq!(
+            read(&doc, "out"),
+            "Hello aris",
+            "assigning textContent must update the rendered document"
+        );
+    }
+
+    #[test]
+    fn the_readback_reflects_the_assignment() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">empty</div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var el = document.getElementById('out');
+            el.textContent = 'x';
+            document.getElementById('res').setText(el.textContent);
+            "#,
+        );
+        assert_eq!(read(&doc, "res"), "x", "the getter must see the new value");
+        assert_eq!(read(&doc, "out"), "x", "and so must the DOM");
+    }
+
+    #[test]
+    fn an_empty_assignment_clears_the_text() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">gone</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"document.getElementById('out').textContent = '';"#,
+        );
+        assert_eq!(
+            read(&doc, "out"),
+            "",
+            "assigning an empty string must clear the element's text"
         );
     }
 }
