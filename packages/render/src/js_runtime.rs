@@ -974,22 +974,17 @@ fn apply_op(
             if !node_is_live(doc, *child_id) {
                 return;
             }
-            // Self-insert (child == anchor) and insert-into-own-subtree build
-            // a parent cycle; the tree then aborts bind_and_run with a stack
-            // overflow. Reject both before touching the mutator.
-            if child_id == anchor_id {
+            // Self-insert and insert/appending a node into its OWN subtree
+            // build a parent cycle (blitz accepts it silently; the tree then
+            // aborts bind_and_run with a stack overflow). Walk the target
+            // parent's ancestor chain — for the insert branch the parentage
+            // check below pins the anchor's parent to this same parent, so
+            // one walk covers both.
+            if parent_id == child_id {
                 return;
             }
-            let with_anchor = *anchor_id != 0;
-            if with_anchor && !node_is_live(doc, *anchor_id) {
-                return;
-            }
-            let parent = blitz_traits::NodeId::from_u64(*parent_id);
-            let nid = blitz_traits::NodeId::from_u64(*child_id);
-            if with_anchor {
-                // Reject a cycle: the anchor must not be the child itself nor
-                // sit inside the child's subtree.
-                let mut cur = blitz_traits::NodeId::from_u64(*anchor_id);
+            {
+                let mut cur = blitz_traits::NodeId::from_u64(*parent_id);
                 loop {
                     if cur.as_u64() == *child_id {
                         return;
@@ -999,6 +994,14 @@ fn apply_op(
                         None => break,
                     }
                 }
+            }
+            let with_anchor = *anchor_id != 0;
+            if with_anchor && !node_is_live(doc, *anchor_id) {
+                return;
+            }
+            let parent = blitz_traits::NodeId::from_u64(*parent_id);
+            let nid = blitz_traits::NodeId::from_u64(*child_id);
+            if with_anchor {
                 // The anchor's REAL parent must be the requested one; using
                 // the anchor's parent instead silently moved nodes into a
                 // different subtree (round-2 S2).
@@ -13505,6 +13508,17 @@ fn make_element_handle(
                     parent_id,
                     alloc_id: alloc,
                 });
+            } else if let (Some(parent_id), Some(child_id)) = (parent_id, read_handle_id(&child)) {
+                // A REAL tree node: DOM appendChild MOVES it under the new
+                // parent. Without this branch the call was mirror-only and
+                // the tree kept the old shape (L940 — `appendChild` of a
+                // parsed node was a total no-op). Anchor 0 = append at end;
+                // the apply arm relocates via append_children.
+                b.borrow_mut().ops.push(Op::InsertBefore {
+                    parent_id,
+                    child_id,
+                    anchor_id: 0,
+                });
             }
             // JS-level children tracking via insert_into_children (uses JsArray).
             if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
@@ -18532,5 +18546,92 @@ mod insert_before_guard_tests {
             .unwrap_or(usize::MAX);
         assert_eq!(list_kids, 1, "the mover must stay under its own parent");
         assert_eq!(other_kids, 1, "the anchor's tree must be untouched");
+    }
+}
+
+#[cfg(test)]
+mod append_child_relocate_tests {
+    //! L940 (PR #87 R4): the element `appendChild` pushed NO op for a REAL
+    //! tree node — only pending (createElement) and canvas children had ops.
+    //! `parent.appendChild(nodeFromAnotherParent)` was a TOTAL no-op: no
+    //! mirror move, no tree move.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn append_child_relocates_a_node_from_another_parent() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="mv">moving</li></ul><ul id="dst"><li id="k">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var mv = document.getElementById('mv');
+            document.getElementById('dst').appendChild(mv);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "src"),
+            Vec::<String>::new(),
+            "the source parent must lose the moved node"
+        );
+        assert_eq!(
+            kid_ids(&doc, "dst"),
+            vec!["k".to_string(), "mv".to_string()],
+            "the destination must gain it at the end (DOM appendChild moves)"
+        );
+    }
+
+    #[test]
+    fn appending_a_node_into_its_own_subtree_is_rejected() {
+        // `outer.appendChild(outer)` / appending an ancestor under its own
+        // descendant builds a parent cycle that aborts the NEXT bind with a
+        // stack overflow. Both shapes must be rejected and survive.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var outer = document.getElementById('outer');
+            var inner = document.getElementById('inner');
+            outer.appendChild(outer);   // self-append
+            inner.appendChild(outer);   // ancestor under own descendant
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // Reaching the next bind alive is the assertion — the cycle used to
+        // abort it.
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
+        assert!(true, "no cycle abort");
     }
 }
