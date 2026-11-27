@@ -20127,3 +20127,139 @@ mod replace_with_dom_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod listener_ghost_probes {
+    //! Behavioral probes for backlog-②: which listener shapes ghost today?
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    fn click(rt: &mut JsRuntime, doc: &mut HtmlDocument, id: &str) {
+        let nid = {
+            let hit = doc
+                .tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64());
+            match hit {
+                Some(v) => v,
+                None => return,
+            }
+        };
+        rt.fire_click(doc, nid);
+    }
+
+    /// add h1 + h2 on one node, remove h1 — only h2 must fire (multi-handler
+    /// + remove correctness in one probe).
+    #[test]
+    fn probe_remove_one_of_two() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h1 = function () { document.getElementById('out').setText('H1'); };
+            var h2 = function () { document.getElementById('out').setText('H2'); };
+            var b = document.getElementById('b');
+            b.addEventListener('click', h1);
+            b.addEventListener('click', h2);
+            b.removeEventListener('click', h1);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        let t = text_of(&doc, "out");
+        println!("PROBE remove_one_of_two out={t:?}");
+        assert_eq!(t, "H2", "removed h1 must not fire; h2 must; got {t:?}");
+    }
+
+    /// The same handler FUNCTION on two different nodes; removing it from
+    /// one node must not kill it on the other.
+    #[test]
+    fn probe_remove_is_per_node_not_global() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b1">1</button><button id="b2">2</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('FIRED'); };
+            document.getElementById('b1').addEventListener('click', h);
+            document.getElementById('b2').addEventListener('click', h);
+            document.getElementById('b1').removeEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b2");
+        let t = text_of(&doc, "out");
+        println!("PROBE per_node out={t:?}");
+        assert_eq!(t, "FIRED", "removing from b1 must not kill b2's listener");
+    }
+
+    /// Removing a handler that was never added must not kill anything.
+    #[test]
+    fn probe_remove_unknown_handler_is_harmless() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('FIRE'); };
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').removeEventListener('click', function () {});
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        let t = text_of(&doc, "out");
+        println!("PROBE unknown_remove out={t:?}");
+        assert_eq!(
+            t, "FIRE",
+            "identity mismatch must not remove the live listener"
+        );
+    }
+
+    /// remove then re-add in the same script — re-add must survive.
+    #[test]
+    fn probe_remove_then_readd_same_run() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('FIRE'); };
+            var b = document.getElementById('b');
+            b.addEventListener('click', h);
+            b.removeEventListener('click', h);
+            b.addEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        let t = text_of(&doc, "out");
+        println!("PROBE remove_readd out={t:?}");
+        assert_eq!(t, "FIRE", "re-added handler must fire; got {t:?}");
+    }
+}
