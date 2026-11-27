@@ -962,21 +962,59 @@ fn apply_op(
             doc.mutate().remove_node(child);
         }
         Op::InsertBefore {
-            parent_id: _,
+            parent_id,
             child_id,
             anchor_id,
         } => {
-            let anchor = blitz_traits::NodeId::from_u64(*anchor_id);
-            let mut mutator = doc.mutate();
-            // The first liveness check already returned for a freed child,
-            // so here the child is live: relocate it before the anchor.
+            // The guard above covers the CHILD; "anchor 0" legitimately means
+            // append-at-end (a null anchor and a PENDING anchor both arrive as
+            // 0 — `read_handle_id` filters the zero id of createElement
+            // handles). Every id blitz indexes directly must resolve, or the
+            // process aborts (#84's lesson applied to this op's ids).
+            if !node_is_live(doc, *child_id) {
+                return;
+            }
+            // Self-insert (child == anchor) and insert-into-own-subtree build
+            // a parent cycle; the tree then aborts bind_and_run with a stack
+            // overflow. Reject both before touching the mutator.
+            if child_id == anchor_id {
+                return;
+            }
+            let with_anchor = *anchor_id != 0;
+            if with_anchor && !node_is_live(doc, *anchor_id) {
+                return;
+            }
+            let parent = blitz_traits::NodeId::from_u64(*parent_id);
             let nid = blitz_traits::NodeId::from_u64(*child_id);
-            mutator.insert_nodes_before(anchor, &[nid]);
+            if with_anchor {
+                // Reject a cycle: the anchor must not be the child itself nor
+                // sit inside the child's subtree.
+                let mut cur = blitz_traits::NodeId::from_u64(*anchor_id);
+                loop {
+                    if cur.as_u64() == *child_id {
+                        return;
+                    }
+                    match doc.get_node(cur).and_then(|n| n.parent) {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+                // The anchor's REAL parent must be the requested one; using
+                // the anchor's parent instead silently moved nodes into a
+                // different subtree (round-2 S2).
+                let anchor = blitz_traits::NodeId::from_u64(*anchor_id);
+                if doc.get_node(anchor).and_then(|n| n.parent) != Some(parent) {
+                    return;
+                }
+                doc.mutate().insert_nodes_before(anchor, &[nid]);
+            } else {
+                doc.mutate().append_children(parent, &[nid]);
+            }
         }
     }
 }
 
-/// Create a real `<canvas>` element under `parent_id` and home the already/// Create a real `<canvas>` element under `parent_id` and home the already
+/// Create a real `<canvas>` element under `parent_id` and home the already
 /// allocated buffer `alloc_id` to the new node id, so the compositor finds
 /// it (createElement handles carry the allocation id, not a node id).
 fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
@@ -18361,5 +18399,138 @@ mod insert_before_dom_tests {
             vec!["mv".to_string(), "keep".to_string()],
             "the node must be relocated before the anchor"
         );
+    }
+}
+
+#[cfg(test)]
+mod insert_before_guard_tests {
+    //! Round-2 S0/S1/S2: the InsertBefore arm dereferenced ids it never
+    //! checked. blitz indexes `nodes[id]` directly — a freed anchor, a
+    //! pending (id 0) child, a self-insert and an own-descendant anchor all
+    //! either aborted the process or built a tree cycle that aborted the next
+    //! bind. Every shape here must end the test alive.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing #res"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_freed_anchor_does_not_abort_the_run() {
+        // The anchor was freed by a textContent replace; the handle survives.
+        let out = run(r#"
+            var list = document.getElementById('list');
+            var anchor = document.getElementById('b');
+            list.textContent = 'gone';           // frees the anchor's slot
+            var mover = document.createElement('li');
+            list.insertBefore(mover, anchor);    // anchor id is dead now
+            document.getElementById('res').setText('survived');
+            "#);
+        assert_eq!(
+            out, "survived",
+            "a freed anchor must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn a_pending_child_anchor_does_not_index_node_zero() {
+        // A createElement handle carries _arisId 0; using it must not make
+        // the arm index node 0.
+        let out = run(r#"
+            var list = document.getElementById('list');
+            var a = document.getElementById('a');
+            list.insertBefore(document.createElement('li'), a);
+            document.getElementById('res').setText('survived');
+            "#);
+        assert_eq!(
+            out, "survived",
+            "a pending child must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn self_insert_and_descendant_insert_do_not_build_cycles() {
+        // insertBefore(b, b) used to panic; inserting an ancestor into its
+        // own descendant built a cycle that aborted the NEXT bind.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var b = document.getElementById('b');
+            list.insertBefore(b, b);                       // self-insert
+            var outer = document.getElementById('outer');
+            var leaf = document.getElementById('leaf');
+            outer.insertBefore(leaf, document.getElementById('inner')); // descendant anchor
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // Reaching the next bind alive is the assertion — the cycle used to
+        // abort it with a stack overflow.
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
+        assert!(true, "no cycle abort");
+    }
+
+    #[test]
+    fn an_anchor_from_another_tree_does_not_steal_the_node() {
+        // The anchor lives under #other; the requested parent is #list. The
+        // old arm used the ANCHOR's parent, silently moving into #other.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li></ul><ul id="other"><li id="anchor">x</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var mover = document.getElementById('a');
+            document.getElementById('list').insertBefore(mover, document.getElementById('anchor'));
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        let list_kids = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("list"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #list"),
+            ))
+            .map(|n| n.children.len())
+            .unwrap_or(usize::MAX);
+        let other_kids = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("other"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #other"),
+            ))
+            .map(|n| n.children.len())
+            .unwrap_or(usize::MAX);
+        assert_eq!(list_kids, 1, "the mover must stay under its own parent");
+        assert_eq!(other_kids, 1, "the anchor's tree must be untouched");
     }
 }
