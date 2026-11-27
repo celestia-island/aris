@@ -14464,22 +14464,40 @@ fn make_element_handle(
                     .ok()
                     .and_then(|v| v.as_object());
                 if let Some(parent_obj) = parent {
-                    // Real tree node batch: one op replaces the ref in the tree
-                    // (mirror-only left the tree unchanged — same family as
-                    // before/after, PR #90 R5).
+                    // Real tree node batch: one op replaces the ref in the
+                    // tree (mirror-only left the tree unchanged — same family
+                    // as before/after, PR #90 R5).
+                    //
+                    // A PENDING (createElement) argument has no tree node and
+                    // no id — it can only reach the mirror today. Pushing the
+                    // op with the pending arg dropped would DELETE the ref and
+                    // land nothing (round-5 S2: `ref.replaceWith(createElement(
+                    // ...))` lost the whole swap, where master at least kept
+                    // the ref). So a batch containing a pending arg is not
+                    // pushed at all: the tree stays untouched (master's
+                    // contract) instead of being half-applied. Materializing
+                    // pending args is a family-wide follow-up (before/after/
+                    // append/prepend/insertBefore share the same gap).
                     let mut batch: Vec<u64> = Vec::new();
+                    let mut has_pending = false;
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
+                            } else if read_pending(&node).is_some()
+                                || read_canvas_alloc(&node).is_some()
+                            {
+                                has_pending = true;
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
                     }
                     // Remove this node from the mirror too.
                     remove_from_children(&parent_obj, &obj, ctx);
-                    if let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone())) {
+                    if !has_pending
+                        && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
+                    {
                         b.borrow_mut().ops.push(Op::ReplaceWith {
                             ref_id,
                             child_ids: batch,
@@ -19590,6 +19608,55 @@ mod replace_with_dom_tests {
             .map(|n| n.text_content())
             .unwrap_or_default();
         assert_eq!(res, "survived");
+    }
+
+    #[test]
+    fn replace_with_a_pending_arg_leaves_the_ref_alive() {
+        // Round-5 S2: a createElement argument has no tree node, so pushing
+        // the op would DELETE the ref and land nothing (master at least kept
+        // the ref). A batch containing a pending arg must not be pushed —
+        // the tree stays untouched.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('span');
+            made.setText('MADE');
+            document.getElementById('old').replaceWith(made);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string(), "keep".to_string()],
+            "a pending-arg replaceWith must leave the tree untouched (ref alive)"
+        );
+        // The canonical idiom works once the element has been materialized:
+        // appendChild materializes it, then replaceWith relocates it.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('span');
+            made.setText('MADE');
+            document.getElementById('l').appendChild(made);
+            "#,
+        );
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var l = document.getElementById('l');
+            var made = l.lastChild;
+            document.getElementById('old').replaceWith(made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert!(
+            !kids.contains(&"old".to_string()),
+            "after materialization the swap must succeed; got {kids:?}"
+        );
     }
 
     #[test]
