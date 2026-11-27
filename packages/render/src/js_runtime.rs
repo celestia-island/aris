@@ -229,6 +229,11 @@ enum Op {
         child_id: u64,
         /// Id of the node to insert before; 0 = append at the end.
         anchor_id: u64,
+        /// `Some(pid)` when the child is a createElement argument that must
+        /// be materialized first (the append/before/after family learned
+        /// this in #90/#92; insertBefore / append / prepend were still
+        /// dropping it — L940 pending family). `None` = live `child_id`.
+        pending_id: Option<u32>,
     },
     /// `ref.before(child)` / `ref.after(child)` on real tree nodes —
     /// sibling-positioning inserts whose target parent is derived from the
@@ -1047,56 +1052,86 @@ fn apply_op(
             parent_id,
             child_id,
             anchor_id,
+            pending_id,
         } => {
-            // The guard above covers the CHILD; "anchor 0" legitimately means
-            // append-at-end (a null anchor and a PENDING anchor both arrive as
-            // 0 — `read_handle_id` filters the zero id of createElement
-            // handles). Every id blitz indexes directly must resolve, or the
-            // process aborts (#84's lesson applied to this op's ids).
-            if !node_is_live(doc, *child_id) {
-                return;
-            }
-            // Self-insert and insert/appending a node into its OWN subtree
-            // build a parent cycle (blitz accepts it silently; the tree then
-            // aborts bind_and_run with a stack overflow). Walk the target
-            // parent's ancestor chain — for the insert branch the parentage
-            // check below pins the anchor's parent to this same parent, so
-            // one walk covers both.
-            if parent_id == child_id {
-                return;
-            }
-            {
-                let mut cur = blitz_traits::NodeId::from_u64(*parent_id);
-                loop {
-                    if cur.as_u64() == *child_id {
-                        return;
-                    }
-                    match doc.get_node(cur).and_then(|n| n.parent) {
-                        Some(p) => cur = p,
-                        None => break,
-                    }
+            // THREE PHASES, in the file's own doctrine order (round-5 S1:
+            // `create_and_append` ATTACHES the node as a side effect, so a
+            // guard rejection AFTER materialization left the node silently
+            // appended — where pre-PR the op dropped cleanly; :1153/:1268:
+            // "guards FIRST, then materialize").
+            //
+            // PHASE 1 — guards that must reject BEFORE anything is created.
+            // The anchor must be live and a real child of the target parent;
+            // a foreign anchor is a rejection (the DOM throws; we drop the
+            // op — recorded as an L940 S3 divergence).
+            if *anchor_id != 0 {
+                if !node_is_live(doc, *anchor_id) {
+                    return;
                 }
-            }
-            let with_anchor = *anchor_id != 0;
-            if with_anchor && !node_is_live(doc, *anchor_id) {
-                return;
-            }
-            let parent = blitz_traits::NodeId::from_u64(*parent_id);
-            let nid = blitz_traits::NodeId::from_u64(*child_id);
-            if with_anchor {
-                // The anchor's REAL parent must be the requested one; using
-                // the anchor's parent instead silently moved nodes into a
-                // different subtree (round-2 S2).
                 let anchor = blitz_traits::NodeId::from_u64(*anchor_id);
+                let parent = blitz_traits::NodeId::from_u64(*parent_id);
                 if doc.get_node(anchor).and_then(|n| n.parent) != Some(parent) {
                     return;
                 }
+            }
+            // Live-child-only guards (a pending child materializes as a NEW
+            // id, so self-insert / own-subtree shapes cannot arise for it).
+            if pending_id.is_none() {
+                if !node_is_live(doc, *child_id) {
+                    return;
+                }
+                if parent_id == child_id {
+                    return;
+                }
+                {
+                    let mut cur = blitz_traits::NodeId::from_u64(*parent_id);
+                    loop {
+                        if cur.as_u64() == *child_id {
+                            return;
+                        }
+                        match doc.get_node(cur).and_then(|n| n.parent) {
+                            Some(p) => cur = p,
+                            None => break,
+                        }
+                    }
+                }
+            }
+            //
+            // PHASE 2 — materialize (move-not-clone via the materialized
+            // map: an earlier op in this drain may already have landed the
+            // same handle). Shadow the &u64 binding with a local u64 so the
+            // whole arm reads uniformly. NOTE: pid 0 is a VALID pending id
+            // (next_pending starts at 0), hence Option not a 0-sentinel.
+            let child_id: u64 = if let Some(pid) = pending_id {
+                if let Some(existing) = materialized.get(pid) {
+                    // Move-not-clone: reuse the earlier materialization.
+                    *existing
+                } else if let Some((tag, text, attrs)) = pending.get(pid) {
+                    let new_id = create_and_append(doc, *parent_id, tag, text, attrs);
+                    record(*pid, new_id);
+                    // Created at the END of parent; the positional insert in
+                    // phase 3 then relocates it before the anchor (a no-op
+                    // when the anchor is 0).
+                    new_id
+                } else {
+                    return; // unknown pending id: nothing to insert
+                }
+            } else {
+                *child_id
+            };
+            let nid = blitz_traits::NodeId::from_u64(child_id);
+            //
+            // PHASE 3 — insert ("anchor 0" legitimately means append-at-end;
+            // a null anchor and a PENDING anchor both arrive as 0).
+            let with_anchor = *anchor_id != 0;
+            if with_anchor {
+                let anchor = blitz_traits::NodeId::from_u64(*anchor_id);
                 // DOM no-ops: inserting a node before ITSELF, or before its
                 // own next sibling (already in the requested position), must
                 // not reach blitz — `insert_nodes_before` detaches the child
                 // first and then `index_of_child(anchor)` panics on the
                 // severed anchor (PR #89 round-2 S0: `prepend(firstChild)`).
-                if child_id == anchor_id {
+                if child_id == *anchor_id {
                     return;
                 }
                 let already_in_position = doc
@@ -1113,7 +1148,8 @@ fn apply_op(
                 }
                 doc.mutate().insert_nodes_before(anchor, &[nid]);
             } else {
-                doc.mutate().append_children(parent, &[nid]);
+                doc.mutate()
+                    .append_children(blitz_traits::NodeId::from_u64(*parent_id), &[nid][..]);
             }
         }
         Op::InsertAdjacent {
@@ -13949,6 +13985,7 @@ fn make_element_handle(
                     parent_id,
                     child_id,
                     anchor_id: 0,
+                    pending_id: None,
                 });
             }
             // JS-level children tracking via insert_into_children (uses JsArray).
@@ -14064,13 +14101,25 @@ fn make_element_handle(
                 // of relocating it (L940, PR #86 R2). Anchor 0 = append at end
                 // (the apply arm then behaves like AppendChild).
                 if let Some(parent_id) = read_handle_id(&JsValue::from(parent_obj.clone())) {
-                    let child_id = read_handle_id(&child).unwrap_or(0);
                     let anchor_id = read_handle_id(&ref_node).unwrap_or(0);
-                    b.borrow_mut().ops.push(Op::InsertBefore {
-                        parent_id,
-                        child_id,
-                        anchor_id,
-                    });
+                    if let Some(child_pending) = read_pending(&child) {
+                        // createElement argument: the op arm materializes it
+                        // (move-not-clone with the rest of the family).
+                        b.borrow_mut().ops.push(Op::InsertBefore {
+                            parent_id,
+                            child_id: 0,
+                            anchor_id,
+                            pending_id: Some(child_pending),
+                        });
+                    } else {
+                        let child_id = read_handle_id(&child).unwrap_or(0);
+                        b.borrow_mut().ops.push(Op::InsertBefore {
+                            parent_id,
+                            child_id,
+                            anchor_id,
+                            pending_id: None,
+                        });
+                    }
                 }
             }
             Ok(child)
@@ -14512,11 +14561,21 @@ fn make_element_handle(
                     if let Some(child_obj) = node.as_object() {
                         // Real tree node: DOM append() MOVES it to the end, same
                         // as appendChild (#88). Mirror-only left the tree stale.
-                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                        if let Some(child_pending) = read_pending(&node) {
+                            if let Some(pid) = parent_id {
+                                b.borrow_mut().ops.push(Op::InsertBefore {
+                                    parent_id: pid,
+                                    child_id: 0,
+                                    anchor_id: 0,
+                                    pending_id: Some(child_pending),
+                                });
+                            }
+                        } else if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
                             b.borrow_mut().ops.push(Op::InsertBefore {
                                 parent_id: pid,
                                 child_id: cid,
                                 anchor_id: 0,
+                                pending_id: None,
                             });
                         }
                         insert_into_children(&parent_obj, &child_obj, None, ctx);
@@ -14561,7 +14620,16 @@ fn make_element_handle(
                 for arg in args.iter() {
                     let node = value_to_node(arg, ctx);
                     if let Some(child_obj) = node.as_object() {
-                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                        if let Some(child_pending) = read_pending(&node) {
+                            if let Some(pid) = parent_id {
+                                b.borrow_mut().ops.push(Op::InsertBefore {
+                                    parent_id: pid,
+                                    child_id: 0,
+                                    anchor_id,
+                                    pending_id: Some(child_pending),
+                                });
+                            }
+                        } else if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
                             if cid == anchor_id {
                                 // Prepending the current first child is a
                                 // DOM no-op: neither the tree nor the mirror
@@ -14574,6 +14642,7 @@ fn make_element_handle(
                                 parent_id: pid,
                                 child_id: cid,
                                 anchor_id,
+                                pending_id: None,
                             });
                         }
                         insert_into_children(&parent_obj, &child_obj, first_child.clone(), ctx);
@@ -20814,6 +20883,206 @@ mod canvas_getcontext_tests {
             out.as_deref(),
             Some("null"),
             "unsupported context kind must return null"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pending_family_landing_tests {
+    //! The write-API family must LAND a createElement (pending)
+    //! argument: before/after landed it (#90), replaceWith landed it
+    //! (#92), but insertBefore/append/prepend still dropped it (L940
+    //! pending family — fixed here).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_tags(doc: &HtmlDocument, parent: &str) -> Vec<String> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(parent))
+            .map(|(i, _)| {
+                doc.get_node(i)
+                    .map(|n| {
+                        n.children
+                            .iter()
+                            .filter_map(|&c| doc.get_node(c))
+                            .map(|cn| match cn.element_data() {
+                                Some(el) => el.name.local.to_string(),
+                                None => cn.text_content(),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn every_write_api_lands_a_pending_createelement_arg() {
+        // insertBefore / before / after / append / prepend with a pending
+        // createElement argument must all LAND it (insertBefore / append /
+        // prepend dropped it until this fix — the L940 pending family).
+        let cases: &[(&str, &str, &[&str])] = &[
+            (
+                "insertBefore",
+                "list.insertBefore(made, first);",
+                &["em", "li"],
+            ),
+            ("before", "first.before(made);", &["em", "li"]),
+            ("after", "first.after(made);", &["li", "em"]),
+            ("append", "list.append(made);", &["li", "em"]),
+            ("prepend", "list.prepend(made);", &["em", "li"]),
+        ];
+        for (name, call, expected) in cases {
+            let mut doc = HtmlDocument::from_html(
+                r#"<html><body><ul id="list"><li id="first">a</li></ul></body></html>"#,
+                DocumentConfig::default(),
+            );
+            let mut rt = JsRuntime::new();
+            let script = format!(
+                r#"
+                var list = document.getElementById('list');
+                var first = document.getElementById('first');
+                var made = document.createElement('em');
+                made.setText('M');
+                {call}
+                "#
+            );
+            rt.bind_and_run(&mut doc, &script);
+            let tags = kid_tags(&doc, "list");
+            assert_eq!(
+                &tags, expected,
+                "{name} must land the pending arg in DOM order"
+            );
+            assert!(
+                text_of(&doc, "list").contains('M'),
+                "{name} must carry the pending arg's text"
+            );
+        }
+        let _ = NodeId::from_u64(0);
+    }
+
+    /// Move-not-clone across the family: the same createElement handle
+    /// written through TWO different APIs must render exactly ONE element,
+    /// in the LAST-write position. Round-2 S2: the append→insertBefore
+    /// ordering is the ONLY one that discriminates a dropped first write
+    /// (append lands the node regardless, masking an insertBefore drop), so
+    /// this test uses append→insertBefore and asserts the first API's
+    /// landing position in an intermediate window before the second write.
+    #[test]
+    fn pending_handle_across_two_apis_moves_not_clones() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="first">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        // Window 1: append lands the node at the TAIL.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var made = document.createElement('em');
+            made.setText('M');
+            list.append(made);
+            "#,
+        );
+        assert_eq!(
+            kid_tags(&doc, "list"),
+            ["li", "li", "em"],
+            "the first write (append) must land the node at the tail"
+        );
+        // Window 2: insertBefore(first) must MOVE it to the head — exactly
+        // one <em>, not a clone.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var first = document.getElementById('first');
+            list.insertBefore(made, first);
+            "#,
+        );
+        assert_eq!(
+            kid_tags(&doc, "list"),
+            ["em", "li", "li"],
+            "the second write (insertBefore) must MOVE the node to the head, not clone it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pending_guard_order_tests {
+    //! Round-5 S1: the pending arm originally materialized BEFORE the
+    //! anchor-parent guard — `create_and_append` attaches as a side effect,
+    //! so a guard-REJECTED insertBefore silently appended the node (tree
+    //! mutated where pre-PR the op dropped cleanly). The three-phase
+    //! restructure (guards → materialize → insert) restores the drop.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn kid_tags(doc: &HtmlDocument, parent: &str) -> Vec<String> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(parent))
+            .map(|(i, _)| {
+                doc.get_node(i)
+                    .map(|n| {
+                        n.children
+                            .iter()
+                            .filter_map(|&c| doc.get_node(c))
+                            .map(|cn| match cn.element_data() {
+                                Some(el) => el.name.local.to_string(),
+                                None => cn.text_content(),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Foreign anchor (lives under #other) + EMPTY parent: the op must be
+    /// dropped — nothing may land in #list. Under the pre-fix ordering the
+    /// node was appended first and left behind (["em"]).
+    #[test]
+    fn rejected_foreign_anchor_leaves_the_tree_untouched() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"></ul><div id="other"><span id="far">f</span></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var far = document.getElementById('far');
+            var made = document.createElement('em');
+            made.setText('M');
+            list.insertBefore(made, far);
+            "#,
+        );
+        assert_eq!(
+            kid_tags(&doc, "list"),
+            Vec::<String>::new(),
+            "a guard-rejected insertBefore must not mutate the tree"
+        );
+        assert_eq!(
+            kid_tags(&doc, "other"),
+            ["span"],
+            "#other must be untouched"
         );
     }
 }
