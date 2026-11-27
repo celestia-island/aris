@@ -14123,11 +14123,20 @@ fn make_element_handle(
                         .ok()
                         .and_then(|v| v.as_number())
                         .unwrap_or(0.0) as u32;
+                    // Identity first, then `_arisId` (same fallback as
+                    // remove_from_children, round-5 note): the mirror is
+                    // seeded with anonymous entries, so identity alone never
+                    // matches a caller's handle.
+                    let child_rid = read_handle_id(&child);
                     (0..len).any(|i| {
                         arr.get(i as u32, ctx)
                             .ok()
-                            .and_then(|v| v.as_object())
-                            .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
+                            .map(|v| {
+                                v.as_object()
+                                    .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
+                                    .unwrap_or(false)
+                                    || child_rid.is_some_and(|rid| read_handle_id(&v) == Some(rid))
+                            })
                             .unwrap_or(false)
                     })
                 })
@@ -21487,6 +21496,50 @@ mod replace_child_op_tests {
         );
         assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
         assert_eq!(kids(&doc, "other"), ["F"], "#other must be untouched");
+    }
+
+    /// Round-5: the insert-side `_arisId` fallback IS observable — the
+    /// mirror must place the inserted node BEFORE its anchor rather than
+    /// appending it. Uses a LIVE node (a pending createElement carries
+    /// `_arisId` 0, which makes the appended and inserted shapes identical
+    /// and the test vacuous).
+    #[test]
+    fn insert_before_keeps_the_mirror_in_tree_order() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="b">B</span><span id="c">C</span></div><div id="free">F</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var b = document.getElementById('b');
+            var free = document.getElementById('free');
+            var bId = b._arisId, freeId = free._arisId;
+            var cId = document.getElementById('c')._arisId;
+            host.insertBefore(free, b);
+            var seq = [];
+            for (var i = 0; i < host._children.length; i++) {
+                seq.push(host._children[i]._arisId);
+            }
+            // Report the mirror order as ids relative to b/free so the
+            // assertion does not hard-code blitz slot numbers.
+            document.getElementById('out').setText(
+                seq.map(function (x) {
+                    return x === bId ? 'b'
+                         : x === freeId ? 'free'
+                         : x === cId ? 'c'
+                         : String(x);
+                }).join(',')
+            );
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "free,b,c",
+            "the mirror must show the inserted node BEFORE its anchor, not appended"
+        );
     }
 
     /// Round-4 S1: the `_children` mirror is seeded with ANONYMOUS entries
