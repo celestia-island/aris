@@ -1944,6 +1944,24 @@ fn populate_props(
         boa_engine::js_string!("childNodes"),
         pd(child_arr.clone().into()),
     );
+    // SEED the `_children` mirror from the SAME tree snapshot (round-3 S1 of
+    // PR #100): the mirror used to exist only after a mirror write, so
+    // `replaceChild`'s membership guard — which reads it — fell through to
+    // the bind-time `node_props.child_ids` snapshot on every fresh handle.
+    // It must be a REAL JsArray (get_or_create_children does
+    // `JsArray::from_object` and falls back to an EMPTY array for a plain
+    // object), so it is built with new_array + push, not by sharing the
+    // childNodes object.
+    {
+        let mirror = new_array(ctx);
+        for &cid in &s.child_ids {
+            let child_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = child_obj
+                .insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(cid)));
+            let _ = mirror.push(JsValue::from(child_obj), ctx);
+        }
+        let _ = obj.insert_property(boa_engine::js_string!("_children"), pd(mirror.into()));
+    }
     // children / childElementCount count ELEMENT children only — using the
     // total child count would report text nodes as elements (round-2 S2).
     let elem_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -14280,15 +14298,12 @@ fn make_element_handle(
                                         .unwrap_or(false)
                                 })
                             }
-                            // No mirror at all: fall back to the tree via the
-                            // snapshot so a genuinely absent oldChild is
-                            // still rejected in the common single-call case.
-                            None => b
-                                .borrow()
-                                .node_props
-                                .get(&tid)
-                                .map(|snap| snap.child_ids.contains(&rid))
-                                .unwrap_or(false),
+                            // No mirror means populate_props never seeded it
+                            // — treat as "cannot verify" and reject, rather
+                            // than falling back to the BIND-TIME snapshot
+                            // (round-3 S1: the fallback made the mirror path
+                            // dead code and hid its staleness).
+                            None => false,
                         };
                         if !old_is_child {
                             return Err(boa_engine::JsNativeError::typ()
@@ -21429,9 +21444,16 @@ mod replace_child_op_tests {
             var far = document.getElementById('far');
             var made = document.createElement('em');
             made.setText('M');
+            var r = 'no-throw';
             try { host.replaceChild(made, far); }
-            catch (e) { /* documented divergence: DOM would throw NotFoundError */ }
+            catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
             "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "threw",
+            "a non-child must be rejected (NotFoundError)"
         );
         assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
         assert_eq!(kids(&doc, "other"), ["F"], "#other must be untouched");
