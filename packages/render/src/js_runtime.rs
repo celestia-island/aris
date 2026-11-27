@@ -412,7 +412,7 @@ impl JsRuntime {
                         boa_engine::object::JsObject::with_object_proto(self.ctx.intrinsics())
                     });
             if let Some(snap) = self.bridge.borrow().node_props.get(&node_id).cloned() {
-                populate_props(&handle, &snap, &mut self.ctx);
+                populate_props(&handle, &snap, Gc::clone(&self.bridge), &mut self.ctx);
             }
             let wrapped = format!("(function(){{ {src}\n}}).call(__aris_this);");
             let _ = self.ctx.global_object().insert_property(
@@ -486,7 +486,7 @@ impl JsRuntime {
             // make_element_handle leaves `id` / `tagName` / `textContent`
             // empty, so a handler branching on `this.id` silently saw "".
             if let Some(snap) = self.bridge.borrow().node_props.get(&this_node).cloned() {
-                populate_props(&this, &snap, &mut self.ctx);
+                populate_props(&this, &snap, Gc::clone(&self.bridge), &mut self.ctx);
             }
             let key = boa_engine::js_string!(name.clone());
             let func_val = match self.ctx.global_object().get(key.clone(), &mut self.ctx) {
@@ -894,7 +894,7 @@ impl JsRuntime {
                 make_element_handle(ctx, Gc::clone(&bridge), nid, None).unwrap_or_else(|_| {
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics())
                 });
-            populate_props(&handle, snap, ctx);
+            populate_props(&handle, snap, Gc::clone(&bridge), ctx);
             // Set prototype so instanceof works (e.g. body instanceof HTMLBodyElement).
             set_element_prototype(&handle, &snap.tag_name, ctx);
             handle.into()
@@ -1764,7 +1764,12 @@ fn arg_to_string(args: &[JsValue], idx: usize, ctx: &mut Context) -> String {
 }
 
 /// Populate a JS element handle with real properties from a node snapshot.
-fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
+fn populate_props(
+    obj: &JsObject,
+    s: &NodePropSnapshot,
+    bridge: Gc<GcRefCell<Bridge>>,
+    ctx: &mut Context,
+) {
     // Determine if parent is body/html/documentElement by checking document properties.
     let parent_is_body = {
         let doc_val = ctx
@@ -2001,23 +2006,64 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
             .get(boa_engine::js_string!("document"), ctx)
             .ok();
         let doc_obj = doc_val.as_ref().and_then(|v| v.as_object());
+        // Build a REAL element handle for the parent rather than a bare
+        // `{_arisId}` stub: `el.parentNode.removeChild(el)` and friends threw
+        // `TypeError: not a function` because the stub carried no DOM method
+        // surface (L940: recorded across #85 R3 / #90 R9 / #93 R9 — it also
+        // blocked the before/after materialization wiring). make_element_handle
+        // installs the full surface; its own parentNode population is bounded
+        // because a parent snapshot either has parent_id 0 or resolves to a
+        // body/html handle, so the chain terminates at the document.
+        // Populate the real parent handle's own props (id / tagName /
+        // textContent) from the bridge snapshot: make_element_handle leaves
+        // them empty, and a page branching on `el.parentNode.id` saw "".
+        let populate_parent = |handle: JsValue, ctx: &mut Context| -> JsValue {
+            if let Some(h) = handle.as_object() {
+                let snap = bridge.borrow().node_props.get(&s.parent_id).cloned();
+                if let Some(snap) = snap {
+                    populate_props(&h, &snap, Gc::clone(&bridge), ctx);
+                }
+            }
+            handle
+        };
         let parent_val = if parent_tag == "body" {
             doc_obj
                 .and_then(|d| d.get(boa_engine::js_string!("body"), ctx).ok())
                 .filter(|v| !v.is_null() && !v.is_undefined())
                 .unwrap_or_else(|| {
-                    let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-                    let _ = pn.insert_property(
-                        boa_engine::js_string!("_arisId"),
-                        pd(JsValue::from(s.parent_id)),
-                    );
-                    JsValue::from(pn)
+                    make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
+                        .map(|h| populate_parent(JsValue::from(h), ctx))
+                        .unwrap_or_else(|_| {
+                            let pn =
+                                boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                            let _ = pn.insert_property(
+                                boa_engine::js_string!("_arisId"),
+                                pd(JsValue::from(s.parent_id)),
+                            );
+                            JsValue::from(pn)
+                        })
                 })
         } else if parent_tag == "html" {
             doc_obj
                 .and_then(|d| d.get(boa_engine::js_string!("documentElement"), ctx).ok())
                 .filter(|v| !v.is_null() && !v.is_undefined())
                 .unwrap_or_else(|| {
+                    make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
+                        .map(|h| populate_parent(JsValue::from(h), ctx))
+                        .unwrap_or_else(|_| {
+                            let pn =
+                                boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                            let _ = pn.insert_property(
+                                boa_engine::js_string!("_arisId"),
+                                pd(JsValue::from(s.parent_id)),
+                            );
+                            JsValue::from(pn)
+                        })
+                })
+        } else {
+            make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
+                .map(|h| populate_parent(JsValue::from(h), ctx))
+                .unwrap_or_else(|_| {
                     let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                     let _ = pn.insert_property(
                         boa_engine::js_string!("_arisId"),
@@ -2025,13 +2071,6 @@ fn populate_props(obj: &JsObject, s: &NodePropSnapshot, ctx: &mut Context) {
                     );
                     JsValue::from(pn)
                 })
-        } else {
-            let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
-            let _ = pn.insert_property(
-                boa_engine::js_string!("_arisId"),
-                pd(JsValue::from(s.parent_id)),
-            );
-            JsValue::from(pn)
         };
         let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(parent_val.clone()));
         let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(parent_val));
@@ -9834,7 +9873,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 let snap = b.borrow().node_props.get(&nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                 }
                 Ok(handle.into())
             } else {
@@ -11239,7 +11278,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 let snap = b.borrow().node_props.get(&nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                 }
                 Ok(handle.into())
             } else {
@@ -11276,7 +11315,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 let snap = b.borrow().node_props.get(nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                     set_element_prototype(&handle, &s.tag_name, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
@@ -11339,7 +11378,7 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 let snap = b.borrow().node_props.get(nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                     set_element_prototype(&handle, &s.tag_name, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
@@ -15039,7 +15078,7 @@ fn make_element_handle(
                 let snap = b.borrow().node_props.get(nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                     set_element_prototype(&handle, &s.tag_name, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
@@ -15136,7 +15175,7 @@ fn make_element_handle(
                 let snap = b.borrow().node_props.get(nid).cloned();
                 let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
                 if let Some(s) = snap {
-                    populate_props(&handle, &s, ctx);
+                    populate_props(&handle, &s, Gc::clone(b), ctx);
                     set_element_prototype(&handle, &s.tag_name, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
@@ -21083,6 +21122,103 @@ mod pending_guard_order_tests {
             kid_tags(&doc, "other"),
             ["span"],
             "#other must be untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parent_node_handle_tests {
+    //! L940 (recorded across #85 R3 / #90 R9 / #93 R9): `parentNode` was a
+    //! bare `{_arisId}` stub with no DOM method surface, so
+    //! `el.parentNode.removeChild(el)` threw `TypeError: not a function`.
+    //! The parent now resolves to a real element handle.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    #[test]
+    fn parent_node_exposes_dom_methods() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="kid">k</span></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var kid = document.getElementById('kid');
+            var pn = kid.parentNode;
+            var report =
+                'removeChild=' + (typeof pn.removeChild) +
+                ' appendChild=' + (typeof pn.appendChild) +
+                ' insertBefore=' + (typeof pn.insertBefore) +
+                ' id=' + pn.id;
+            document.getElementById('out').setText(report);
+            "#,
+        );
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default();
+        assert_eq!(
+            out, "removeChild=function appendChild=function insertBefore=function id=host",
+            "parentNode must be a real handle: DOM methods present and id populated"
+        );
+    }
+
+    /// The exact shape from L940 that used to throw.
+    #[test]
+    fn parent_node_remove_child_detaches_the_child() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="kid">k</span></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var kid = document.getElementById('kid');
+            var ok = 'threw';
+            try { kid.parentNode.removeChild(kid); ok = 'removed'; }
+            catch (e) { ok = 'threw:' + e; }
+            document.getElementById('out').setText(ok);
+            "#,
+        );
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default();
+        assert_eq!(
+            out, "removed",
+            "el.parentNode.removeChild(el) must not throw (L940)"
+        );
+        // And the tree really dropped the child.
+        let host_kids: Vec<String> = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("host"))
+            .map(|(i, _)| {
+                doc.get_node(i)
+                    .map(|n| {
+                        n.children
+                            .iter()
+                            .filter_map(|&c| doc.get_node(c))
+                            .map(|cn| cn.text_content())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        assert!(
+            host_kids.is_empty(),
+            "the child must leave the tree; got {host_kids:?}"
         );
     }
 }
