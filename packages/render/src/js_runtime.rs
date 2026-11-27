@@ -2115,22 +2115,6 @@ fn populate_props(
     }
 }
 
-/// Resolve a mirror entry into a REAL element handle. The `_children`
-/// mirror is seeded with anonymous `{_arisId}` stubs, so handing one back to
-/// the page would give it an object with no DOM methods (the same class of
-/// defect as the `parentNode` bare stub fixed in #99). Falls back to the raw
-/// entry when it carries no usable id or construction fails.
-fn resolve_sibling_handle(
-    entry: JsValue,
-    bridge: &Gc<GcRefCell<Bridge>>,
-    ctx: &mut Context,
-) -> JsValue {
-    let Some(nid) = read_handle_id(&entry) else {
-        return entry;
-    };
-    walk_handle(nid, bridge, ctx).unwrap_or(entry)
-}
-
 /// Build (or reuse) a handle suitable for SIBLING WALKS.
 ///
 /// Deliberately NOT `make_element_handle` + `populate_props`: populate_props
