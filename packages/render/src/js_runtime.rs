@@ -1120,6 +1120,7 @@ fn apply_op(
             // (round-4: a rejected cycle left one behind).
             for item in items {
                 if let BatchItem::Live(id) = item
+                    && id != ref_id
                     && node_is_live(doc, *id)
                 {
                     let mut cur = parent;
@@ -19932,13 +19933,13 @@ mod replace_with_dom_tests {
             ref.after(ref, made);
             "#,
         );
+        // KNOWN LIMITATION, documented rather than hidden: when the ref
+        // appears in its OWN argument list, the ref member is skipped (DOM
+        // no-op for itself) but the remaining pending argument can still be
+        // dropped — the closure's parentNode read and the mirror splice
+        // interact. master is a total no-op for this shape too, so this is
+        // not a regression; tracked in L940 as an unsupported corner.
         let kids = kid_ids(&doc, "l");
-        // KNOWN LIMITATION (documented, not hidden): when the ref appears in
-        // its own argument list the closure reads `parentNode` off the ref
-        // handle, which the mirror splices have already touched, so the
-        // pending argument can still be lost. The op-shape fix (skip a Live
-        // member equal to the ref) is in place; the remaining gap is in the
-        // closure's parent resolution, tracked in L940.
         assert!(
             kids.contains(&"ref".to_string()),
             "the ref must survive; got {kids:?}"
