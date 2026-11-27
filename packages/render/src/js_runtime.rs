@@ -116,6 +116,26 @@ struct Bridge {
     /// materialized. A second write through the SAME handle must MOVE that
     /// node, not create another copy (round-2 S2: node-leak amplification).
     materialized_pending: HashMap<u32, u64>,
+    /// node_id -> THE element handle for this node, used by
+    /// **`getElementById` ONLY**.
+    ///
+    /// That lookup used to build a FRESH object on every call, so per-handle
+    /// state (`_js_listeners`) was invisible to a later fetch:
+    /// `getElementById('el').addEventListener(...)` then
+    /// `getElementById('el').dispatchEvent(...)` registered and dispatched
+    /// against different objects and never fired (L940, PR #103 R3).
+    ///
+    /// STILL NOT CACHED, so each keeps minting a fresh handle and its
+    /// listeners stay invisible across fetches: `querySelector`,
+    /// `getElementsByTagName`, `getElementsByClassName`. `document.body` is
+    /// also a DIFFERENT object from `getElementById(<body id>)`.
+    ///
+    /// The cached handle is re-populated on every hit, which keeps
+    /// SNAPSHOT-backed properties (`textContent`, `tagName`, `nodeType`, ...)
+    /// in step. It does NOT refresh `childNodes` / `children` / `className`:
+    /// `node_props` is built once per bind and never updated for structural or
+    /// attribute mutations, so those read stale on a fresh handle too.
+    element_handle_cache: HashMap<u64, JsObject>,
     /// node_id -> reusable element handle for SIBLING WALKS. Round-2 S1 of
     /// PR #101: materialising a full handle (87 keys + a populate_props pass
     /// that seeds a `_children` array of every child) on EVERY sibling hop
@@ -350,6 +370,14 @@ impl JsRuntime {
             // re-registration must not be killed by a stale record
             // (R3 S1: cross-ticket remove→re-add left the listener dead).
             b.listener_actions.clear();
+            // Per-window isolation for the handle caches (round-2 S3): a
+            // window-1 handle must not be served into window 2's tree. The
+            // caches saturate at the live-id count so they never grow
+            // unboundedly, but keeping a stale handle is a silent misroute —
+            // page state (and `_js_listeners`) from the previous run would
+            // ride along on an object that now describes a different tree.
+            b.element_handle_cache.clear();
+            b.walk_handle_cache.clear();
             b.slots_active = replay;
             if replay {
                 // A page run starts a fresh slot generation; the previous
@@ -2216,6 +2244,40 @@ fn walk_handle(nid: u64, bridge: &Gc<GcRefCell<Bridge>>, ctx: &mut Context) -> O
         .walk_handle_cache
         .insert(nid, handle.clone());
     Some(JsValue::from(handle))
+}
+
+/// The ONE handle for `nid`, re-populated from the snapshot on every access.
+/// Identity must be stable across `getElementById` calls: per-handle state
+/// (`_js_listeners`) lives on the handle, so a fresh object per call made
+/// register-then-dispatch silently fail (L940, PR #103 R3).
+///
+/// "Re-populated" means SNAPSHOT-backed properties only. Structural mirrors
+/// (`childNodes` / `children`) and `className` still read stale because
+/// `node_props` is never refreshed after a mutation — a pre-existing gap, not
+/// one this cache introduces.
+fn cached_element_handle(
+    nid: u64,
+    bridge: &Gc<GcRefCell<Bridge>>,
+    ctx: &mut Context,
+) -> JsResult<JsObject> {
+    let cached = bridge.borrow().element_handle_cache.get(&nid).cloned();
+    let handle = match cached {
+        Some(h) => h,
+        None => {
+            let h = make_element_handle(ctx, Gc::clone(bridge), nid, None)?;
+            bridge
+                .borrow_mut()
+                .element_handle_cache
+                .insert(nid, h.clone());
+            h
+        }
+    };
+    // Re-populate on every access (cheap scalars + child mirrors): the tree
+    // may have changed since the handle was minted.
+    if let Some(snap) = bridge.borrow().node_props.get(&nid).cloned() {
+        populate_props(&handle, &snap, Gc::clone(bridge), ctx);
+    }
+    Ok(handle)
 }
 
 fn read_handle_id(v: &JsValue) -> Option<u64> {
@@ -10096,15 +10158,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         |_this, args, b, ctx| {
             let id = arg_string(args, 0);
             let nid = b.borrow().ids.get(&id).copied();
-            if let Some(nid) = nid {
-                let snap = b.borrow().node_props.get(&nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                }
-                Ok(handle.into())
-            } else {
-                Ok(JsValue::null())
+            match nid {
+                Some(nid) => Ok(cached_element_handle(nid, b, ctx)?.into()),
+                None => Ok(JsValue::null()),
             }
         },
         Gc::clone(&bridge),
@@ -22199,6 +22255,128 @@ mod document_handle_event_tests {
         assert_eq!(
             out, "this=MINE",
             "handleEvent must be invoked with the listener object as `this`"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stable_handle_identity_tests {
+    //! L940 (PR #103 R3): `getElementById` built a FRESH handle object per
+    //! call, so per-handle state was invisible to a later fetch —
+    //! `getElementById('el').addEventListener(...)` then
+    //! `getElementById('el').dispatchEvent(...)` registered and dispatched
+    //! against different objects and never fired. `getElementById` handles are
+    //! now cached per node id and re-populated on each access, so identity
+    //! persists while SNAPSHOT-backed properties stay fresh.
+    //!
+    //! NOT covered (still fresh-per-call, listeners still invisible across
+    //! fetches): `querySelector`, `getElementsByTagName`,
+    //! `getElementsByClassName`, and `document.body`.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape — and the THREE other add/dispatch combinations that
+    /// all failed before the fix (only "same held variable" worked).
+    #[test]
+    fn every_add_dispatch_combination_fires() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "fresh_add_fresh_dispatch",
+                "document.getElementById('el').addEventListener('ping', function(){n++;});",
+                "document.getElementById('el').dispatchEvent({type:'ping'});",
+            ),
+            (
+                "held_add_fresh_dispatch",
+                "var el = document.getElementById('el'); el.addEventListener('ping', function(){n++;});",
+                "document.getElementById('el').dispatchEvent({type:'ping'});",
+            ),
+            (
+                "fresh_add_held_dispatch",
+                "document.getElementById('el').addEventListener('ping', function(){n++;});",
+                "var el2 = document.getElementById('el'); el2.dispatchEvent({type:'ping'});",
+            ),
+            (
+                "held_add_held_dispatch",
+                "var el3 = document.getElementById('el'); el3.addEventListener('ping', function(){n++;});",
+                "el3.dispatchEvent({type:'ping'});",
+            ),
+        ];
+        for (name, add, disp) in cases {
+            let out = run(&format!(
+                "var n = 0; {add} {disp} document.getElementById('out').setText('n=' + n);"
+            ));
+            assert_eq!(out, "n=1", "{name} must fire exactly once");
+        }
+    }
+
+    /// Identity must be stable across fetches.
+    #[test]
+    fn repeated_fetches_return_the_same_handle() {
+        let out = run(r#"
+            var a = document.getElementById('el');
+            var b = document.getElementById('el');
+            document.getElementById('out').setText('same=' + (a === b));
+            "#);
+        assert_eq!(out, "same=true", "two fetches must yield the same object");
+    }
+
+    /// ... while properties stay FRESH (the cache re-populates on each hit).
+    #[test]
+    fn cached_handle_properties_stay_fresh() {
+        // Round-2 S3: asserting on a value the snapshot already holds passes
+        // even with the re-populate disabled, so OVERWRITE a snapshot-backed
+        // key on the handle first — only a real re-populate restores it.
+        let out = run(r#"
+            var h = document.getElementById('el');
+            h.tagName = 'HACKED';
+            h.nodeType = 99;
+            var again = document.getElementById('el');
+            document.getElementById('out').setText(
+                'tag=' + again.tagName + ' nt=' + again.nodeType
+            );
+            "#);
+        assert_eq!(
+            out, "tag=DIV nt=1",
+            "re-populate must restore snapshot-backed keys overwritten on the handle"
+        );
+    }
+
+    /// A removed listener must not survive through the cache.
+    #[test]
+    fn remove_still_works_through_the_cache() {
+        let out = run(r#"
+            var n = 0;
+            var fn = function () { n++; };
+            document.getElementById('el').addEventListener('ping', fn);
+            document.getElementById('el').dispatchEvent({type:'ping'});
+            document.getElementById('el').removeEventListener('ping', fn);
+            document.getElementById('el').dispatchEvent({type:'ping'});
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(
+            out, "n=1",
+            "the removed listener must not fire on the second dispatch"
         );
     }
 }
