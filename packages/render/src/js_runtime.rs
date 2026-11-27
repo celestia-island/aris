@@ -999,7 +999,24 @@ fn apply_op(
             parent_id,
             pending_id,
         } => {
-            if let Some((tag, text, attrs)) = pending.get(pending_id) {
+            // A pending that was ALREADY materialized earlier in this drain
+            // (e.g. via before/after/replaceWith) must MOVE its node, not
+            // create a fresh copy — otherwise one createElement handle used
+            // through two different writing APIs renders the element twice
+            // (round-5 S0: `x.after(m); b.appendChild(m);` produced two <i>).
+            let moved = if let Some(existing) = materialized.get(pending_id) {
+                let nid = blitz_traits::NodeId::from_u64(*existing);
+                if node_is_live(doc, *existing) {
+                    doc.mutate()
+                        .append_children(blitz_traits::NodeId::from_u64(*parent_id), &[nid][..]);
+                    true
+                } else {
+                    false // stale id (freed): fall through to a fresh create
+                }
+            } else {
+                false
+            };
+            if !moved && let Some((tag, text, attrs)) = pending.get(pending_id) {
                 create_and_append(doc, *parent_id, tag, text, attrs);
             }
         }
@@ -19769,6 +19786,39 @@ mod replace_with_dom_tests {
             kids,
             vec!["#text".to_string(), "keep".to_string()],
             "the created <span> (with its text child) lands at the ref's slot"
+        );
+    }
+
+    #[test]
+    fn one_pending_handle_across_two_apis_moves_not_clones() {
+        // Round-5 S0: `x.after(m); b.appendChild(m);` rendered the element
+        // TWICE (a fresh copy from the pending tuple). The appendChild op
+        // must consult the materialized map and MOVE the node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="x">x</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.createElement('i');
+            document.getElementById('x').after(m);
+            document.getElementById('b').appendChild(m);
+            "#,
+        );
+        let total: usize = doc
+            .tree()
+            .iter()
+            .map(|(_, n)| {
+                n.element_data()
+                    .map(|e| (e.name.local.to_string() == "i") as usize)
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert_eq!(
+            total, 1,
+            "one createElement handle must render exactly one <i>; got {total}"
         );
     }
 
