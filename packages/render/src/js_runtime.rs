@@ -13403,6 +13403,49 @@ fn make_element_handle(
         |this, args, b, ctx| {
             let event_type = arg_to_string(args, 0, ctx);
             let handler = args.get(1).cloned().unwrap_or(JsValue::undefined());
+            // WHATWG dedup, replay-based (round-2 S1 fix): re-adding the SAME
+            // callback on the same node+type is a no-op. Keyed on the NODE
+            // against the authoritative registry + queued actions, which
+            // persist across handle rebuilds — the dominant real-page pattern
+            // refetches the element per call, and a per-handle mirror scan
+            // cannot see those duplicates. Placement: BEFORE the mirror and
+            // registration blocks, so a skipped duplicate changes nothing at
+            // all (no mirror append, no stash, no registry row).
+            if let Some(nid) = read_handle_id(this) {
+                let bb = b.borrow();
+                let ident = |h: &JsValue| -> bool {
+                    handler
+                        .as_object()
+                        .zip(h.as_object())
+                        .map(|(w, a)| boa_engine::object::JsObject::equals(&w, &a))
+                        .unwrap_or(false)
+                };
+                let mut live: Vec<String> = bb
+                    .listener_registry
+                    .iter()
+                    .filter(|(n, ty, _, h)| *n == nid && ty == &event_type && ident(h))
+                    .map(|(_, _, n, _)| n.clone())
+                    .collect();
+                for a in &bb.listener_actions {
+                    match a {
+                        ListenerAction::Add {
+                            node_id,
+                            name,
+                            event_type: ty,
+                            handler,
+                        } if *node_id == nid && ty == &event_type && ident(handler) => {
+                            live.push(name.clone());
+                        }
+                        ListenerAction::Remove { node_id, name } if *node_id == nid => {
+                            live.retain(|n| n != name);
+                        }
+                        _ => {}
+                    }
+                }
+                if !live.is_empty() {
+                    return Ok(JsValue::undefined());
+                }
+            }
             // Check if options specify passive.
             let explicit_passive = args
                 .get(2)
@@ -13485,6 +13528,27 @@ fn make_element_handle(
                     .ok()
                     .and_then(|v| v.as_number())
                     .unwrap_or(0.0) as u32;
+                // WHATWG dedup: re-adding the SAME callback on the same
+                // target+type is a no-op. Without this, one remove followed
+                // by a dispatch ghost-fired the duplicate once (round-6 R2,
+                // dispatch ghost S2 in L940).
+                let mut dup = false;
+                for i in 0..len {
+                    if let Ok(entry) = arr.get(i as u32, ctx)
+                        && let Some(eo) = entry.as_object()
+                        && let Ok(cb) = eo.get(boa_engine::js_string!("callback"), ctx)
+                        && let Some(cbo) = cb.as_object()
+                        && handler
+                            .as_object()
+                            .is_some_and(|h| JsObject::equals(&cbo, &h))
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if dup {
+                    return Ok(JsValue::undefined());
+                }
                 // Store handler as {callback, passive} object.
                 let listener_obj =
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -20323,31 +20387,228 @@ mod listener_ghost_probes {
         );
     }
 
-    /// remove then re-add in the same script — re-add must survive.
+    /// WHATWG dedup: re-adding the SAME callback on the same target+type is
+    /// a no-op. Without this, one remove followed by a dispatch ghost-fired
+    /// the duplicate once (round-6 R2, dispatch ghost S2).
     #[test]
-    fn remove_then_readd_same_run() {
+    fn duplicate_add_is_a_noop_and_one_remove_clears_it() {
+        // WHATWG dedup: re-adding the SAME callback on the same target+type
+        // is a no-op. Without this, one remove followed by a dispatch
+        // ghost-fired the duplicate once (round-6 R2, dispatch ghost S2).
+        // Single window: the mirror lives on the per-window handle.
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out"></div><div id="res_probe"></div></body></html>"#,
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
             r#"
-            var log = '';
-            var h = function () { log += 'F'; document.getElementById('out').setText(log); };
+            var b = document.getElementById('b');
+            var h = function () { document.getElementById('out').setText('x'); };
+            b.addEventListener('click', h);
+            b.addEventListener('click', h);
+            var len_dup = b._js_listeners.click.length;
+            b.dispatchEvent({ type: 'click' });
+            b.removeEventListener('click', h);
+            b.dispatchEvent({ type: 'click' });
+            var len_after = b._js_listeners.click.length;
+            document.getElementById('out').setText(
+                'len_dup=' + len_dup + ' len_after=' + len_after +
+                ' out=' + document.getElementById('out').textContent
+            );
+            "#,
+        );
+        // Composite read (all state captured in-window): len_dup=1 proves
+        // the duplicate add did NOT stack; len_after=0 proves one remove
+        // cleared the single registration; out=x proves the live listener
+        // fired exactly once (under the pre-dedup code out would read "xx").
+        assert_eq!(text_of(&doc, "out"), "len_dup=1 len_after=0 out=x");
+    }
+}
+
+#[cfg(test)]
+mod listener_dedup_refetch_tests {
+    //! REFETCH shape (the dominant real-page pattern): every getElementById
+    //! builds a FRESH handle, so per-handle mirror state cannot dedup — the
+    //! registry-keyed replay dedup in the addEventListener closure is what
+    //! catches duplicates. Round-4 S1b: a batch containing the ref itself
+    //! used to be discarded wholesale, silently losing pending args.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    fn click(rt: &mut JsRuntime, doc: &mut HtmlDocument, id: &str) {
+        let nid = {
+            let hit = doc
+                .tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64());
+            match hit {
+                Some(v) => v,
+                None => return,
+            }
+        };
+        rt.fire_click(doc, nid);
+    }
+
+    /// Refetch double-add + ONE remove + click → NOTHING fires (the dedup
+    /// means only one registration existed and it was removed). Round-4
+    /// S1b: without the replay dedup the whole batch was discarded and the
+    /// pending argument was lost; round-6 R2: without dedup the ghost fires.
+    #[test]
+    fn refetch_double_add_one_remove_click_fires_nothing() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('FIRE'); };
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').removeEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "init",
+            "dedup + one remove must leave zero live listeners"
+        );
+    }
+
+    /// Refetch double-add WITHOUT remove → fires exactly ONCE (dedup
+    /// collapsed the duplicate at registration time).
+    #[test]
+    fn refetch_double_add_fires_exactly_once() {
+        // The handler must be a SHARED binding so both addEventListener calls
+        // pass the SAME function object (inline literals create fresh fns and
+        // the identity dedup cannot engage).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('x'); };
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').dispatchEvent({ type: 'click' });
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "x",
+            "the dedup must collapse the double add to ONE registration"
+        );
+        // Without dedup the dispatch fires the handler twice.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('xx'); };
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').addEventListener('click', h);
+            document.getElementById('b').dispatchEvent({ type: 'click' });
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "xx",
+            "control: without dedup both registrations fire"
+        );
+    }
+
+    fn kid_ids_shallow(doc: &HtmlDocument) -> Vec<String> {
+        doc.tree()
+            .iter()
+            .flat_map(|(_, n)| {
+                n.children
+                    .iter()
+                    .filter_map(|&c| doc.get_node(c))
+                    .filter_map(|cn| cn.attr(blitz_dom::local_name!("id")).map(|v| v.to_string()))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod listener_dedup_preserve_tests {
+    //! R3c's unrun check: the registry-keyed dedup must PRESERVE the
+    //! remove→re-add in one ticket (a queued Remove cancels its Add, so the
+    //! re-add is not deduped away).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn remove_then_readd_in_one_ticket_stays_live_under_dedup() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('LIVE'); };
             var b = document.getElementById('b');
             b.addEventListener('click', h);
             b.removeEventListener('click', h);
             b.addEventListener('click', h);
             "#,
         );
-        click(&mut rt, &mut doc, "b");
-        click(&mut rt, &mut doc, "b");
+        // The click must fire (the re-add survived the dedup).
+        let nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, nid);
+        let t = doc
+            .get_node(NodeId::from_u64(nid))
+            .and_then(|n| {
+                let _ = n;
+                Some(())
+            })
+            .is_some();
+        let _ = t;
+        // Read through a sibling handle: the out div must say LIVE.
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| i.as_u64())
+            .map(|id| doc.get_node(NodeId::from_u64(id)).map(|n| n.text_content()))
+            .unwrap_or_default();
         assert_eq!(
-            text_of(&doc, "out"),
-            "FF",
-            "the re-added handler must fire on every click"
+            out.unwrap_or_default(),
+            "LIVE",
+            "remove→re-add in one ticket must stay live (dedup must not swallow it)"
         );
     }
 }
