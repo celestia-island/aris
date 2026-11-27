@@ -116,14 +116,25 @@ struct Bridge {
     /// materialized. A second write through the SAME handle must MOVE that
     /// node, not create another copy (round-2 S2: node-leak amplification).
     materialized_pending: HashMap<u32, u64>,
-    /// node_id -> THE element handle for this node. `getElementById` /
-    /// `querySelector` used to build a FRESH object on every call, so any
-    /// per-handle state (`_js_listeners`) was invisible to a later fetch:
+    /// node_id -> THE element handle for this node, used by
+    /// **`getElementById` ONLY**.
+    ///
+    /// That lookup used to build a FRESH object on every call, so per-handle
+    /// state (`_js_listeners`) was invisible to a later fetch:
     /// `getElementById('el').addEventListener(...)` then
     /// `getElementById('el').dispatchEvent(...)` registered and dispatched
     /// against different objects and never fired (L940, PR #103 R3).
-    /// The cached handle is re-populated on every hit, so its properties stay
-    /// fresh while its identity — and therefore its listeners — persist.
+    ///
+    /// STILL NOT CACHED, so each keeps minting a fresh handle and its
+    /// listeners stay invisible across fetches: `querySelector`,
+    /// `getElementsByTagName`, `getElementsByClassName`. `document.body` is
+    /// also a DIFFERENT object from `getElementById(<body id>)`.
+    ///
+    /// The cached handle is re-populated on every hit, which keeps
+    /// SNAPSHOT-backed properties (`textContent`, `tagName`, `nodeType`, ...)
+    /// in step. It does NOT refresh `childNodes` / `children` / `className`:
+    /// `node_props` is built once per bind and never updated for structural or
+    /// attribute mutations, so those read stale on a fresh handle too.
     element_handle_cache: HashMap<u64, JsObject>,
     /// node_id -> reusable element handle for SIBLING WALKS. Round-2 S1 of
     /// PR #101: materialising a full handle (87 keys + a populate_props pass
@@ -2235,10 +2246,15 @@ fn walk_handle(nid: u64, bridge: &Gc<GcRefCell<Bridge>>, ctx: &mut Context) -> O
     Some(JsValue::from(handle))
 }
 
-/// The ONE handle for `nid`, re-populated so its properties are fresh.
+/// The ONE handle for `nid`, re-populated from the snapshot on every access.
 /// Identity must be stable across `getElementById` calls: per-handle state
 /// (`_js_listeners`) lives on the handle, so a fresh object per call made
 /// register-then-dispatch silently fail (L940, PR #103 R3).
+///
+/// "Re-populated" means SNAPSHOT-backed properties only. Structural mirrors
+/// (`childNodes` / `children`) and `className` still read stale because
+/// `node_props` is never refreshed after a mutation — a pre-existing gap, not
+/// one this cache introduces.
 fn cached_element_handle(
     nid: u64,
     bridge: &Gc<GcRefCell<Bridge>>,
@@ -22245,13 +22261,17 @@ mod document_handle_event_tests {
 
 #[cfg(test)]
 mod stable_handle_identity_tests {
-    //! L940 (PR #103 R3): `getElementById` / `querySelector` built a FRESH
-    //! handle object per call, so per-handle state was invisible to a later
-    //! fetch — `getElementById('el').addEventListener(...)` then
+    //! L940 (PR #103 R3): `getElementById` built a FRESH handle object per
+    //! call, so per-handle state was invisible to a later fetch —
+    //! `getElementById('el').addEventListener(...)` then
     //! `getElementById('el').dispatchEvent(...)` registered and dispatched
-    //! against different objects and never fired. Handles are now cached per
-    //! node id and re-populated on each access, so identity persists while
-    //! properties stay fresh.
+    //! against different objects and never fired. `getElementById` handles are
+    //! now cached per node id and re-populated on each access, so identity
+    //! persists while SNAPSHOT-backed properties stay fresh.
+    //!
+    //! NOT covered (still fresh-per-call, listeners still invisible across
+    //! fetches): `querySelector`, `getElementsByTagName`,
+    //! `getElementsByClassName`, and `document.body`.
 
     use super::JsRuntime;
     use blitz_dom::DocumentConfig;
