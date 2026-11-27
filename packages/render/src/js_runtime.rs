@@ -14072,38 +14072,69 @@ fn make_element_handle(
     init.function(remove_fn, boa_engine::js_string!("remove"), 0);
 
     // append(...nodes) — appends all arguments as children.
-    let append_children = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(parent_obj) = this.as_object() {
-            for arg in args.iter() {
-                let node = value_to_node(arg, ctx);
-                if let Some(child_obj) = node.as_object() {
-                    insert_into_children(&parent_obj, &child_obj, None, ctx);
+    let append_children = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(parent_obj) = this.as_object() {
+                let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        // Real tree node: DOM append() MOVES it to the end, same
+                        // as appendChild (#88). Mirror-only left the tree stale.
+                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                            b.borrow_mut().ops.push(Op::InsertBefore {
+                                parent_id: pid,
+                                child_id: cid,
+                                anchor_id: 0,
+                            });
+                        }
+                        insert_into_children(&parent_obj, &child_obj, None, ctx);
+                    }
                 }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(append_children, boa_engine::js_string!("append"), 0);
 
     // prepend(...nodes) — inserts all arguments before the first child.
-    let prepend_children = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(parent_obj) = this.as_object() {
-            // Get first child as reference.
-            let first_child = parent_obj
-                .get(boa_engine::js_string!("_children"), ctx)
-                .ok()
-                .and_then(|v| v.as_object())
-                .and_then(|a| a.get(0u32, ctx).ok())
-                .and_then(|v| v.as_object());
-            for arg in args.iter() {
-                let node = value_to_node(arg, ctx);
-                if let Some(child_obj) = node.as_object() {
-                    insert_into_children(&parent_obj, &child_obj, first_child.clone(), ctx);
+    let prepend_children = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(parent_obj) = this.as_object() {
+                let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+                // Anchor = the parent's FIRST child (bind-time snapshot; empty
+                // parent → 0 → the apply arm appends). Captured once so a
+                // multi-arg prepend keeps its order: each node lands right
+                // before the original first child, so [a, b] prepends as
+                // [a, b, ...old...].
+                let anchor_id = parent_id
+                    .and_then(|pid| {
+                        let props = b.borrow();
+                        props
+                            .node_props
+                            .get(&pid)
+                            .and_then(|snap| snap.child_ids.first().copied())
+                    })
+                    .unwrap_or(0);
+                for arg in args.iter() {
+                    let node = value_to_node(arg, ctx);
+                    if let Some(child_obj) = node.as_object() {
+                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                            b.borrow_mut().ops.push(Op::InsertBefore {
+                                parent_id: pid,
+                                child_id: cid,
+                                anchor_id,
+                            });
+                        }
+                        insert_into_children(&parent_obj, &child_obj, None, ctx);
+                    }
                 }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(prepend_children, boa_engine::js_string!("prepend"), 0);
 
     // after(...nodes) — inserts siblings after this node in parent._children.
@@ -18631,6 +18662,130 @@ mod append_child_relocate_tests {
         );
         // Reaching the next bind alive is the assertion — the cycle used to
         // abort it.
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
+        assert!(true, "no cycle abort");
+    }
+}
+
+#[cfg(test)]
+mod append_prepend_dom_tests {
+    //! L940 (PR #88 R2): `append(...)` / `prepend(...)` were mirror-only —
+    //! the tree never moved. Same family as appendChild (#88).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn append_moves_a_node_from_another_parent_to_the_end() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="mv">moving</li></ul><ul id="dst"><li id="k">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('dst').append(document.getElementById('mv'));
+            "#,
+        );
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        assert_eq!(
+            kid_ids(&doc, "dst"),
+            vec!["k".to_string(), "mv".to_string()],
+            "append lands the node at the end"
+        );
+    }
+
+    #[test]
+    fn prepend_inserts_before_the_first_child() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="from"><li id="mv">moving</li></ul><ul id="dst"><li id="k">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('dst').prepend(document.getElementById('mv'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "from"),
+            Vec::<String>::new(),
+            "source drained"
+        );
+        assert_eq!(
+            kid_ids(&doc, "dst"),
+            vec!["mv".to_string(), "k".to_string()],
+            "prepend lands the node before the first child"
+        );
+    }
+
+    #[test]
+    fn multi_arg_prepend_keeps_its_order() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="dst"><li id="k">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('dst').prepend(x, y);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "dst"),
+            vec!["x".to_string(), "y".to_string(), "k".to_string()],
+            "prepend(x, y) must yield [x, y, keep] — DOM order"
+        );
+    }
+
+    #[test]
+    fn self_and_descendant_append_via_append_is_rejected() {
+        // The cycle guard is shared with appendChild's path — verify it on
+        // the append() entry too.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var outer = document.getElementById('outer');
+            var inner = document.getElementById('inner');
+            outer.append(outer);   // self
+            inner.append(outer);   // ancestor under own descendant
+            document.getElementById('res').setText('survived');
+            "#,
+        );
         rt.bind_and_run(&mut doc, r#"void 0;"#);
         assert!(true, "no cycle abort");
     }
