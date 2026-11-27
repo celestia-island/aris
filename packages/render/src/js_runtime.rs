@@ -13485,6 +13485,27 @@ fn make_element_handle(
                     .ok()
                     .and_then(|v| v.as_number())
                     .unwrap_or(0.0) as u32;
+                // WHATWG dedup: re-adding the SAME callback on the same
+                // target+type is a no-op. Without this, one remove followed
+                // by a dispatch ghost-fired the duplicate once (round-6 R2,
+                // dispatch ghost S2 in L940).
+                let mut dup = false;
+                for i in 0..len {
+                    if let Ok(entry) = arr.get(i as u32, ctx)
+                        && let Some(eo) = entry.as_object()
+                        && let Ok(cb) = eo.get(boa_engine::js_string!("callback"), ctx)
+                        && let Some(cbo) = cb.as_object()
+                        && handler
+                            .as_object()
+                            .is_some_and(|h| JsObject::equals(&cbo, &h))
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if dup {
+                    return Ok(JsValue::undefined());
+                }
                 // Store handler as {callback, passive} object.
                 let listener_obj =
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -20323,31 +20344,42 @@ mod listener_ghost_probes {
         );
     }
 
-    /// remove then re-add in the same script — re-add must survive.
+    /// WHATWG dedup: re-adding the SAME callback on the same target+type is
+    /// a no-op. Without this, one remove followed by a dispatch ghost-fired
+    /// the duplicate once (round-6 R2, dispatch ghost S2).
     #[test]
-    fn remove_then_readd_same_run() {
+    fn duplicate_add_is_a_noop_and_one_remove_clears_it() {
+        // WHATWG dedup: re-adding the SAME callback on the same target+type
+        // is a no-op. Without this, one remove followed by a dispatch
+        // ghost-fired the duplicate once (round-6 R2, dispatch ghost S2).
+        // Single window: the mirror lives on the per-window handle.
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out"></div><div id="res_probe"></div></body></html>"#,
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
             r#"
-            var log = '';
-            var h = function () { log += 'F'; document.getElementById('out').setText(log); };
             var b = document.getElementById('b');
+            var h = function () { document.getElementById('out').setText('x'); };
             b.addEventListener('click', h);
+            b.addEventListener('click', h);
+            var len_dup = b._js_listeners.click.length;
+            b.dispatchEvent({ type: 'click' });
             b.removeEventListener('click', h);
-            b.addEventListener('click', h);
+            b.dispatchEvent({ type: 'click' });
+            var len_after = b._js_listeners.click.length;
+            document.getElementById('out').setText(
+                'len_dup=' + len_dup + ' len_after=' + len_after +
+                ' out=' + document.getElementById('out').textContent
+            );
             "#,
         );
-        click(&mut rt, &mut doc, "b");
-        click(&mut rt, &mut doc, "b");
-        assert_eq!(
-            text_of(&doc, "out"),
-            "FF",
-            "the re-added handler must fire on every click"
-        );
+        // Composite read (all state captured in-window): len_dup=1 proves
+        // the duplicate add did NOT stack; len_after=0 proves one remove
+        // cleared the single registration; out=x proves the live listener
+        // fired exactly once (under the pre-dedup code out would read "xx").
+        assert_eq!(text_of(&doc, "out"), "len_dup=1 len_after=0 out=x");
     }
 }
