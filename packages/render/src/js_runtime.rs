@@ -1944,6 +1944,24 @@ fn populate_props(
         boa_engine::js_string!("childNodes"),
         pd(child_arr.clone().into()),
     );
+    // SEED the `_children` mirror from the SAME tree snapshot (round-3 S1 of
+    // PR #100): the mirror used to exist only after a mirror write, so
+    // `replaceChild`'s membership guard — which reads it — fell through to
+    // the bind-time `node_props.child_ids` snapshot on every fresh handle.
+    // It must be a REAL JsArray (get_or_create_children does
+    // `JsArray::from_object` and falls back to an EMPTY array for a plain
+    // object), so it is built with new_array + push, not by sharing the
+    // childNodes object.
+    {
+        let mirror = new_array(ctx);
+        for &cid in &s.child_ids {
+            let child_obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = child_obj
+                .insert_property(boa_engine::js_string!("_arisId"), pd(JsValue::from(cid)));
+            let _ = mirror.push(JsValue::from(child_obj), ctx);
+        }
+        let _ = obj.insert_property(boa_engine::js_string!("_children"), pd(mirror.into()));
+    }
     // children / childElementCount count ELEMENT children only — using the
     // total child count would report text nodes as elements (round-2 S2).
     let elem_arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -8964,11 +8982,25 @@ fn get_next_sibling(parent: &JsObject, child: &JsObject, ctx: &mut Context) -> O
 fn remove_from_children(parent: &JsObject, child: &JsObject, ctx: &mut Context) {
     let arr = get_or_create_children(parent, ctx);
     let len = arr.length(ctx).ok().unwrap_or(0) as u32;
+    // IDENTITY first, then `_arisId` (round-4 S1 of PR #100): the `_children`
+    // mirror is seeded from the tree in populate_props with ANONYMOUS entries
+    // carrying only `_arisId`, so a caller's own handle is never the same
+    // object as the seeded entry. Identity-only matching therefore silently
+    // no-opped every removeChild on a freshly-fetched handle — the mirror
+    // never shrank and one systematic reader (replaceChild's membership
+    // guard) kept seeing the stale set.
+    let child_id = read_handle_id(&JsValue::from(child.clone()));
     let mut found: Option<u32> = None;
     for i in 0..len {
         if let Ok(v) = arr.at(i, ctx) {
             if let Some(o) = v.as_object() {
                 if JsObject::equals(&o, child) {
+                    found = Some(i);
+                    break;
+                }
+                if let Some(cid) = child_id
+                    && read_handle_id(&v) == Some(cid)
+                {
                     found = Some(i);
                     break;
                 }
@@ -9013,11 +9045,27 @@ fn insert_into_children(
         let _ = arr.push(JsValue::from(child.clone()), ctx);
     } else {
         let ref_node = before.unwrap();
+        // Same identity-then-`_arisId` matching as remove_from_children
+        // (round-4 S1 of PR #100): the seeded mirror entries are anonymous
+        // objects, so an identity-only search never finds the anchor and the
+        // MIRROR splice degrades to an append. NOTE: the parsed TREE is
+        // unaffected either way — insertBefore's tree effect rides
+        // Op::InsertBefore, which resolves the anchor by id on its own — so
+        // this branch has no independent observable pin; it is kept for
+        // mirror consistency with remove_from_children rather than as a
+        // separately-gated behaviour.
+        let ref_id = read_handle_id(&JsValue::from(ref_node.clone()));
         let mut ref_idx = len;
         for i in 0..len {
             if let Ok(v) = arr.at(i, ctx) {
                 if let Some(o) = v.as_object() {
                     if JsObject::equals(&o, &ref_node) {
+                        ref_idx = i;
+                        break;
+                    }
+                    if let Some(rid) = ref_id
+                        && read_handle_id(&v) == Some(rid)
+                    {
                         ref_idx = i;
                         break;
                     }
@@ -14075,6 +14123,16 @@ fn make_element_handle(
                         .ok()
                         .and_then(|v| v.as_number())
                         .unwrap_or(0.0) as u32;
+                    // Identity first, then `_arisId` (same fallback as
+                    // remove_from_children, round-5 note): the mirror is
+                    // seeded with anonymous entries, so identity alone never
+                    // matches a caller's handle.
+                    // Identity only, deliberately (round-6 S2): an
+                    // `_arisId` fallback here is dead weight — with a stale
+                    // mirror entry the downstream bridge `parent_id` check
+                    // rejects anyway, and with no entry the fallback cannot
+                    // add one. Mutation showed zero behavioural difference,
+                    // so it is not shipped as an unpinned "fix".
                     (0..len).any(|i| {
                         arr.get(i as u32, ctx)
                             .ok()
@@ -14222,30 +14280,109 @@ fn make_element_handle(
     });
     init.function(contains_fn, boa_engine::js_string!("contains"), 1);
 
-    // replaceChild(newChild, oldChild) — returns oldChild (simplified).
-    let replace_child = NativeFunction::from_copy_closure(|this, args, ctx| {
-        // Per spec: if newChild or oldChild is null/undefined, throw TypeError.
-        let new_child = args.first().cloned().unwrap_or(JsValue::null());
-        let old_child = args.get(1).cloned().unwrap_or(JsValue::null());
-        if new_child.is_null()
-            || new_child.is_undefined()
-            || old_child.is_null()
-            || old_child.is_undefined()
-        {
-            return Err(boa_engine::JsNativeError::typ()
-                .with_message("Argument is not an object")
-                .into());
-        }
-        // JS-level: replace old_child with new_child in _children.
-        if let Some(parent_obj) = this.as_object() {
-            if let (Some(new_obj), Some(old_obj)) = (new_child.as_object(), old_child.as_object()) {
-                // Insert new_child before old_child, then remove old_child.
-                insert_into_children(&parent_obj, &new_obj, Some(old_obj.clone()), ctx);
-                remove_from_children(&parent_obj, &old_obj, ctx);
+    // replaceChild(newChild, oldChild) — returns oldChild.
+    //
+    // Round-5 S3 (PR #99): this was JS-MIRROR-ONLY — it never pushed a bridge
+    // op, so the parsed tree was untouched and the call silently did nothing
+    // (the mirror diverged from the tree). Now reachable through the real
+    // `parentNode` handle, which made the gap user-visible.
+    //
+    // The tree effect is exactly `replaceWith` on the OLD child (replace ref
+    // with ONE item), so it reuses `Op::ReplaceWith` rather than minting a
+    // new op — that arm already carries the round-6 pending/empty-batch
+    // guards.
+    let replace_child = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            // Per spec: if newChild or oldChild is null/undefined, throw TypeError.
+            let new_child = args.first().cloned().unwrap_or(JsValue::null());
+            let old_child = args.get(1).cloned().unwrap_or(JsValue::null());
+            if new_child.is_null()
+                || new_child.is_undefined()
+                || old_child.is_null()
+                || old_child.is_undefined()
+            {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("Argument is not an object")
+                    .into());
             }
-        }
-        Ok(old_child)
-    });
+            if let Some(parent_obj) = this.as_object() {
+                if let (Some(new_obj), Some(old_obj)) =
+                    (new_child.as_object(), old_child.as_object())
+                {
+                    // MEMBERSHIP is validated against THIS PARENT'S LIVE JS
+                    // MIRROR (`_children`), not `node_props.child_ids`: the
+                    // latter is frozen at bind time, so a second replaceChild
+                    // in the same script window falsely threw NotFoundError
+                    // and dropped the write (round-2 S1 — the swap-twice
+                    // idiom). `_children` is kept in step by every mirror
+                    // mutation, and the handle id comparison uses `_arisId`,
+                    // which is stable.
+                    let ref_id = read_handle_id(&old_child);
+                    let this_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+                    if let (Some(rid), Some(tid)) = (ref_id, this_id) {
+                        let old_is_child = match parent_obj
+                            .get(boa_engine::js_string!("_children"), ctx)
+                            .ok()
+                            .and_then(|v| v.as_object())
+                        {
+                            Some(arr) => {
+                                let len =
+                                    arr.get(boa_engine::js_string!("length"), ctx)
+                                        .ok()
+                                        .and_then(|v| v.as_number())
+                                        .unwrap_or(0.0) as u32;
+                                (0..len).any(|i| {
+                                    arr.get(i as u32, ctx)
+                                        .ok()
+                                        .map(|v| read_handle_id(&v) == Some(rid))
+                                        .unwrap_or(false)
+                                })
+                            }
+                            // No mirror means populate_props never seeded it
+                            // — treat as "cannot verify" and reject, rather
+                            // than falling back to the BIND-TIME snapshot
+                            // (round-3 S1: the fallback made the mirror path
+                            // dead code and hid its staleness).
+                            None => false,
+                        };
+                        if !old_is_child {
+                            return Err(boa_engine::JsNativeError::typ()
+                                .with_message(
+                                    "NotFoundError: The node to be replaced is not a child of this node",
+                                )
+                                .into());
+                        }
+                    }
+                    // Build the replacement item: a PENDING createElement arg
+                    // materializes (the family contract), a live node moves.
+                    let item = if let Some(pid) = read_pending(&new_child) {
+                        Some(BatchItem::Pending(pid))
+                    } else {
+                        read_handle_id(&new_child).map(BatchItem::Live)
+                    };
+                    let Some(item) = item else {
+                        // The new child is neither a tree node nor a pending
+                        // createElement: nothing usable to insert. Do not
+                        // touch the tree (a bare replace would delete the old
+                        // node with nothing to take its place).
+                        return Ok(old_child);
+                    };
+                    // Mirror first, then ONE op (the ReplaceWith arm owns the
+                    // tree mutation and the pending materialization).
+                    insert_into_children(&parent_obj, &new_obj, Some(old_obj.clone()), ctx);
+                    remove_from_children(&parent_obj, &old_obj, ctx);
+                    if let Some(rid) = ref_id {
+                        b.borrow_mut().ops.push(Op::ReplaceWith {
+                            ref_id: rid,
+                            items: vec![item],
+                        });
+                    }
+                }
+            }
+            Ok(old_child)
+        },
+        Gc::clone(&bridge),
+    );
     init.function(replace_child, boa_engine::js_string!("replaceChild"), 2);
 
     // hasChildNodes() — true if childNodes.length > 0.
@@ -21231,6 +21368,276 @@ mod parent_node_handle_tests {
         assert!(
             host_kids.is_empty(),
             "the child must leave the tree; got {host_kids:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod replace_child_op_tests {
+    //! Round-5 S3 (PR #99): `replaceChild` was JS-mirror-only — it never
+    //! pushed a bridge op, so the parsed tree was untouched and the call
+    //! silently did nothing.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn kids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| {
+                doc.get_node(i)
+                    .map(|n| {
+                        n.children
+                            .iter()
+                            .filter_map(|&c| doc.get_node(c))
+                            .map(|cn| cn.text_content())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    /// A live node swapped in for another: the tree must show the NEW child
+    /// and not the old one.
+    #[test]
+    fn live_replace_child_changes_the_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="old">O</span></div><div id="spare">N</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var oldC = document.getElementById('old');
+            var spare = document.getElementById('spare');
+            var ret = host.replaceChild(spare, oldC);
+            document.getElementById('out').setText('ret=' + ret.textContent);
+            "#,
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["N"],
+            "the tree must hold the NEW child (replaceChild used to be mirror-only)"
+        );
+        // DOM spec: replaceChild returns the OLD child (the replaced node).
+        assert_eq!(
+            text_of(&doc, "out"),
+            "ret=O",
+            "replaceChild returns the old child"
+        );
+    }
+
+    /// A pending createElement argument named the #98 family contract: the
+    /// replacement materializes instead of vanishing.
+    #[test]
+    fn pending_replace_child_materializes() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="host"><li id="old">O</li></ul><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var oldC = document.getElementById('old');
+            var made = document.createElement('em');
+            made.setText('M');
+            host.replaceChild(made, oldC);
+            "#,
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["M"],
+            "a createElement argument must materialize in place of the old child"
+        );
+    }
+
+    /// A replacement whose oldChild is NOT a child of this parent: no throw
+    /// (see the S1 note in the arm — membership cannot be validated against
+    /// the bind-time snapshot), and crucially NO tree damage.
+    #[test]
+    fn replacing_a_non_child_does_not_damage_either_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="old">O</span></div><div id="other"><i id="far">F</i></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var far = document.getElementById('far');
+            var made = document.createElement('em');
+            made.setText('M');
+            var r = 'no-throw';
+            try { host.replaceChild(made, far); }
+            catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "threw",
+            "a non-child must be rejected (NotFoundError)"
+        );
+        assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
+        assert_eq!(kids(&doc, "other"), ["F"], "#other must be untouched");
+    }
+
+    /// Round-5: the insert-side `_arisId` fallback IS observable — the
+    /// mirror must place the inserted node BEFORE its anchor rather than
+    /// appending it. Uses a LIVE node (a pending createElement carries
+    /// `_arisId` 0, which makes the appended and inserted shapes identical
+    /// and the test vacuous).
+    #[test]
+    fn insert_before_keeps_the_mirror_in_tree_order() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="b">B</span><span id="c">C</span></div><div id="free">F</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var b = document.getElementById('b');
+            var free = document.getElementById('free');
+            var bId = b._arisId, freeId = free._arisId;
+            var cId = document.getElementById('c')._arisId;
+            host.insertBefore(free, b);
+            var seq = [];
+            for (var i = 0; i < host._children.length; i++) {
+                seq.push(host._children[i]._arisId);
+            }
+            // Report the mirror order as ids relative to b/free so the
+            // assertion does not hard-code blitz slot numbers.
+            document.getElementById('out').setText(
+                seq.map(function (x) {
+                    return x === bId ? 'b'
+                         : x === freeId ? 'free'
+                         : x === cId ? 'c'
+                         : String(x);
+                }).join(',')
+            );
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "free,b,c",
+            "the mirror must show the inserted node BEFORE its anchor, not appended"
+        );
+    }
+
+    /// Round-4 S1: the `_children` mirror is seeded with ANONYMOUS entries
+    /// (only `_arisId`), so an identity-only removeChild silently no-opped —
+    /// the mirror never shrank and the membership guard kept reading the
+    /// stale set. The mirror must actually drop the child.
+    #[test]
+    fn remove_child_shrinks_the_children_mirror() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="a">A</span><span id="b">B</span></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var a = document.getElementById('a');
+            var before = host._children.length;
+            host.removeChild(a);
+            var after = host._children.length;
+            document.getElementById('out').setText('before=' + before + ' after=' + after);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "before=2 after=1",
+            "removeChild must shrink the JS mirror, not silently no-op"
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["B"],
+            "and the tree must drop the child"
+        );
+    }
+
+    /// And the guard must therefore REJECT a node that the same window
+    /// already removed (round-4 S1: it accepted it because the mirror still
+    /// listed it).
+    #[test]
+    fn replace_child_rejects_a_node_removed_in_the_same_window() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="a">A</span></div><div id="spare">S</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var a = document.getElementById('a');
+            var spare = document.getElementById('spare');
+            host.removeChild(a);
+            var r = 'no-throw';
+            try { host.replaceChild(spare, a); } catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "threw",
+            "a node removed in this window is no longer a child"
+        );
+    }
+
+    /// Two replaceChild calls in ONE window (the swap-twice idiom) must both
+    /// land — round-2 S1: the bind-time membership guard falsely threw on the
+    /// second call and dropped the write.
+    #[test]
+    fn two_replace_child_calls_in_one_window_both_land() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="v1">V1</span></div><div id="s2">V2</div><div id="s3">V3</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var v1 = document.getElementById('v1');
+            var v2 = document.getElementById('s2');
+            var v3 = document.getElementById('s3');
+            var r1 = 'ok1', r2 = 'ok2';
+            try { host.replaceChild(v2, v1); } catch (e) { r1 = 'threw1'; }
+            try { host.replaceChild(v3, v2); } catch (e) { r2 = 'threw2'; }
+            document.getElementById('out').setText(r1 + '|' + r2);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "ok1|ok2",
+            "the second replaceChild must not be rejected by a stale snapshot"
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["V3"],
+            "both swaps must land; the tree ends with the last replacement"
         );
     }
 }
