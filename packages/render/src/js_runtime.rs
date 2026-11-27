@@ -20552,3 +20552,63 @@ mod listener_dedup_refetch_tests {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod listener_dedup_preserve_tests {
+    //! R3c's unrun check: the registry-keyed dedup must PRESERVE the
+    //! remove→re-add in one ticket (a queued Remove cancels its Add, so the
+    //! re-add is not deduped away).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn remove_then_readd_in_one_ticket_stays_live_under_dedup() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('LIVE'); };
+            var b = document.getElementById('b');
+            b.addEventListener('click', h);
+            b.removeEventListener('click', h);
+            b.addEventListener('click', h);
+            "#,
+        );
+        // The click must fire (the re-add survived the dedup).
+        let nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #b");
+        rt.fire_click(&mut doc, nid);
+        let t = doc
+            .get_node(NodeId::from_u64(nid))
+            .and_then(|n| {
+                let _ = n;
+                Some(())
+            })
+            .is_some();
+        let _ = t;
+        // Read through a sibling handle: the out div must say LIVE.
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| i.as_u64())
+            .map(|id| doc.get_node(NodeId::from_u64(id)).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.unwrap_or_default(),
+            "LIVE",
+            "remove→re-add in one ticket must stay live (dedup must not swallow it)"
+        );
+    }
+}
