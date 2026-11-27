@@ -11453,6 +11453,26 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     "touchstart" | "touchmove" | "wheel" | "mousewheel"
                 );
                 let passive = explicit_passive.unwrap_or(is_passive_event);
+                // WHATWG dedup: re-adding the SAME callback on the same
+                // event type is a no-op (the duplicate add used to stack,
+                // and one removeEventListener then dropped BOTH entries).
+                let mut dup = false;
+                for i in 0..len {
+                    if let Ok(entry) = arr.get(i as u32, ctx)
+                        && let Some(eo) = entry.as_object()
+                        && let Ok(cb) = eo.get(boa_engine::js_string!("callback"), ctx)
+                        && let Some(cbo) = cb.as_object()
+                        && handler
+                            .as_object()
+                            .is_some_and(|h| JsObject::equals(&cbo, &h))
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if dup {
+                    return Ok(JsValue::undefined());
+                }
                 let listener_obj =
                     boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                 let _ =
@@ -20609,6 +20629,82 @@ mod listener_dedup_preserve_tests {
             out.unwrap_or_default(),
             "LIVE",
             "remove→re-add in one ticket must stay live (dedup must not swallow it)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod document_listener_dedup_tests {
+    //! PR #95 R2 (document surface): `document.addEventListener` had no
+    //! dedup — two identical adds stacked, and one removeEventListener then
+    //! dropped BOTH entries (WHATWG: one add + one remove ⇒ 0 listeners).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn document_duplicate_add_does_not_stack() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var n = 0;
+            var h = function () { n += 1; document.getElementById('out').setText('x'); };
+            document.addEventListener('click', h);
+            document.addEventListener('click', h);
+            document.dispatchEvent({ type: 'click' });
+            "#,
+        );
+        // Dispatch fires the handler exactly once (dedup collapsed the
+        // duplicate at registration time), so out = 'x' not 'xx'.
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.as_deref(),
+            Some("x"),
+            "duplicate add must not cause a double fire"
+        );
+    }
+
+    #[test]
+    fn document_one_remove_clears_the_single_registration() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('x'); };
+            document.addEventListener('click', h);
+            document.addEventListener('click', h);
+            document.removeEventListener('click', h);
+            document.dispatchEvent({ type: 'click' });
+            "#,
+        );
+        // One remove removes the SINGLE registration (dedup collapsed it),
+        // so the dispatch fires nothing.
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.as_deref(),
+            Some("init"),
+            "one remove must clear the deduped registration"
         );
     }
 }
