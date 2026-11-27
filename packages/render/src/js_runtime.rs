@@ -198,6 +198,14 @@ enum Op {
         parent_id: u64,
         alloc_id: u64,
     },
+    /// `parent.removeChild(child)` on real tree nodes. Without this the call
+    /// only updated the JS `_children` mirror and the parsed tree kept the
+    /// child — so even a rebind could not see a removal that never happened
+    /// (L940, PR #85 R7).
+    RemoveChild {
+        parent_id: u64,
+        child_id: u64,
+    },
 }
 
 impl JsRuntime {
@@ -896,6 +904,11 @@ fn apply_op(
         }
         | Op::AttachCanvas {
             parent_id: node_id, ..
+        }
+        // RemoveChild's guard target is the CHILD (it is the one that must
+        // still resolve; the parent is not indexed by remove_and_drop_node).
+        | Op::RemoveChild {
+            child_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -920,6 +933,22 @@ fn apply_op(
             parent_id,
             alloc_id,
         } => attach_canvas_node(doc, *parent_id, *alloc_id),
+        Op::RemoveChild {
+            parent_id: _,
+            child_id,
+        } => {
+            // The child must leave the TREE, not just the JS mirror.
+            // Guard the CHILD, not the parent: `remove_and_drop_node`
+            // indexes `doc.nodes[id]` and PANICS on a freed key, so a second
+            // removal of the same node would abort the process (#84's lesson
+            // applied to this op — master's no-op was safe only because it
+            // pushed nothing).
+            let child = blitz_traits::NodeId::from_u64(*child_id);
+            if !node_is_live(doc, *child_id) {
+                return;
+            }
+            doc.mutate().remove_and_drop_node(child);
+        }
     }
 }
 
@@ -13426,69 +13455,94 @@ fn make_element_handle(
     init.function(append, boa_engine::js_string!("appendChild"), 1);
 
     // removeChild — returns the removed child + updates _children.
-    let remove_child = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let child = args.first().cloned().unwrap_or(JsValue::null());
-        // Throw TypeError for null/undefined/non-object.
-        if child.is_null() || child.is_undefined() || child.as_object().is_none() {
-            return Err(boa_engine::JsNativeError::typ()
-                .with_message("Argument is not a Node")
-                .into());
-        }
-        let child_obj = child.as_object().unwrap();
-        let parent_obj = match this.as_object() {
-            Some(o) => o,
-            None => return Ok(child),
-        };
-        // Check if child is actually in parent's _children.
-        let in_children = parent_obj
-            .get(boa_engine::js_string!("_children"), ctx)
-            .ok()
-            .and_then(|v| v.as_object())
-            .map(|arr| {
-                let len = arr
-                    .get(boa_engine::js_string!("length"), ctx)
-                    .ok()
-                    .and_then(|v| v.as_number())
-                    .unwrap_or(0.0) as u32;
-                (0..len).any(|i| {
-                    arr.get(i as u32, ctx)
-                        .ok()
-                        .and_then(|v| v.as_object())
-                        .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
-                        .unwrap_or(false)
-                })
-            })
-            .unwrap_or(false);
-        if !in_children {
-            // Also check bridge snapshot for parsed DOM nodes.
-            let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
-            let child_id = read_handle_id(&child);
-            if parent_id.is_some() && child_id.is_some() {
-                // Both are bridge nodes — assume it's in the tree.
-                // (We can't easily check the bridge tree here.)
-            } else {
+    let remove_child = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let child = args.first().cloned().unwrap_or(JsValue::null());
+            // Throw TypeError for null/undefined/non-object.
+            if child.is_null() || child.is_undefined() || child.as_object().is_none() {
                 return Err(boa_engine::JsNativeError::typ()
-                    .with_message(
-                        "NotFoundError: The node to be removed is not a child of this node",
-                    )
+                    .with_message("Argument is not a Node")
                     .into());
             }
-        }
-        remove_from_children(&parent_obj, &child_obj, ctx);
-        let pd = |val: JsValue| {
-            boa_engine::property::PropertyDescriptor::builder()
-                .value(val)
-                .writable(true)
-                .enumerable(true)
-                .configurable(true)
-                .build()
-        };
-        let _ =
-            child_obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
-        let _ =
-            child_obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
-        Ok(child)
-    });
+            let child_obj = child.as_object().unwrap();
+            let parent_obj = match this.as_object() {
+                Some(o) => o,
+                None => return Ok(child),
+            };
+            // Check if child is actually in parent's _children.
+            let in_children = parent_obj
+                .get(boa_engine::js_string!("_children"), ctx)
+                .ok()
+                .and_then(|v| v.as_object())
+                .map(|arr| {
+                    let len = arr
+                        .get(boa_engine::js_string!("length"), ctx)
+                        .ok()
+                        .and_then(|v| v.as_number())
+                        .unwrap_or(0.0) as u32;
+                    (0..len).any(|i| {
+                        arr.get(i as u32, ctx)
+                            .ok()
+                            .and_then(|v| v.as_object())
+                            .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false);
+            if !in_children {
+                // Also check bridge snapshot for parsed DOM nodes.
+                let parent_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+                let child_id = read_handle_id(&child);
+                // Compare the child's REAL parent instead of assuming
+                // membership: the old "assume it's in the tree" fallback let
+                // `removeChild(cousin)` silently destroy an unrelated live
+                // node (round-2 S1), and its unreachable else is what made a
+                // double removal panic reachable.
+                let in_tree = match (parent_id, child_id) {
+                    (Some(pid), Some(cid)) => b
+                        .borrow()
+                        .node_props
+                        .get(&cid)
+                        .map(|snap| snap.parent_id == pid)
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if !in_tree {
+                    return Err(boa_engine::JsNativeError::typ()
+                        .with_message(
+                            "NotFoundError: The node to be removed is not a child of this node",
+                        )
+                        .into());
+                }
+            }
+            // Push the DOM removal: the JS mirror alone left the parsed tree
+            // unchanged, so even a rebind could not observe the removal (L940).
+            if let (Some(parent_id), Some(child_id)) = (
+                read_handle_id(&JsValue::from(parent_obj.clone())),
+                read_handle_id(&child),
+            ) {
+                b.borrow_mut().ops.push(Op::RemoveChild {
+                    parent_id,
+                    child_id,
+                });
+            }
+            remove_from_children(&parent_obj, &child_obj, ctx);
+            let pd = |val: JsValue| {
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(val)
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build()
+            };
+            let _ = child_obj
+                .insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let _ = child_obj
+                .insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+            Ok(child)
+        },
+        Gc::clone(&bridge),
+    );
     init.function(remove_child, boa_engine::js_string!("removeChild"), 1);
 
     // insertBefore — inserts child before reference node in _children.
@@ -18041,5 +18095,132 @@ mod child_nodes_accessor_tests {
             document.getElementById('res').setText('n=' + el.childNodes.length);
             "#);
         assert_eq!(out, "n=0", "an empty element must report 0, not undefined");
+    }
+}
+
+#[cfg(test)]
+mod remove_child_dom_tests {
+    //! L940 (PR #85 R7): `removeChild` only updated the JS `_children` mirror
+    //! and pushed NO op, so the parsed tree kept the child — even a rebind
+    //! could not see a removal that never happened.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn child_count(doc: &HtmlDocument, id: &str) -> usize {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| n.children.len())
+        .unwrap_or(usize::MAX)
+    }
+
+    #[test]
+    fn remove_child_takes_the_node_out_of_the_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li><li id="c">c</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        assert_eq!(child_count(&doc, "list"), 3, "precondition");
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var b = document.getElementById('b');
+            list.removeChild(b);
+            "#,
+        );
+        assert_eq!(
+            child_count(&doc, "list"),
+            2,
+            "removeChild must actually remove the node from the tree"
+        );
+    }
+
+    #[test]
+    fn removing_the_same_child_twice_does_not_panic() {
+        // Round-2 S0: the op was pushed twice and `remove_and_drop_node`
+        // indexes the (now freed) slab key -> the process aborted. Master's
+        // no-op was safe only because it pushed nothing.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var b = document.getElementById('b');
+            list.removeChild(b);
+            var second = 'ok';
+            try { list.removeChild(b); } catch (e) { second = 'threw'; }
+            document.getElementById('res').setText('second=' + second);
+            "#,
+        );
+        // Reaching here at all is the assertion (no panic).
+        assert_eq!(
+            child_count(&doc, "list"),
+            1,
+            "only one removal may take effect"
+        );
+    }
+
+    #[test]
+    fn removing_a_node_that_is_not_a_child_throws_and_destroys_nothing() {
+        // Round-2 S1: the "assume it's in the tree" fallback silently deleted
+        // an UNRELATED live node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li></ul><ul id="other"><li id="cousin">c</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var cousin = document.getElementById('cousin');
+            list.removeChild(cousin);
+            "#,
+        );
+        let cousin_alive = doc
+            .tree()
+            .iter()
+            .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("cousin"));
+        assert!(
+            cousin_alive,
+            "a non-child removal must not delete an unrelated live node"
+        );
+        assert_eq!(child_count(&doc, "list"), 1, "the parent keeps its child");
+    }
+
+    #[test]
+    fn a_removed_child_is_gone_after_a_rebind() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('list').removeChild(document.getElementById('b'));
+            "#,
+        );
+        // A later run must not see the removed child.
+        rt.bind_and_run(&mut doc, r#"var gone = document.getElementById('b');"#);
+        assert_eq!(child_count(&doc, "list"), 1, "the tree must hold one child");
+        let still_there = doc
+            .tree()
+            .iter()
+            .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"));
+        assert!(!still_there, "the removed node must be gone from the tree");
     }
 }
