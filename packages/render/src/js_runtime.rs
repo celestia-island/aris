@@ -223,7 +223,10 @@ enum Op {
     /// the mirror parentNode is a bare stub for parsed elements).
     InsertAdjacent {
         ref_id: u64,
-        child_id: u64,
+        /// The nodes to move, in DOM order. Inserted as ONE batch so the
+        /// anchor cannot drift between them (round-6 S0: per-arg ops made
+        /// mixed argument lists land on the wrong side of the ref).
+        child_ids: Vec<u64>,
         /// true = insert AFTER the ref, false = BEFORE it.
         after: bool,
     },
@@ -1049,31 +1052,35 @@ fn apply_op(
         }
         Op::InsertAdjacent {
             ref_id,
-            child_id,
+            child_ids,
             after,
         } => {
-            // The guard above covers the REF: insert_nodes_before indexes it
-            // directly, and insert_nodes_after reaches it via
-            // next_sibling_id then the parent read. The child gets its own
-            // liveness check here (liveness is NOT membership — a live child
-            // already sitting next to the ref severs the anchor during the
-            // mutator's detach-first sequence, handled below).
-            if !node_is_live(doc, *child_id) {
+            // The guard above covers the REF (blitz indexes it first). Each
+            // CHILD needs its own liveness check — and, crucially, the whole
+            // list is inserted as ONE batch so the anchor cannot drift
+            // between arguments (round-6 S0).
+            if child_ids.is_empty() || child_ids.contains(ref_id) {
+                return;
+            }
+            let live: Vec<blitz_traits::NodeId> = child_ids
+                .iter()
+                .filter(|id| node_is_live(doc, **id))
+                .map(|id| blitz_traits::NodeId::from_u64(*id))
+                .collect();
+            if live.is_empty() {
                 return;
             }
             let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
-            let nid = blitz_traits::NodeId::from_u64(*child_id);
             // The effective target parent is the REF's parent. A cycle
-            // exists iff `child` is ancestor-or-self of that parent (child
-            // would become its own descendant's sibling).
+            // exists iff one of the children is ancestor-or-self of it.
             let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
                 Some(p) => p,
                 None => return, // detached ref: nowhere to insert
             };
-            {
+            for child in &live {
                 let mut cur = parent;
                 loop {
-                    if cur.as_u64() == *child_id {
+                    if cur == *child {
                         return;
                     }
                     match doc.get_node(cur).and_then(|n| n.parent) {
@@ -1082,35 +1089,57 @@ fn apply_op(
                     }
                 }
             }
-            // DOM no-ops that must NOT reach blitz: inserting a node before
-            // or after ITSELF, or when it already sits in the requested
-            // position. blitz's add_children_to_parent detaches the child
-            // FIRST and only then computes the splice index — a live child
-            // that is already a sibling of the ref therefore severs the
-            // anchor and `index_of_child(anchor).unwrap()` panics
-            // (round-2 S0: `x.before(x)`, `a.after(a.nextSibling)`).
-            if ref_id == child_id {
-                return;
-            }
-            let already_in_position = doc
-                .get_node(parent)
-                .map(|p| match p.children.iter().position(|&c| c == ref_node) {
-                    Some(i) => {
-                        let prev_is_child = i > 0 && p.children[i - 1] == nid;
-                        let next_is_child = i + 1 < p.children.len() && p.children[i + 1] == nid;
-                        if *after { next_is_child } else { prev_is_child }
-                    }
-                    None => false,
-                })
-                .unwrap_or(false);
-            if already_in_position {
-                return;
+            // DOM no-ops: every child already sits in the requested
+            // position. blitz detaches first and then
+            // index_of_child(anchor).unwrap() panics on a severed anchor.
+            // Positions + the sibling the batch must land before, read from
+            // ONE immutable snapshot of the parent's children.
+            let (ref_idx, next_after_ref) = match doc.get_node(parent) {
+                Some(p) => match p.children.iter().position(|&c| c == ref_node) {
+                    Some(i) => (i, p.children.get(i + 1).copied()),
+                    None => return,
+                },
+                None => return,
+            };
+            let kids = match doc.get_node(parent) {
+                Some(p) => p.children.clone(),
+                None => return,
+            };
+            if *after {
+                // No-op when the batch already occupies the slot right after
+                // the ref, in order.
+                let already = kids
+                    .iter()
+                    .skip(ref_idx + 1)
+                    .take(live.len())
+                    .copied()
+                    .eq(live.iter().copied());
+                if already {
+                    return;
+                }
+            } else {
+                // No-op when the batch already occupies the slots right
+                // before the ref, in order.
+                let start = ref_idx.saturating_sub(live.len());
+                let already = kids
+                    .iter()
+                    .skip(start)
+                    .take(live.len())
+                    .copied()
+                    .eq(live.iter().copied())
+                    && start + live.len() == ref_idx;
+                if already {
+                    return;
+                }
             }
             let mut mutator = doc.mutate();
             if *after {
-                mutator.insert_nodes_after(ref_node, &[nid]);
+                match next_after_ref {
+                    Some(anchor) => mutator.insert_nodes_before(anchor, &live),
+                    None => mutator.append_children(parent, &live),
+                }
             } else {
-                mutator.insert_nodes_before(ref_node, &[nid]);
+                mutator.insert_nodes_before(ref_node, &live);
             }
         }
     }
@@ -14265,16 +14294,19 @@ fn make_element_handle(
                 if let Some(parent_obj) = parent {
                     // Find next sibling as reference for insertion.
                     let next_sibling = get_next_sibling(&parent_obj, &obj, ctx);
-                    // The MIRROR splices every arg before the SAME captured
-                    // next sibling → DOM order. The TREE ops must be pushed
-                    // in REVERSE: each apply anchors on next_sibling(ref)
-                    // resolved at apply time, so the LAST-pushed arg lands
-                    // closest to the ref — reversing the push order yields
-                    // DOM order too (round-5 S2: forward pushes gave
-                    // [a, y, x, z] for a.after(x, y)).
+                    // Mirror first (every arg splices before the SAME
+                    // captured sibling -> DOM order), then push ONE batch op
+                    // carrying every real-tree arg in DOM order. A single op
+                    // cannot drift its anchor between arguments
+                    // (round-6 S0: mixed argument lists landed on the wrong
+                    // side of the ref with per-arg ops).
+                    let mut batch: Vec<u64> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
+                            if let Some(cid) = read_handle_id(&node) {
+                                batch.push(cid);
+                            }
                             insert_into_children(
                                 &parent_obj,
                                 &child_obj,
@@ -14283,22 +14315,14 @@ fn make_element_handle(
                             );
                         }
                     }
-                    // Reversed op pass (see comment above): last-pushed
-                    // lands closest to the ref.
-                    for arg in args.iter().rev() {
-                        let node = value_to_node(arg, ctx);
-                        if let Some(child_obj) = node.as_object() {
-                            if let (Some(ref_id), Some(child_id)) = (
-                                read_handle_id(&JsValue::from(obj.clone())),
-                                read_handle_id(&node),
-                            ) {
-                                b.borrow_mut().ops.push(Op::InsertAdjacent {
-                                    ref_id,
-                                    child_id,
-                                    after: true,
-                                });
-                            }
-                        }
+                    if !batch.is_empty()
+                        && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
+                    {
+                        b.borrow_mut().ops.push(Op::InsertAdjacent {
+                            ref_id,
+                            child_ids: batch,
+                            after: true,
+                        });
                     }
                 }
             }
@@ -14317,23 +14341,26 @@ fn make_element_handle(
                     .ok()
                     .and_then(|v| v.as_object());
                 if let Some(parent_obj) = parent {
+                    // Same batching as after(): one op carries the whole node
+                    // list in DOM order.
+                    let mut batch: Vec<u64> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
-                            // Real tree node: DOM before() MOVES it right before
-                            // this node in the tree.
-                            if let (Some(ref_id), Some(child_id)) = (
-                                read_handle_id(&JsValue::from(obj.clone())),
-                                read_handle_id(&node),
-                            ) {
-                                b.borrow_mut().ops.push(Op::InsertAdjacent {
-                                    ref_id,
-                                    child_id,
-                                    after: false,
-                                });
+                            if let Some(cid) = read_handle_id(&node) {
+                                batch.push(cid);
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
+                    }
+                    if !batch.is_empty()
+                        && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
+                    {
+                        b.borrow_mut().ops.push(Op::InsertAdjacent {
+                            ref_id,
+                            child_ids: batch,
+                            after: false,
+                        });
                     }
                 }
             }
@@ -19222,6 +19249,41 @@ mod before_after_dom_tests {
             kid_ids(&doc, "src"),
             Vec::<String>::new(),
             "sources drained"
+        );
+    }
+
+    #[test]
+    fn after_with_a_mixed_argument_list_still_lands_after_the_ref() {
+        // Round-6 S0: with per-arg ops, any TEXT/非树 arg in the list made
+        // the real nodes land BEFORE the ref (the mirror and the op batch
+        // disagreed about the anchor). One batch op fixes the contract.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="l"><li id="a">a</li><li id="z">z</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('a').after(x, 'TEXT', y);
+            "#,
+        );
+        // The text arg never becomes a tree node (pre-existing contract);
+        // the two REAL nodes must still land AFTER the ref, in order.
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.first().map(|s| s.as_str()),
+            Some("a"),
+            "the ref must stay first; got {kids:?}"
+        );
+        let pos_x = kids.iter().position(|s| s == "x").expect("x missing");
+        let pos_y = kids.iter().position(|s| s == "y").expect("y missing");
+        assert!(pos_x < pos_y, "x must precede y (DOM order); got {kids:?}");
+        assert!(
+            pos_x > 0,
+            "the real nodes must land AFTER the ref, not before it; got {kids:?}"
         );
     }
 
