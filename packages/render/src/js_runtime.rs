@@ -14265,12 +14265,29 @@ fn make_element_handle(
                 if let Some(parent_obj) = parent {
                     // Find next sibling as reference for insertion.
                     let next_sibling = get_next_sibling(&parent_obj, &obj, ctx);
+                    // The MIRROR splices every arg before the SAME captured
+                    // next sibling → DOM order. The TREE ops must be pushed
+                    // in REVERSE: each apply anchors on next_sibling(ref)
+                    // resolved at apply time, so the LAST-pushed arg lands
+                    // closest to the ref — reversing the push order yields
+                    // DOM order too (round-5 S2: forward pushes gave
+                    // [a, y, x, z] for a.after(x, y)).
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
-                            // Real tree node: DOM after() MOVES it right after
-                            // this node in the tree (mirror-only left the tree
-                            // stale — same family as append/prepend, PR #89 R2).
+                            insert_into_children(
+                                &parent_obj,
+                                &child_obj,
+                                next_sibling.clone(),
+                                ctx,
+                            );
+                        }
+                    }
+                    // Reversed op pass (see comment above): last-pushed
+                    // lands closest to the ref.
+                    for arg in args.iter().rev() {
+                        let node = value_to_node(arg, ctx);
+                        if let Some(child_obj) = node.as_object() {
                             if let (Some(ref_id), Some(child_id)) = (
                                 read_handle_id(&JsValue::from(obj.clone())),
                                 read_handle_id(&node),
@@ -14281,12 +14298,6 @@ fn make_element_handle(
                                     after: true,
                                 });
                             }
-                            insert_into_children(
-                                &parent_obj,
-                                &child_obj,
-                                next_sibling.clone(),
-                                ctx,
-                            );
                         }
                     }
                 }
@@ -19125,10 +19136,13 @@ mod before_after_dom_tests {
 
     #[test]
     fn self_reference_and_in_position_inserts_are_safe_no_ops() {
-        // Round-2 S0: `x.before(x)` and `a.after(a.nextSibling)` aborted the
-        // process — blitz detaches the child first, then
-        // index_of_child(severed anchor) unwraps None. DOM semantics: both
-        // are no-ops.
+        // Round-2 S0: `x.before(x)` and `a.after(<an element that already
+        // follows a>)` aborted the process — blitz detaches the child first,
+        // then index_of_child(severed anchor) unwraps None. DOM semantics:
+        // both are no-ops. (Note: `a.after(a.nextSibling)` is NOT a witness —
+        // nextSibling is null on parsed-element stubs, so no op is pushed.)
+        // `a.after(a)` also survives: its anchor resolves via the append
+        // branch, which is why only the before-direction self-insert panics.
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="l"><li id="a">a</li><li id="x">x</li><li id="z">z</li></ul><div id="res"></div></body></html>"#,
             DocumentConfig::default(),
@@ -19173,6 +19187,41 @@ mod before_after_dom_tests {
             kid_ids(&doc, "l"),
             vec!["x".to_string(), "y".to_string(), "a".to_string()],
             "before(x, y) must yield [x, y, a] — DOM order"
+        );
+    }
+
+    #[test]
+    fn multi_arg_after_keeps_its_order() {
+        // Round-5 S2: after(x, y) used to land [a, y, x, z] — each apply
+        // anchored on next_sibling(ref) resolved at apply time, so arg2 was
+        // spliced before arg1. DOM order is [a, x, y, z].
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="l"><li id="a">a</li><li id="z">z</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('a').after(x, y);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "y".to_string(),
+                "z".to_string(),
+            ],
+            "after(x, y) must yield [a, x, y, z] — DOM order"
+        );
+        assert_eq!(
+            kid_ids(&doc, "src"),
+            Vec::<String>::new(),
+            "sources drained"
         );
     }
 
