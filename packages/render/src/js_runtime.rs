@@ -9272,22 +9272,27 @@ fn add_dom_methods(obj: &JsObject, ctx: &mut Context) {
             // silent no-op when the child is not in `_children`, and this
             // function then returned the child as if it had been removed — so
             // `host.removeChild(unrelatedNode)` looked like success. The
-            // contextual removeChild elsewhere in this file already throws
-            // NotFoundError; this mirror-installed variant must match. Match
-            // by `_arisId` too: the mirror's entries are anonymous stubs, so
-            // identity alone would reject a real child.
+            // make_element_handle variant already throws NotFoundError; this
+            // mirror-installed variant must match.
+            //
+            // IDENTITY ONLY, and that is sufficient on THIS surface: parents
+            // built by add_dom_methods receive `_children` entries exclusively
+            // from appendChild/insertBefore, which push the CALLER's own
+            // object, and walk_handle (the only other add_dom_methods caller)
+            // seeds `_children` empty. The anonymous id-bearing stubs that
+            // make `_arisId` necessary live in populate_props /
+            // make_element_handle, which never reach add_dom_methods — an
+            // `_arisId` fallback here would be unpinned dead code (round-2 S2,
+            // mutation-proved unobservable).
             let arr = get_or_create_children(&parent_obj, ctx);
             let len = arr.length(ctx).ok().unwrap_or(0) as u32;
-            let child_rid = read_handle_id(&child);
             let mut present = false;
             for i in 0..len {
                 let Ok(v) = arr.at(i, ctx) else { continue };
-                let same = v
-                    .as_object()
+                if v.as_object()
                     .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
                     .unwrap_or(false)
-                    || child_rid.is_some_and(|rid| read_handle_id(&v) == Some(rid));
-                if same {
+                {
                     present = true;
                     break;
                 }
