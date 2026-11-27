@@ -230,6 +230,13 @@ enum Op {
         /// true = insert AFTER the ref, false = BEFORE it.
         after: bool,
     },
+    /// `ref.replaceWith(...children)` on real tree nodes — the batch lands
+    /// where the ref was and the ref is DETACHED (remove_node, not drop: a
+    /// replaced node stays re-insertable, matching #87's decision).
+    ReplaceWith {
+        ref_id: u64,
+        child_ids: Vec<u64>,
+    },
 }
 
 impl JsRuntime {
@@ -939,6 +946,9 @@ fn apply_op(
         }
         | Op::InsertAdjacent {
             ref_id: node_id, ..
+        }
+        | Op::ReplaceWith {
+            ref_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -1162,6 +1172,60 @@ fn apply_op(
             } else {
                 mutator.insert_nodes_before(ref_node, &live);
             }
+        }
+        Op::ReplaceWith { ref_id, child_ids } => {
+            // Guards per the hard step: blitz indexes the REF (parent_id
+            // lookup + viable_sibling + replace_node_with's
+            // insert_nodes_before + remove_node) and each CHILD (detach in
+            // add_children_to_parent / detach_all).
+            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
+            if !node_is_live(doc, *ref_id) {
+                return;
+            }
+            // Dedup preserving order. Self members stay IN the batch:
+            // `replace_with_nodes`'s viable-sibling branch exists exactly
+            // for anchor-in-batch shapes (the anchor is excluded from the
+            // viable scan, so `x.replaceWith(x, z)` re-inserts x where it
+            // was and lands z after it — round-2 S2: skipping self here
+            // DESTROYED the node instead). An ancestor-of-parent member
+            // would create a cycle — reject wholesale.
+            // No page path produces a tree-detached ref today (`remove()`
+            // only clears the mirror), but replace_with_nodes itself no-ops
+            // on one — this extraction only feeds the cycle walk below.
+            let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
+                Some(p) => p,
+                None => return,
+            };
+            let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut rejected = false;
+            for id in child_ids {
+                let nid = blitz_traits::NodeId::from_u64(*id);
+                if !node_is_live(doc, *id) || live.contains(&nid) {
+                    continue;
+                }
+                let mut cur = parent;
+                loop {
+                    if cur == nid {
+                        rejected = true;
+                        break;
+                    }
+                    match doc.get_node(cur).and_then(|n| n.parent) {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+                if rejected {
+                    break;
+                }
+                if !live.contains(&nid) {
+                    live.push(nid);
+                }
+            }
+            if rejected {
+                return;
+            }
+            let mut mutator = doc.mutate();
+            mutator.replace_with_nodes(ref_node, &live);
         }
     }
 }
@@ -14392,26 +14456,79 @@ fn make_element_handle(
     init.function(before_fn, boa_engine::js_string!("before"), 0);
 
     // replaceWith(...nodes) — replaces this node with the arguments.
-    let replace_with_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(obj) = this.as_object() {
-            let parent = obj
-                .get(boa_engine::js_string!("parentNode"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            if let Some(parent_obj) = parent {
-                // Insert all args before this node.
-                for arg in args.iter() {
-                    let node = value_to_node(arg, ctx);
-                    if let Some(child_obj) = node.as_object() {
-                        insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+    let replace_with_fn = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(obj) = this.as_object() {
+                let parent = obj
+                    .get(boa_engine::js_string!("parentNode"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                if let Some(parent_obj) = parent {
+                    // Real tree node batch: one op replaces the ref in the
+                    // tree (mirror-only left the tree unchanged — same family
+                    // as before/after, PR #90 R5).
+                    //
+                    // A PENDING (createElement) argument has no tree node and
+                    // no id — it can only reach the mirror today. Pushing the
+                    // op with the pending arg dropped would DELETE the ref and
+                    // land nothing (round-5 S2: `ref.replaceWith(createElement(
+                    // ...))` lost the whole swap, where master at least kept
+                    // the ref). So a batch containing a pending arg is not
+                    // pushed at all: the tree stays untouched (master's
+                    // contract) instead of being half-applied. Materializing
+                    // pending args is a family-wide follow-up (before/after/
+                    // append/prepend/insertBefore share the same gap).
+                    let mut batch: Vec<u64> = Vec::new();
+                    let mut staged: Vec<boa_engine::object::JsObject> = Vec::new();
+                    let mut has_pending = false;
+                    for arg in args.iter() {
+                        let node = value_to_node(arg, ctx);
+                        if let Some(child_obj) = node.as_object() {
+                            if let Some(cid) = read_handle_id(&node) {
+                                batch.push(cid);
+                            } else if read_pending(&node).is_some()
+                                || read_canvas_alloc(&node).is_some()
+                            {
+                                has_pending = true;
+                            }
+                            staged.push(child_obj);
+                        }
+                    }
+                    // Apply NOTHING unless the whole batch reaches the tree:
+                    // pushing the op for a pending arg would delete the ref
+                    // and land nothing, and mutating only the MIRROR would
+                    // leave it claiming a replacement that never happened —
+                    // later ops then read that stale mirror and delete live
+                    // nodes (round-6 S1). An arg that is neither live nor
+                    // pending leaves an empty batch, which must not push
+                    // either (round-6 S3: the ref would vanish with nothing
+                    // to replace it).
+                    let ref_id = read_handle_id(&JsValue::from(obj.clone()));
+                    // `replaceWith()` with NO arguments is a pure detach (DOM
+                    // spec) and must still go through. An EMPTY batch that
+                    // came from unusable ARGUMENTS, by contrast, must not —
+                    // that would destroy the ref with nothing to replace it
+                    // (round-6 S3).
+                    let no_args = args.is_empty();
+                    if !has_pending
+                        && (no_args || !batch.is_empty())
+                        && let Some(ref_id) = ref_id
+                    {
+                        for child_obj in &staged {
+                            insert_into_children(&parent_obj, child_obj, Some(obj.clone()), ctx);
+                        }
+                        remove_from_children(&parent_obj, &obj, ctx);
+                        b.borrow_mut().ops.push(Op::ReplaceWith {
+                            ref_id,
+                            child_ids: batch,
+                        });
                     }
                 }
-                // Remove this node.
-                remove_from_children(&parent_obj, &obj, ctx);
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(replace_with_fn, boa_engine::js_string!("replaceWith"), 0);
 
     // closest(selector) — walks up parentNode chain matching selector.
@@ -19391,5 +19508,281 @@ mod before_after_dom_tests {
         );
         // A rebind must walk the relocated tree without aborting.
         rt.bind_and_run(&mut doc, r#"void 0;"#);
+    }
+}
+
+#[cfg(test)]
+mod replace_with_dom_tests {
+    //! L940 (PR #90 R5): `replaceWith(...)` was mirror-only — the tree never
+    //! changed. One batch op replaces the ref in the tree and DETACHES it
+    //! (remove_node, not drop).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn replace_with_swaps_the_ref_for_the_batch_in_the_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('old').replaceWith(x, y);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "src"),
+            Vec::<String>::new(),
+            "sources drained"
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["x".to_string(), "y".to_string(), "keep".to_string()],
+            "the batch must land where the ref was, ref detached"
+        );
+        // Detach-not-drop: the replaced node is re-insertable under a new
+        // parent (its own last child position here).
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('keep').appendChild(document.getElementById('old'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "keep"),
+            vec!["#text".to_string(), "old".to_string()],
+            "detach-not-drop: the replaced node is re-insertable"
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["x".to_string(), "y".to_string(), "keep".to_string()],
+            "the list order is unchanged by the re-insert"
+        );
+    }
+
+    #[test]
+    fn self_member_is_reinserted_in_place_not_destroyed() {
+        // Round-2 F1/F2: skipping the self member made live empty (only
+        // member) or dropped it (mixed) — replace_with_nodes then removed
+        // the ref and inserted nothing, DESTROYING the element. Keeping the
+        // self member lets viable_sibling re-insert it in place.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="only">o</li></ul><ul id="src"><li id="z">z</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var only = document.getElementById('only');
+            var z = document.getElementById('z');
+            only.replaceWith(only);          // self only: in-place no-op
+            only.replaceWith(only, z);       // mixed: self stays, z after it
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // Res is inside #l's parent body — after the ops, #l = [only, z].
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["only".to_string(), "z".to_string()],
+            "self member must be re-inserted in place, not destroyed"
+        );
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(res, "survived");
+    }
+
+    #[test]
+    fn replace_with_a_pending_arg_leaves_the_ref_alive() {
+        // Round-5 S2: a createElement argument has no tree node, so pushing
+        // the op would DELETE the ref and land nothing (master at least kept
+        // the ref). A batch containing a pending arg must not be pushed —
+        // the tree stays untouched.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('span');
+            made.setText('MADE');
+            document.getElementById('old').replaceWith(made);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string(), "keep".to_string()],
+            "a pending-arg replaceWith must leave the tree untouched (ref alive)"
+        );
+        // The canonical idiom works once the element has been materialized:
+        // appendChild materializes it, then replaceWith relocates it.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('span');
+            made.setText('MADE');
+            document.getElementById('l').appendChild(made);
+            "#,
+        );
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var l = document.getElementById('l');
+            var made = l.lastChild;
+            document.getElementById('old').replaceWith(made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert!(
+            !kids.contains(&"old".to_string()),
+            "after materialization the swap must succeed; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_skipped_replace_with_leaves_the_mirror_alone() {
+        // Round-6 S1: the pending guard blocked only the OP while the mirror
+        // was still mutated, so it claimed a replacement that never
+        // happened. Here BOTH arguments are pending, so no tree node is ever
+        // a replacement target and nothing may move at all.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('keep').replaceWith(document.createElement('b'));
+            document.getElementById('old').replaceWith(document.createElement('i'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string(), "keep".to_string()],
+            "pending-arg calls must leave the tree completely untouched"
+        );
+        // NOTE (honest scope): the mirror half of this fix is NOT pinned by
+        // any passing assertion — `_children` is page-invisible (childNodes
+        // is snapshot-backed), so a mutation that mutates the mirror
+        // unconditionally survives this suite. The TREE half is pinned; the
+        // mirror half is hygiene verified only by the reviewer's master A/B
+        // (master ["old","keep"] vs pre-fix HEAD ["keep"]).
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('old').replaceWith(document.getElementById('keep'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["keep".to_string()],
+            "after the skipped calls the real swap must still work"
+        );
+    }
+
+    #[test]
+    fn replace_with_a_non_node_argument_does_not_destroy_the_ref() {
+        // Round-6 S3: an arg that is neither a live node nor pending leaves
+        // an empty batch — pushing it removed the ref with nothing to land.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('old').replaceWith({notANode: true});
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string()],
+            "an unusable argument must not destroy the ref"
+        );
+    }
+
+    #[test]
+    fn replace_with_ref_in_own_subtree_is_rejected() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('leaf').replaceWith(document.getElementById('outer'));
+            "#,
+        );
+        let outer_kids = kid_ids(&doc, "outer");
+        assert_eq!(
+            outer_kids,
+            vec!["inner".to_string()],
+            "a cyclic replaceWith must be rejected wholesale"
+        );
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
+    }
+
+    #[test]
+    fn replace_with_no_args_just_detaches_the_ref() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('a').replaceWith();
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["b".to_string()],
+            "replaceWith() with no args detaches the ref"
+        );
     }
 }
