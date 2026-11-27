@@ -2008,16 +2008,25 @@ fn populate_props(
         let doc_obj = doc_val.as_ref().and_then(|v| v.as_object());
         // Build a REAL element handle for the parent rather than a bare
         // `{_arisId}` stub: `el.parentNode.removeChild(el)` and friends threw
-        // `TypeError: not a function` because the stub carried no DOM method
-        // surface (L940: recorded across #85 R3 / #90 R9 / #93 R9 — it also
-        // blocked the before/after materialization wiring). make_element_handle
-        // installs the full surface; its own parentNode population is bounded
-        // because a parent snapshot either has parent_id 0 or resolves to a
-        // body/html handle, so the chain terminates at the document.
-        // Populate the real parent handle's own props (id / tagName /
-        // textContent) from the bridge snapshot: make_element_handle leaves
-        // them empty, and a page branching on `el.parentNode.id` saw "".
-        let populate_parent = |handle: JsValue, ctx: &mut Context| -> JsValue {
+        // `TypeError: not a callable function` because the stub carried no DOM
+        // method surface (L940: recorded across #85 R3 / #90 R9 / #93 R9 — it
+        // also blocked the before/after materialization wiring).
+        //
+        // RECURSION BUDGET (round-2 measurement): the walk does NOT terminate
+        // "at the document" — body/html STOP the descent (they resolve to the
+        // document's own handles), and above <html> the chain ends in an empty
+        // object, not null (pre-existing populate_props behaviour). Measured
+        // on an 8-level tree: 11 hops total, no stack growth, repeated walks
+        // identical. Raising this to a proper document/per-node identity model
+        // is a separate change.
+        // REPOPULATE the parent handle's own props (id / tagName /
+        // textContent) from the bridge snapshot. make_element_handle already
+        // ran populate_props once on the fresh handle; that pass leaves
+        // `id`/`tagName` empty for a parent whose snapshot is not consulted at
+        // construction, so this second pass is what makes
+        // `el.parentNode.id` read the real value. Round-2 flagged the double
+        // work — it is deliberate, and the name now says so.
+        let repopulate_parent_props = |handle: JsValue, ctx: &mut Context| -> JsValue {
             if let Some(h) = handle.as_object() {
                 let snap = bridge.borrow().node_props.get(&s.parent_id).cloned();
                 if let Some(snap) = snap {
@@ -2032,7 +2041,7 @@ fn populate_props(
                 .filter(|v| !v.is_null() && !v.is_undefined())
                 .unwrap_or_else(|| {
                     make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
-                        .map(|h| populate_parent(JsValue::from(h), ctx))
+                        .map(|h| repopulate_parent_props(JsValue::from(h), ctx))
                         .unwrap_or_else(|_| {
                             let pn =
                                 boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -2049,7 +2058,7 @@ fn populate_props(
                 .filter(|v| !v.is_null() && !v.is_undefined())
                 .unwrap_or_else(|| {
                     make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
-                        .map(|h| populate_parent(JsValue::from(h), ctx))
+                        .map(|h| repopulate_parent_props(JsValue::from(h), ctx))
                         .unwrap_or_else(|_| {
                             let pn =
                                 boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
@@ -2062,7 +2071,7 @@ fn populate_props(
                 })
         } else {
             make_element_handle(ctx, Gc::clone(&bridge), s.parent_id, None)
-                .map(|h| populate_parent(JsValue::from(h), ctx))
+                .map(|h| repopulate_parent_props(JsValue::from(h), ctx))
                 .unwrap_or_else(|_| {
                     let pn = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
                     let _ = pn.insert_property(
