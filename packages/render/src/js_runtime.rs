@@ -11844,10 +11844,28 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                                                 pd2(JsValue::from(is_passive)),
                                             );
                                         }
+                                        // DOM: a listener may be a function OR
+                                        // an object with a `handleEvent`
+                                        // method. The element and EventTarget
+                                        // surfaces both do this; the document
+                                        // surface only handled callables, so a
+                                        // document `handleEvent` listener was
+                                        // registered and never fired (round-2
+                                        // F2 of PR #103).
                                         if let Some(fn_obj) = callback.as_object() {
                                             if fn_obj.is_callable() {
                                                 let _ = fn_obj.call(
                                                     &JsValue::null(),
+                                                    &[event.clone()],
+                                                    ctx,
+                                                );
+                                            } else if let Ok(h) = fn_obj
+                                                .get(boa_engine::js_string!("handleEvent"), ctx)
+                                                && let Some(hf) = h.as_object()
+                                                && hf.is_callable()
+                                            {
+                                                let _ = hf.call(
+                                                    &JsValue::from(fn_obj.clone()),
                                                     &[event.clone()],
                                                     ctx,
                                                 );
@@ -22106,5 +22124,81 @@ mod eventtarget_dedup_tests {
             );
             "#);
         assert_eq!(out, "len=1 log=B", "the surviving handler must still fire");
+    }
+}
+
+#[cfg(test)]
+mod document_handle_event_tests {
+    //! Round-2 F2 of PR #103: the document dispatchEvent unwrapped
+    //! `{callback, passive}` and then required `callback` to be CALLABLE, with
+    //! no `handleEvent` fallback. The element and EventTarget surfaces both
+    //! support object listeners, so a document `handleEvent` listener was
+    //! registered and never fired.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    #[test]
+    fn document_handle_event_object_fires() {
+        let out = run(r#"
+            var obj = { handleEvent: function (e) { this.seen = (this.seen || 0) + 1; } };
+            document.addEventListener('ping', obj);
+            document.dispatchEvent({ type: 'ping' });
+            document.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('seen=' + (obj.seen || 0));
+            "#);
+        assert_eq!(
+            out, "seen=2",
+            "a document listener with handleEvent must fire on each dispatch"
+        );
+    }
+
+    /// The plain-function path must keep working (no over-change).
+    #[test]
+    fn document_plain_function_still_fires() {
+        let out = run(r#"
+            var n = 0;
+            document.addEventListener('ping', function () { n++; });
+            document.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(out, "n=1", "a plain function listener must still fire");
+    }
+
+    /// `this` inside handleEvent is the listener object per DOM.
+    #[test]
+    fn handle_event_this_is_the_listener_object() {
+        let out = run(r#"
+            var obj = {
+                tag: 'MINE',
+                handleEvent: function () { document.getElementById('out').setText('this=' + this.tag); }
+            };
+            document.addEventListener('ping', obj);
+            document.dispatchEvent({ type: 'ping' });
+            "#);
+        assert_eq!(
+            out, "this=MINE",
+            "handleEvent must be invoked with the listener object as `this`"
+        );
     }
 }
