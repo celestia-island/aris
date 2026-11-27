@@ -1182,21 +1182,25 @@ fn apply_op(
             if !node_is_live(doc, *ref_id) {
                 return;
             }
-            // Dedup preserving order; a batch member that IS the ref makes
-            // it a DOM no-op (skip); an ancestor-of-parent member would
-            // create a cycle — reject wholesale.
+            // Dedup preserving order. Self members stay IN the batch:
+            // `replace_with_nodes`'s viable-sibling branch exists exactly
+            // for anchor-in-batch shapes (the anchor is excluded from the
+            // viable scan, so `x.replaceWith(x, z)` re-inserts x where it
+            // was and lands z after it — round-2 S2: skipping self here
+            // DESTROYED the node instead). An ancestor-of-parent member
+            // would create a cycle — reject wholesale.
+            // No page path produces a tree-detached ref today (`remove()`
+            // only clears the mirror), but replace_with_nodes itself no-ops
+            // on one — this extraction only feeds the cycle walk below.
             let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
                 Some(p) => p,
-                None => return, // detached ref: replaceWith is a no-op
+                None => return,
             };
             let mut live: Vec<blitz_traits::NodeId> = Vec::new();
             let mut rejected = false;
             for id in child_ids {
-                if *id == *ref_id {
-                    continue; // self-replace: that member contributes nothing
-                }
                 let nid = blitz_traits::NodeId::from_u64(*id);
-                if !node_is_live(doc, *id) {
+                if !node_is_live(doc, *id) || live.contains(&nid) {
                     continue;
                 }
                 let mut cur = parent;
@@ -19545,6 +19549,47 @@ mod replace_with_dom_tests {
             vec!["x".to_string(), "y".to_string(), "keep".to_string()],
             "the list order is unchanged by the re-insert"
         );
+    }
+
+    #[test]
+    fn self_member_is_reinserted_in_place_not_destroyed() {
+        // Round-2 F1/F2: skipping the self member made live empty (only
+        // member) or dropped it (mixed) — replace_with_nodes then removed
+        // the ref and inserted nothing, DESTROYING the element. Keeping the
+        // self member lets viable_sibling re-insert it in place.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="only">o</li></ul><ul id="src"><li id="z">z</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var only = document.getElementById('only');
+            var z = document.getElementById('z');
+            only.replaceWith(only);          // self only: in-place no-op
+            only.replaceWith(only, z);       // mixed: self stays, z after it
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // Res is inside #l's parent body — after the ops, #l = [only, z].
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["only".to_string(), "z".to_string()],
+            "self member must be re-inserted in place, not destroyed"
+        );
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(res, "survived");
     }
 
     #[test]
