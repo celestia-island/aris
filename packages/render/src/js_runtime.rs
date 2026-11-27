@@ -8982,11 +8982,25 @@ fn get_next_sibling(parent: &JsObject, child: &JsObject, ctx: &mut Context) -> O
 fn remove_from_children(parent: &JsObject, child: &JsObject, ctx: &mut Context) {
     let arr = get_or_create_children(parent, ctx);
     let len = arr.length(ctx).ok().unwrap_or(0) as u32;
+    // IDENTITY first, then `_arisId` (round-4 S1 of PR #100): the `_children`
+    // mirror is seeded from the tree in populate_props with ANONYMOUS entries
+    // carrying only `_arisId`, so a caller's own handle is never the same
+    // object as the seeded entry. Identity-only matching therefore silently
+    // no-opped every removeChild on a freshly-fetched handle — the mirror
+    // never shrank and one systematic reader (replaceChild's membership
+    // guard) kept seeing the stale set.
+    let child_id = read_handle_id(&JsValue::from(child.clone()));
     let mut found: Option<u32> = None;
     for i in 0..len {
         if let Ok(v) = arr.at(i, ctx) {
             if let Some(o) = v.as_object() {
                 if JsObject::equals(&o, child) {
+                    found = Some(i);
+                    break;
+                }
+                if let Some(cid) = child_id
+                    && read_handle_id(&v) == Some(cid)
+                {
                     found = Some(i);
                     break;
                 }
@@ -9031,11 +9045,27 @@ fn insert_into_children(
         let _ = arr.push(JsValue::from(child.clone()), ctx);
     } else {
         let ref_node = before.unwrap();
+        // Same identity-then-`_arisId` matching as remove_from_children
+        // (round-4 S1 of PR #100): the seeded mirror entries are anonymous
+        // objects, so an identity-only search never finds the anchor and the
+        // MIRROR splice degrades to an append. NOTE: the parsed TREE is
+        // unaffected either way — insertBefore's tree effect rides
+        // Op::InsertBefore, which resolves the anchor by id on its own — so
+        // this branch has no independent observable pin; it is kept for
+        // mirror consistency with remove_from_children rather than as a
+        // separately-gated behaviour.
+        let ref_id = read_handle_id(&JsValue::from(ref_node.clone()));
         let mut ref_idx = len;
         for i in 0..len {
             if let Ok(v) = arr.at(i, ctx) {
                 if let Some(o) = v.as_object() {
                     if JsObject::equals(&o, &ref_node) {
+                        ref_idx = i;
+                        break;
+                    }
+                    if let Some(rid) = ref_id
+                        && read_handle_id(&v) == Some(rid)
+                    {
                         ref_idx = i;
                         break;
                     }
@@ -21457,6 +21487,69 @@ mod replace_child_op_tests {
         );
         assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
         assert_eq!(kids(&doc, "other"), ["F"], "#other must be untouched");
+    }
+
+    /// Round-4 S1: the `_children` mirror is seeded with ANONYMOUS entries
+    /// (only `_arisId`), so an identity-only removeChild silently no-opped —
+    /// the mirror never shrank and the membership guard kept reading the
+    /// stale set. The mirror must actually drop the child.
+    #[test]
+    fn remove_child_shrinks_the_children_mirror() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="a">A</span><span id="b">B</span></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var a = document.getElementById('a');
+            var before = host._children.length;
+            host.removeChild(a);
+            var after = host._children.length;
+            document.getElementById('out').setText('before=' + before + ' after=' + after);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "before=2 after=1",
+            "removeChild must shrink the JS mirror, not silently no-op"
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["B"],
+            "and the tree must drop the child"
+        );
+    }
+
+    /// And the guard must therefore REJECT a node that the same window
+    /// already removed (round-4 S1: it accepted it because the mirror still
+    /// listed it).
+    #[test]
+    fn replace_child_rejects_a_node_removed_in_the_same_window() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="a">A</span></div><div id="spare">S</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var a = document.getElementById('a');
+            var spare = document.getElementById('spare');
+            host.removeChild(a);
+            var r = 'no-throw';
+            try { host.replaceChild(spare, a); } catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "threw",
+            "a node removed in this window is no longer a child"
+        );
     }
 
     /// Two replaceChild calls in ONE window (the swap-twice idiom) must both
