@@ -9268,6 +9268,37 @@ fn add_dom_methods(obj: &JsObject, ctx: &mut Context) {
         }
         let child_obj = child.as_object().unwrap();
         if let Some(parent_obj) = this.as_object() {
+            // MEMBERSHIP CHECK (L940, R2 of #99): remove_from_children is a
+            // silent no-op when the child is not in `_children`, and this
+            // function then returned the child as if it had been removed — so
+            // `host.removeChild(unrelatedNode)` looked like success. The
+            // contextual removeChild elsewhere in this file already throws
+            // NotFoundError; this mirror-installed variant must match. Match
+            // by `_arisId` too: the mirror's entries are anonymous stubs, so
+            // identity alone would reject a real child.
+            let arr = get_or_create_children(&parent_obj, ctx);
+            let len = arr.length(ctx).ok().unwrap_or(0) as u32;
+            let child_rid = read_handle_id(&child);
+            let mut present = false;
+            for i in 0..len {
+                let Ok(v) = arr.at(i, ctx) else { continue };
+                let same = v
+                    .as_object()
+                    .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
+                    .unwrap_or(false)
+                    || child_rid.is_some_and(|rid| read_handle_id(&v) == Some(rid));
+                if same {
+                    present = true;
+                    break;
+                }
+            }
+            if !present {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message(
+                        "NotFoundError: The node to be removed is not a child of this node",
+                    )
+                    .into());
+            }
             remove_from_children(&parent_obj, &child_obj, ctx);
             let pd2 = |val: JsValue| {
                 boa_engine::property::PropertyDescriptor::builder()
@@ -21884,5 +21915,74 @@ mod next_sibling_tests {
             "id=b tag=LI hasMethods=true parentIsL=true",
             "the sibling must be a full handle, not an anonymous stub"
         );
+    }
+}
+
+#[cfg(test)]
+mod remove_child_membership_tests {
+    //! L940 (R2 of #99): `add_dom_methods::removeChild` — the variant
+    //! installed on objects built by that path (a `new Document()`, its body,
+    //! a DocumentFragment) — had no membership check. `remove_from_children`
+    //! is a silent no-op when the child is absent, and the function then
+    //! returned the child as if it had been removed, so
+    //! `parent.removeChild(unrelatedNode)` looked like success. DOM throws
+    //! NotFoundError.
+    //!
+    //! NOTE the surface: ordinary `getElementById` handles go through
+    //! make_element_handle's own removeChild (which already had the guard), so
+    //! these tests deliberately use a `new Document()` body.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// A non-child on the add_dom_methods surface must throw.
+    #[test]
+    fn add_dom_methods_remove_child_rejects_a_non_child() {
+        let out = run(r#"
+            var d = new Document();
+            var parent = d.createElement('div');
+            var kid = d.createElement('span');
+            var stranger = d.createElement('em');
+            parent.appendChild(kid);
+            var r = 'no-throw';
+            try { parent.removeChild(stranger); } catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#);
+        assert_eq!(out, "threw", "a non-child must be rejected on this surface");
+    }
+
+    /// And a real child still removes (the guard must not over-reject).
+    #[test]
+    fn add_dom_methods_remove_child_accepts_a_real_child() {
+        let out = run(r#"
+            var d = new Document();
+            var parent = d.createElement('div');
+            var kid = d.createElement('span');
+            parent.appendChild(kid);
+            var r = 'threw';
+            try { parent.removeChild(kid); r = 'ok'; } catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#);
+        assert_eq!(out, "ok", "a real child must still be removable");
     }
 }
