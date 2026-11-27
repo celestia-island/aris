@@ -359,6 +359,14 @@ impl JsRuntime {
             // re-registration must not be killed by a stale record
             // (R3 S1: cross-ticket remove→re-add left the listener dead).
             b.listener_actions.clear();
+            // Per-window isolation for the handle caches (round-2 S3): a
+            // window-1 handle must not be served into window 2's tree. The
+            // caches saturate at the live-id count so they never grow
+            // unboundedly, but keeping a stale handle is a silent misroute —
+            // page state (and `_js_listeners`) from the previous run would
+            // ride along on an object that now describes a different tree.
+            b.element_handle_cache.clear();
+            b.walk_handle_cache.clear();
             b.slots_active = replay;
             if replay {
                 // A page run starts a fresh slot generation; the previous
@@ -22316,16 +22324,21 @@ mod stable_handle_identity_tests {
     /// ... while properties stay FRESH (the cache re-populates on each hit).
     #[test]
     fn cached_handle_properties_stay_fresh() {
+        // Round-2 S3: asserting on a value the snapshot already holds passes
+        // even with the re-populate disabled, so OVERWRITE a snapshot-backed
+        // key on the handle first — only a real re-populate restores it.
         let out = run(r#"
             var h = document.getElementById('el');
-            h.setText('CHANGED');
+            h.tagName = 'HACKED';
+            h.nodeType = 99;
+            var again = document.getElementById('el');
             document.getElementById('out').setText(
-                'text=' + document.getElementById('el').textContent
+                'tag=' + again.tagName + ' nt=' + again.nodeType
             );
             "#);
         assert_eq!(
-            out, "text=CHANGED",
-            "a cached handle must reflect later writes, not a frozen snapshot"
+            out, "tag=DIV nt=1",
+            "re-populate must restore snapshot-backed keys overwritten on the handle"
         );
     }
 
