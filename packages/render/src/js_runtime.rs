@@ -20127,3 +20127,170 @@ mod replace_with_dom_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod listener_ghost_probes {
+    //! Regression pins for the listener-removal contract. Assertions are
+    //! LOG-BASED (each handler appends its token to a shared `log`, exposed
+    //! via `#out` after each click) — last-writer-wins `#out` reads cannot
+    //! distinguish "ghost fired" from "did not fire", which is exactly how
+    //! the first draft of these tests survived three ghost mutations.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| n.text_content())
+        .unwrap_or_default()
+    }
+
+    fn click(rt: &mut JsRuntime, doc: &mut HtmlDocument, id: &str) {
+        let nid = {
+            let hit = doc
+                .tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64());
+            match hit {
+                Some(v) => v,
+                None => return,
+            }
+        };
+        rt.fire_click(doc, nid);
+    }
+
+    /// remove one of two handlers: only the survivor's token may appear.
+    /// M1 (harvest Remove no-op) and M2 (never queue Remove) both make the
+    /// log read "12" — this test reds on both.
+    #[test]
+    fn remove_one_of_two_only_the_survivor_fires() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = '';
+            var h1 = function () { log += '1'; document.getElementById('out').setText(log); };
+            var h2 = function () { log += '2'; document.getElementById('out').setText(log); };
+            var b = document.getElementById('b');
+            b.addEventListener('click', h1);
+            b.addEventListener('click', h2);
+            b.removeEventListener('click', h1);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "2",
+            "the removed handler's token must be absent from the log"
+        );
+    }
+
+    /// The same function on two nodes; removing it from b1 keeps it on b2.
+    /// Asserted PER CLICK: b1 must not fire, b2 must.
+    #[test]
+    fn remove_is_per_node_not_global() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b1">1</button><button id="b2">2</button><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var h = function () { document.getElementById('out').setText('x'); };
+            document.getElementById('b1').addEventListener('click', h);
+            document.getElementById('b2').addEventListener('click', h);
+            document.getElementById('b1').removeEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b1");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "init",
+            "the ghost on b1 must not fire (M1 regression shape)"
+        );
+        click(&mut rt, &mut doc, "b2");
+        assert_eq!(text_of(&doc, "out"), "x", "b2's listener must still fire");
+    }
+
+    /// Removing a handler that was never added must not kill anything. Two
+    /// bind windows: the second window's registry is populated, so the
+    /// identity-check branch actually runs (the same-window registry is
+    /// empty — the M3 blind spot).
+    #[test]
+    fn removing_an_unknown_handler_is_harmless() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var n = 0;
+            var h = function () {
+                n += 1;
+                document.getElementById('out').setText('fires-' + n);
+            };
+            document.getElementById('b').addEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(text_of(&doc, "out"), "fires-1");
+        // Second window: registry populated. Removing an UNKNOWN handler must
+        // not remove `h`.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('b').removeEventListener('click', function () {});
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "fires-2",
+            "the real handler must survive an unknown-handler removal"
+        );
+    }
+
+    /// remove then re-add in the same script — re-add must survive.
+    #[test]
+    fn remove_then_readd_same_run() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = '';
+            var h = function () { log += 'F'; document.getElementById('out').setText(log); };
+            var b = document.getElementById('b');
+            b.addEventListener('click', h);
+            b.removeEventListener('click', h);
+            b.addEventListener('click', h);
+            "#,
+        );
+        click(&mut rt, &mut doc, "b");
+        click(&mut rt, &mut doc, "b");
+        assert_eq!(
+            text_of(&doc, "out"),
+            "FF",
+            "the re-added handler must fire on every click"
+        );
+    }
+}
