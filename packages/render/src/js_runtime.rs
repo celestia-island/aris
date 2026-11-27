@@ -1009,6 +1009,26 @@ fn apply_op(
                 if doc.get_node(anchor).and_then(|n| n.parent) != Some(parent) {
                     return;
                 }
+                // DOM no-ops: inserting a node before ITSELF, or before its
+                // own next sibling (already in the requested position), must
+                // not reach blitz — `insert_nodes_before` detaches the child
+                // first and then `index_of_child(anchor)` panics on the
+                // severed anchor (PR #89 round-2 S0: `prepend(firstChild)`).
+                if child_id == anchor_id {
+                    return;
+                }
+                let already_in_position = doc
+                    .get_node(anchor)
+                    .and_then(|n| n.parent)
+                    .and_then(|pid| doc.get_node(pid))
+                    .map(|p| match p.children.iter().position(|&c| c == anchor) {
+                        Some(i) if i > 0 => p.children[i - 1] == nid,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
+                if already_in_position {
+                    return;
+                }
                 doc.mutate().insert_nodes_before(anchor, &[nid]);
             } else {
                 doc.mutate().append_children(parent, &[nid]);
@@ -14120,7 +14140,12 @@ fn make_element_handle(
                 for arg in args.iter() {
                     let node = value_to_node(arg, ctx);
                     if let Some(child_obj) = node.as_object() {
-                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node))
+                            && cid != anchor_id
+                        {
+                            // cid == anchor_id (prepend of the current first child) is a DOM
+                            // no-op — pushing it would make blitz detach the child
+                            // and panic on the severed anchor (round-2 S0).
                             b.borrow_mut().ops.push(Op::InsertBefore {
                                 parent_id: pid,
                                 child_id: cid,
@@ -18765,6 +18790,71 @@ mod append_prepend_dom_tests {
             vec!["x".to_string(), "y".to_string(), "k".to_string()],
             "prepend(x, y) must yield [x, y, keep] — DOM order"
         );
+    }
+
+    #[test]
+    fn prepend_of_the_current_first_child_is_a_no_op() {
+        // Round-2 S0: `l.prepend(l.firstChild)` used to PANIC — blitz
+        // detaches the child, then index_of_child(severed anchor) unwraps
+        // None. DOM semantics: already in position → no-op → [a,b,c].
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var l = document.getElementById('l');
+            l.prepend(l.firstChild);
+            var lbl = document.getElementById('res');
+            lbl.setText('after');
+            "#,
+        );
+        // Reaching the later statements alive is the core assertion (the
+        // panic killed the rest of the script run).
+        assert_eq!(kid_ids(&doc, "l"), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn insert_before_own_next_sibling_is_a_no_op() {
+        // x already sits immediately before the anchor → insertBefore must
+        // be a no-op (it used to detach x and panic on the severed anchor).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="x">x</li><li id="anchor">n</li><li id="z">z</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var l = document.getElementById('l');
+            l.insertBefore(document.getElementById('x'), document.getElementById('anchor'));
+            l.insertBefore(document.getElementById('x'), document.getElementById('anchor'));
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec![
+                "a".to_string(),
+                "x".to_string(),
+                "anchor".to_string(),
+                "z".to_string(),
+            ],
+            "an already-positioned insert must be a no-op"
+        );
+        let res = doc
+            .get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default();
+        assert_eq!(res, "survived");
     }
 
     #[test]
