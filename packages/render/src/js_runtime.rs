@@ -20381,21 +20381,21 @@ mod listener_ghost_probes {
         // cleared the single registration; out=x proves the live listener
         // fired exactly once (under the pre-dedup code out would read "xx").
         assert_eq!(text_of(&doc, "out"), "len_dup=1 len_after=0 out=x");
-    /// WHATWG dedup, REFETCH shape (the dominant real-page pattern): each
-    /// getElementById builds a FRESH handle, so the per-handle mirror scan
-    /// cannot see the duplicate — the replay-based dedup (registry + queued
-    /// actions) is what catches it. Without the dedup, one remove followed
-    /// by a dispatch ghost-fired the duplicate once (round-6 R2).
-    #[test]
-    fn duplicate_refetch_add_is_a_noop_and_one_remove_clears_it() {
-        let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
-            DocumentConfig::default(),
-        );
-        let mut rt = JsRuntime::new();
-        rt.bind_and_run(
-            &mut doc,
-            r#"
+        /// WHATWG dedup, REFETCH shape (the dominant real-page pattern): each
+        /// getElementById builds a FRESH handle, so the per-handle mirror scan
+        /// cannot see the duplicate — the replay-based dedup (registry + queued
+        /// actions) is what catches it. Without the dedup, one remove followed
+        /// by a dispatch ghost-fired the duplicate once (round-6 R2).
+        #[test]
+        fn duplicate_refetch_add_is_a_noop_and_one_remove_clears_it() {
+            let mut doc = HtmlDocument::from_html(
+                r#"<html><body><button id="b">go</button><div id="out">init</div></body></html>"#,
+                DocumentConfig::default(),
+            );
+            let mut rt = JsRuntime::new();
+            rt.bind_and_run(
+                &mut doc,
+                r#"
             var h = function () { document.getElementById('out').setText('x'); };
             document.getElementById('b').addEventListener('click', h);
             document.getElementById('b').addEventListener('click', h);
@@ -20409,14 +20409,13 @@ mod listener_ghost_probes {
                 ' out=' + document.getElementById('out').textContent
             );
             "#,
-        );
-        // Composite read (all state captured in-window): len_dup=1 proves
-        // the duplicate add did NOT stack (the replay dedup caught it even
-        // across fresh handles); len_after=0 proves one remove cleared the
-        // single registration; out=x proves the live listener fired exactly
-        // once — under the pre-dedup code the ghost refire made it "xx".
-        assert_eq!(text_of(&doc, "out"), "len_dup=1 len_after=0 out=x");
-    }
-
+            );
+            // Composite read (all state captured in-window): len_dup=1 proves
+            // the duplicate add did NOT stack (the replay dedup caught it even
+            // across fresh handles); len_after=0 proves one remove cleared the
+            // single registration; out=x proves the live listener fired exactly
+            // once — under the pre-dedup code the ghost refire made it "xx".
+            assert_eq!(text_of(&doc, "out"), "len_dup=1 len_after=0 out=x");
+        }
     }
 }
