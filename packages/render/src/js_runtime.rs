@@ -112,6 +112,10 @@ struct Bridge {
     ops: Vec<Op>,
     next_pending: u32,
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
+    /// pending_id -> node id, filled the first time a createElement handle is
+    /// materialized. A second write through the SAME handle must MOVE that
+    /// node, not create another copy (round-2 S2: node-leak amplification).
+    materialized_pending: HashMap<u32, u64>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
     query_by_id: HashMap<String, u64>,
@@ -589,8 +593,25 @@ impl JsRuntime {
         let ops: Vec<Op> = std::mem::take(&mut self.bridge.borrow_mut().ops);
         let pending: HashMap<u32, (String, String, Vec<(String, String)>)> =
             { self.bridge.borrow().pending.clone() };
+        // pending_id -> node id for handles materialized earlier in THIS run,
+        // so a repeat write moves the node instead of cloning it.
+        let mut materialized: HashMap<u32, u64> =
+            { self.bridge.borrow().materialized_pending.clone() };
         for op in ops {
-            apply_op(doc, op, &pending);
+            // Mutable: each op's materialization is visible to the NEXT op in
+            // the same drain (a reused createElement handle must move, not
+            // clone — round-2 S2).
+            let mut recorded = Vec::new();
+            apply_op(doc, op, &pending, &mut materialized, &mut |pid, nid| {
+                recorded.push((pid, nid));
+            });
+            for (pid, nid) in recorded {
+                materialized.insert(pid, nid);
+                self.bridge
+                    .borrow_mut()
+                    .materialized_pending
+                    .insert(pid, nid);
+            }
         }
     }
 
@@ -929,6 +950,8 @@ fn apply_op(
     doc: &mut BaseDocument,
     op: Op,
     pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+    materialized: &mut HashMap<u32, u64>,
+    record: &mut dyn FnMut(u32, u64),
 ) {
     // Every op carries a node id that a page handle captured earlier; that
     // node may have been removed since (textContent replace, removeChild).
@@ -1071,6 +1094,18 @@ fn apply_op(
             pending_ids,
             after,
         } => {
+            // Materialize pending args and splice them by their argument
+            // slot (round-2 S1: the field was bound and never used, so
+            // before()/after() materialized nothing at all).
+            let mut gathered: Vec<(usize, u64)> = Vec::new();
+            for (idx, pid) in pending_ids {
+                if let Some(nid) =
+                    materialize_pending(doc, pending, materialized.get(pid).copied(), *pid)
+                {
+                    record(*pid, nid);
+                    gathered.push((*idx, nid));
+                }
+            }
             // The guard above covers the REF (blitz indexes it first). Each
             // CHILD needs its own liveness check — and, crucially, the whole
             // list is inserted as ONE batch so the anchor cannot drift
@@ -1089,6 +1124,16 @@ fn apply_op(
                 let nid = blitz_traits::NodeId::from_u64(*id);
                 if node_is_live(doc, *id) && !live.contains(&nid) {
                     live.push(nid);
+                }
+            }
+            if !gathered.is_empty() {
+                gathered.sort_by_key(|(idx, _)| *idx);
+                for (i, (_, nid)) in gathered.iter().enumerate() {
+                    let id = blitz_traits::NodeId::from_u64(*nid);
+                    if !live.contains(&id) {
+                        let pos = i.min(live.len());
+                        live.insert(pos, id);
+                    }
                 }
             }
             if live.is_empty() {
@@ -1195,10 +1240,13 @@ fn apply_op(
             // Materialize PENDING (createElement) arguments first: they had
             // no tree node, so before this they were silently dropped (L940
             // family follow-up). They join `live` in argument order below.
-            let mut materialized: Vec<u64> = Vec::new();
+            let mut newly_materialized: Vec<u64> = Vec::new();
             for (_, pid) in pending_ids {
-                if let Some(nid) = materialize_pending(doc, pending, *pid) {
-                    materialized.push(nid);
+                if let Some(nid) =
+                    materialize_pending(doc, pending, materialized.get(pid).copied(), *pid)
+                {
+                    record(*pid, nid);
+                    newly_materialized.push(nid);
                 }
             }
             // Dedup preserving order. Self members stay IN the batch:
@@ -1246,7 +1294,7 @@ fn apply_op(
             // Materialized pending nodes join the batch at the END of the
             // argument list order (they carry no slot index of their own in
             // this arm); insertion order is preserved by the splice above.
-            for nid in &materialized {
+            for nid in &newly_materialized {
                 let id = blitz_traits::NodeId::from_u64(*nid);
                 if !live.contains(&id) {
                     live.push(id);
@@ -1474,8 +1522,15 @@ fn create_and_append(
 fn materialize_pending(
     doc: &mut BaseDocument,
     pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+    already: Option<u64>,
     pending_id: u32,
 ) -> Option<u64> {
+    // Already materialized in this run: reuse (a repeat insert MOVES).
+    if let Some(nid) = already {
+        if node_is_live(doc, nid) {
+            return Some(nid);
+        }
+    }
     let (tag, text, attrs) = pending.get(&pending_id)?;
     let attrs_vec = attrs
         .iter()
@@ -14458,8 +14513,13 @@ fn make_element_handle(
                                 batch.push(cid);
                             } else if let Some(pid) = read_pending(&node) {
                                 // createElement handle: materialized at apply
-                                // time instead of being dropped (L940 family).
-                                pendings.push((batch.len() + pendings.len(), pid));
+                                // time. If it was ALREADY materialized in this
+                                // run, use the existing node so a repeat write
+                                // MOVES it (round-2 S2).
+                                match b.borrow().materialized_pending.get(&pid) {
+                                    Some(nid) => batch.push(*nid),
+                                    None => pendings.push((batch.len() + pendings.len(), pid)),
+                                }
                             }
                             insert_into_children(
                                 &parent_obj,
@@ -14506,7 +14566,10 @@ fn make_element_handle(
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
                             } else if let Some(pid) = read_pending(&node) {
-                                pendings.push((batch.len() + pendings.len(), pid));
+                                match b.borrow().materialized_pending.get(&pid) {
+                                    Some(nid) => batch.push(*nid),
+                                    None => pendings.push((batch.len() + pendings.len(), pid)),
+                                }
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
@@ -14562,10 +14625,13 @@ fn make_element_handle(
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
                             } else if let Some(pid) = read_pending(&node) {
-                                // createElement handle: materialized at apply
-                                // time now that the family has a shared
-                                // materializer (L940 follow-up).
-                                pendings.push((batch.len() + pendings.len(), pid));
+                                // Already materialized in this run? Reuse the
+                                // node so a repeat write MOVES it instead of
+                                // cloning (round-2 S2).
+                                match b.borrow().materialized_pending.get(&pid) {
+                                    Some(nid) => batch.push(*nid),
+                                    None => pendings.push((batch.len() + pendings.len(), pid)),
+                                }
                             } else if read_canvas_alloc(&node).is_some() {
                                 // Canvas buffers still have no materialization
                                 // path here — keep the old safe skip.
@@ -19771,6 +19837,63 @@ mod replace_with_dom_tests {
             "two materialized elements plus #keep; got {kids:?}"
         );
         assert_eq!(kids.last().map(|s| s.as_str()), Some("keep"));
+    }
+
+    #[test]
+    fn a_reused_pending_handle_moves_instead_of_cloning() {
+        // Round-2 S2: materialization did not write the id back, so the same
+        // createElement handle cloned a fresh node on every call.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('i');
+            document.getElementById('a').replaceWith(made);
+            document.getElementById('b').replaceWith(made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.len(),
+            1,
+            "the same handle must MOVE, not clone; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn insert_adjacent_materializes_and_keeps_argument_order() {
+        // Round-2 S1: InsertAdjacent bound pending_ids and never used them,
+        // so before()/after() materialized nothing. Mixed batches must keep
+        // DOM order via the slot index.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="p1">p1</li></ul><ul id="l"><li id="ref">r</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var p1 = document.getElementById('p1');
+            var made = document.createElement('i');
+            document.getElementById('ref').after(p1, made);
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.first().map(|s| s.as_str()),
+            Some("ref"),
+            "ref stays first; got {kids:?}"
+        );
+        assert_eq!(
+            kids.len(),
+            3,
+            "parsed + materialized both land after ref; got {kids:?}"
+        );
     }
 
     #[test]
