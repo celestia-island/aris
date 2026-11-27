@@ -1052,9 +1052,12 @@ fn apply_op(
             child_id,
             after,
         } => {
-            // The guard above covers the REF (blitz indexes it first: both
-            // insert helpers resolve the target parent FROM the ref). The
-            // child gets its own liveness check here.
+            // The guard above covers the REF: insert_nodes_before indexes it
+            // directly, and insert_nodes_after reaches it via
+            // next_sibling_id then the parent read. The child gets its own
+            // liveness check here (liveness is NOT membership — a live child
+            // already sitting next to the ref severs the anchor during the
+            // mutator's detach-first sequence, handled below).
             if !node_is_live(doc, *child_id) {
                 return;
             }
@@ -1078,6 +1081,30 @@ fn apply_op(
                         None => break,
                     }
                 }
+            }
+            // DOM no-ops that must NOT reach blitz: inserting a node before
+            // or after ITSELF, or when it already sits in the requested
+            // position. blitz's add_children_to_parent detaches the child
+            // FIRST and only then computes the splice index — a live child
+            // that is already a sibling of the ref therefore severs the
+            // anchor and `index_of_child(anchor).unwrap()` panics
+            // (round-2 S0: `x.before(x)`, `a.after(a.nextSibling)`).
+            if ref_id == child_id {
+                return;
+            }
+            let already_in_position = doc
+                .get_node(parent)
+                .map(|p| match p.children.iter().position(|&c| c == ref_node) {
+                    Some(i) => {
+                        let prev_is_child = i > 0 && p.children[i - 1] == nid;
+                        let next_is_child = i + 1 < p.children.len() && p.children[i + 1] == nid;
+                        if *after { next_is_child } else { prev_is_child }
+                    }
+                    None => false,
+                })
+                .unwrap_or(false);
+            if already_in_position {
+                return;
             }
             let mut mutator = doc.mutate();
             if *after {
@@ -19094,6 +19121,37 @@ mod before_after_dom_tests {
             vec!["a".to_string(), "mv".to_string(), "b".to_string()],
             "mv must land immediately after `a`"
         );
+    }
+
+    #[test]
+    fn self_reference_and_in_position_inserts_are_safe_no_ops() {
+        // Round-2 S0: `x.before(x)` and `a.after(a.nextSibling)` aborted the
+        // process — blitz detaches the child first, then
+        // index_of_child(severed anchor) unwraps None. DOM semantics: both
+        // are no-ops.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="x">x</li><li id="z">z</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var a = document.getElementById('a');
+            x.before(x);            // self-insert
+            a.after(x);             // x already immediately after a
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["a".to_string(), "x".to_string(), "z".to_string()],
+            "self and in-position inserts must not corrupt the order"
+        );
+        // The panic used to kill the rest of the script run — surviving to
+        // a rebind is part of the assertion.
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
     }
 
     #[test]
