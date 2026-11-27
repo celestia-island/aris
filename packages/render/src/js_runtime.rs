@@ -217,6 +217,16 @@ enum Op {
         /// Id of the node to insert before; 0 = append at the end.
         anchor_id: u64,
     },
+    /// `ref.before(child)` / `ref.after(child)` on real tree nodes —
+    /// sibling-positioning inserts whose target parent is derived from the
+    /// ref's own parent at apply time (the JS closure cannot resolve it:
+    /// the mirror parentNode is a bare stub for parsed elements).
+    InsertAdjacent {
+        ref_id: u64,
+        child_id: u64,
+        /// true = insert AFTER the ref, false = BEFORE it.
+        after: bool,
+    },
 }
 
 impl JsRuntime {
@@ -923,6 +933,9 @@ fn apply_op(
         }
         | Op::InsertBefore {
             parent_id: node_id, ..
+        }
+        | Op::InsertAdjacent {
+            ref_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -1032,6 +1045,45 @@ fn apply_op(
                 doc.mutate().insert_nodes_before(anchor, &[nid]);
             } else {
                 doc.mutate().append_children(parent, &[nid]);
+            }
+        }
+        Op::InsertAdjacent {
+            ref_id,
+            child_id,
+            after,
+        } => {
+            // The guard above covers the REF (blitz indexes it first: both
+            // insert helpers resolve the target parent FROM the ref). The
+            // child gets its own liveness check here.
+            if !node_is_live(doc, *child_id) {
+                return;
+            }
+            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
+            let nid = blitz_traits::NodeId::from_u64(*child_id);
+            // The effective target parent is the REF's parent. A cycle
+            // exists iff `child` is ancestor-or-self of that parent (child
+            // would become its own descendant's sibling).
+            let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
+                Some(p) => p,
+                None => return, // detached ref: nowhere to insert
+            };
+            {
+                let mut cur = parent;
+                loop {
+                    if cur.as_u64() == *child_id {
+                        return;
+                    }
+                    match doc.get_node(cur).and_then(|n| n.parent) {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+            }
+            let mut mutator = doc.mutate();
+            if *after {
+                mutator.insert_nodes_after(ref_node, &[nid]);
+            } else {
+                mutator.insert_nodes_before(ref_node, &[nid]);
             }
         }
     }
@@ -14176,45 +14228,81 @@ fn make_element_handle(
     init.function(prepend_children, boa_engine::js_string!("prepend"), 0);
 
     // after(...nodes) — inserts siblings after this node in parent._children.
-    let after_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(obj) = this.as_object() {
-            let parent = obj
-                .get(boa_engine::js_string!("parentNode"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            if let Some(parent_obj) = parent {
-                // Find next sibling as reference for insertion.
-                let next_sibling = get_next_sibling(&parent_obj, &obj, ctx);
-                for arg in args.iter() {
-                    let node = value_to_node(arg, ctx);
-                    if let Some(child_obj) = node.as_object() {
-                        insert_into_children(&parent_obj, &child_obj, next_sibling.clone(), ctx);
+    let after_fn = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(obj) = this.as_object() {
+                let parent = obj
+                    .get(boa_engine::js_string!("parentNode"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                if let Some(parent_obj) = parent {
+                    // Find next sibling as reference for insertion.
+                    let next_sibling = get_next_sibling(&parent_obj, &obj, ctx);
+                    for arg in args.iter() {
+                        let node = value_to_node(arg, ctx);
+                        if let Some(child_obj) = node.as_object() {
+                            // Real tree node: DOM after() MOVES it right after
+                            // this node in the tree (mirror-only left the tree
+                            // stale — same family as append/prepend, PR #89 R2).
+                            if let (Some(ref_id), Some(child_id)) = (
+                                read_handle_id(&JsValue::from(obj.clone())),
+                                read_handle_id(&node),
+                            ) {
+                                b.borrow_mut().ops.push(Op::InsertAdjacent {
+                                    ref_id,
+                                    child_id,
+                                    after: true,
+                                });
+                            }
+                            insert_into_children(
+                                &parent_obj,
+                                &child_obj,
+                                next_sibling.clone(),
+                                ctx,
+                            );
+                        }
                     }
                 }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(after_fn, boa_engine::js_string!("after"), 0);
 
     // before(...nodes) — inserts siblings before this node in parent._children.
-    let before_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
-        if let Some(obj) = this.as_object() {
-            let parent = obj
-                .get(boa_engine::js_string!("parentNode"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            if let Some(parent_obj) = parent {
-                for arg in args.iter() {
-                    let node = value_to_node(arg, ctx);
-                    if let Some(child_obj) = node.as_object() {
-                        insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+    let before_fn = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            if let Some(obj) = this.as_object() {
+                let parent = obj
+                    .get(boa_engine::js_string!("parentNode"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                if let Some(parent_obj) = parent {
+                    for arg in args.iter() {
+                        let node = value_to_node(arg, ctx);
+                        if let Some(child_obj) = node.as_object() {
+                            // Real tree node: DOM before() MOVES it right before
+                            // this node in the tree.
+                            if let (Some(ref_id), Some(child_id)) = (
+                                read_handle_id(&JsValue::from(obj.clone())),
+                                read_handle_id(&node),
+                            ) {
+                                b.borrow_mut().ops.push(Op::InsertAdjacent {
+                                    ref_id,
+                                    child_id,
+                                    after: false,
+                                });
+                            }
+                            insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+                        }
                     }
                 }
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(before_fn, boa_engine::js_string!("before"), 0);
 
     // replaceWith(...nodes) — replaces this node with the arguments.
@@ -18930,5 +19018,133 @@ mod append_prepend_dom_tests {
         );
         rt.bind_and_run(&mut doc, r#"void 0;"#);
         assert!(true, "no cycle abort");
+    }
+}
+
+#[cfg(test)]
+mod before_after_dom_tests {
+    //! L940 (PR #89 R2/R4): `before(...)` / `after(...)` were mirror-only —
+    //! `x.before(y)` where y is x's child even SILENTLY CORRUPTED the mirror
+    //! (duplicated child). With `Op::InsertAdjacent` the tree moves too.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn before_relocates_a_cross_parent_node_before_the_ref() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="mv">moving</li></ul><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('b').before(document.getElementById('mv'));
+            "#,
+        );
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["a".to_string(), "mv".to_string(), "b".to_string()],
+            "mv must land immediately before `b`"
+        );
+    }
+
+    #[test]
+    fn after_relocates_a_cross_parent_node_after_the_ref() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="mv">moving</li></ul><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('a').after(document.getElementById('mv'));
+            "#,
+        );
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["a".to_string(), "mv".to_string(), "b".to_string()],
+            "mv must land immediately after `a`"
+        );
+    }
+
+    #[test]
+    fn multi_arg_before_keeps_its_order() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="l"><li id="a">a</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('a').before(x, y);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["x".to_string(), "y".to_string(), "a".to_string()],
+            "before(x, y) must yield [x, y, a] — DOM order"
+        );
+    }
+
+    #[test]
+    fn moving_a_node_relative_to_its_own_child_is_a_clean_relocation() {
+        // leaf is inner's child: `inner.after(leaf)` detaches leaf from inner
+        // and inserts it after inner under body — no cycle (blitz detaches
+        // first), and inner must come out empty.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('inner').after(document.getElementById('leaf'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "inner"),
+            Vec::<String>::new(),
+            "inner emptied"
+        );
+        assert_eq!(
+            kid_ids(&doc, "outer"),
+            vec!["inner".to_string(), "leaf".to_string()],
+            "leaf relocated after inner, no cycle"
+        );
+        // A rebind must walk the relocated tree without aborting.
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
     }
 }
