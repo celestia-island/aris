@@ -230,6 +230,13 @@ enum Op {
         /// true = insert AFTER the ref, false = BEFORE it.
         after: bool,
     },
+    /// `ref.replaceWith(...children)` on real tree nodes — the batch lands
+    /// where the ref was and the ref is DETACHED (remove_node, not drop: a
+    /// replaced node stays re-insertable, matching #87's decision).
+    ReplaceWith {
+        ref_id: u64,
+        child_ids: Vec<u64>,
+    },
 }
 
 impl JsRuntime {
@@ -939,6 +946,9 @@ fn apply_op(
         }
         | Op::InsertAdjacent {
             ref_id: node_id, ..
+        }
+        | Op::ReplaceWith {
+            ref_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -1162,6 +1172,56 @@ fn apply_op(
             } else {
                 mutator.insert_nodes_before(ref_node, &live);
             }
+        }
+        Op::ReplaceWith { ref_id, child_ids } => {
+            // Guards per the hard step: blitz indexes the REF (parent_id
+            // lookup + viable_sibling + replace_node_with's
+            // insert_nodes_before + remove_node) and each CHILD (detach in
+            // add_children_to_parent / detach_all).
+            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
+            if !node_is_live(doc, *ref_id) {
+                return;
+            }
+            // Dedup preserving order; a batch member that IS the ref makes
+            // it a DOM no-op (skip); an ancestor-of-parent member would
+            // create a cycle — reject wholesale.
+            let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
+                Some(p) => p,
+                None => return, // detached ref: replaceWith is a no-op
+            };
+            let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut rejected = false;
+            for id in child_ids {
+                if *id == *ref_id {
+                    continue; // self-replace: that member contributes nothing
+                }
+                let nid = blitz_traits::NodeId::from_u64(*id);
+                if !node_is_live(doc, *id) {
+                    continue;
+                }
+                let mut cur = parent;
+                loop {
+                    if cur == nid {
+                        rejected = true;
+                        break;
+                    }
+                    match doc.get_node(cur).and_then(|n| n.parent) {
+                        Some(p) => cur = p,
+                        None => break,
+                    }
+                }
+                if rejected {
+                    break;
+                }
+                if !live.contains(&nid) {
+                    live.push(nid);
+                }
+            }
+            if rejected {
+                return;
+            }
+            let mut mutator = doc.mutate();
+            mutator.replace_with_nodes(ref_node, &live);
         }
     }
 }
@@ -14392,26 +14452,41 @@ fn make_element_handle(
     init.function(before_fn, boa_engine::js_string!("before"), 0);
 
     // replaceWith(...nodes) — replaces this node with the arguments.
-    let replace_with_fn = NativeFunction::from_copy_closure(|this, args, ctx| {
+    let replace_with_fn = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
         if let Some(obj) = this.as_object() {
             let parent = obj
                 .get(boa_engine::js_string!("parentNode"), ctx)
                 .ok()
                 .and_then(|v| v.as_object());
             if let Some(parent_obj) = parent {
-                // Insert all args before this node.
+                // Real tree node batch: one op replaces the ref in the tree
+                // (mirror-only left the tree unchanged — same family as
+                // before/after, PR #90 R5).
+                let mut batch: Vec<u64> = Vec::new();
                 for arg in args.iter() {
                     let node = value_to_node(arg, ctx);
                     if let Some(child_obj) = node.as_object() {
+                        if let Some(cid) = read_handle_id(&node) {
+                            batch.push(cid);
+                        }
                         insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                     }
                 }
-                // Remove this node.
+                // Remove this node from the mirror too.
                 remove_from_children(&parent_obj, &obj, ctx);
+                if let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone())) {
+                    b.borrow_mut().ops.push(Op::ReplaceWith {
+                        ref_id,
+                        child_ids: batch,
+                    });
+                }
             }
         }
         Ok(JsValue::undefined())
-    });
+    },
+        Gc::clone(&bridge),
+    );
     init.function(replace_with_fn, boa_engine::js_string!("replaceWith"), 0);
 
     // closest(selector) — walks up parentNode chain matching selector.
