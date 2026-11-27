@@ -20968,31 +20968,48 @@ mod pending_family_landing_tests {
     }
 
     /// Move-not-clone across the family: the same createElement handle
-    /// written through TWO different APIs must render exactly ONE element.
+    /// written through TWO different APIs must render exactly ONE element,
+    /// in the LAST-write position. Round-2 S2: the append→insertBefore
+    /// ordering is the ONLY one that discriminates a dropped first write
+    /// (append lands the node regardless, masking an insertBefore drop), so
+    /// this test uses append→insertBefore and asserts the first API's
+    /// landing position in an intermediate window before the second write.
     #[test]
     fn pending_handle_across_two_apis_moves_not_clones() {
-        // insertBefore then appendChild-of-the-same-handle in one window.
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="list"><li id="first">a</li><li id="b">b</li></ul></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
+        // Window 1: append lands the node at the TAIL.
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var made = document.createElement('em');
+            made.setText('M');
+            list.append(made);
+            "#,
+        );
+        assert_eq!(
+            kid_tags(&doc, "list"),
+            ["li", "li", "em"],
+            "the first write (append) must land the node at the tail"
+        );
+        // Window 2: insertBefore(first) must MOVE it to the head — exactly
+        // one <em>, not a clone.
         rt.bind_and_run(
             &mut doc,
             r#"
             var list = document.getElementById('list');
             var first = document.getElementById('first');
-            var made = document.createElement('em');
-            made.setText('M');
             list.insertBefore(made, first);
-            list.appendChild(made);
             "#,
         );
-        let tags = kid_tags(&doc, "list");
         assert_eq!(
-            tags,
-            ["li", "li", "em"],
-            "the second write must MOVE the node to the end, not clone it"
+            kid_tags(&doc, "list"),
+            ["em", "li", "li"],
+            "the second write (insertBefore) must MOVE the node to the head, not clone it"
         );
     }
 }
