@@ -15850,8 +15850,10 @@ mod bridge_flow_tests {
 
     #[test]
     fn created_canvas_homes_to_its_dom_node() {
-        let mut doc =
-            HtmlDocument::from_html(r#"<html><body></body></html>"#, DocumentConfig::default());
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="scratch"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
         let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
@@ -20705,6 +20707,113 @@ mod document_listener_dedup_tests {
             out.as_deref(),
             Some("init"),
             "one remove must clear the deduped registration"
+        );
+    }
+}
+
+#[cfg(test)]
+mod canvas_getcontext_tests {
+    //! Backlog ③: pin the id-less canvas getContext path. Id-less handles
+    //! (createElement without appendChild) share the node-0 scratch slot;
+    //! the context must be non-null and support basic drawing ops.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    #[test]
+    fn created_canvas_getcontext_2d_returns_non_null() {
+        // Id-less createElement without appendChild: the handle has no tree
+        // node, so read_handle_id returns None → node-0 scratch slot.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="scratch"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var cv = document.createElement('canvas');
+            var ctx = cv.getContext('2d');
+            var ok = ctx !== null && ctx !== undefined;
+            var has_fill = ctx && typeof ctx.fillRect === 'function';
+            document.getElementById('scratch').setText(
+                (ok ? 'ctx' : 'null') + '/' + (has_fill ? 'fill' : 'nofill')
+            );
+            "#,
+        );
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("scratch"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.as_deref(),
+            Some("ctx/fill"),
+            "getContext('2d') on a created canvas must return a functional context"
+        );
+    }
+
+    #[test]
+    fn webgl_getcontext_returns_stub_not_null() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="scratch"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var cv = document.createElement('canvas');
+            var gl = cv.getContext('webgl');
+            var gl2 = cv.getContext('experimental-webgl');
+            document.getElementById('scratch').setText(
+                (gl !== null ? 'gl' : 'null') + '/' + (gl2 !== null ? 'stub' : 'null')
+            );
+            "#,
+        );
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("scratch"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.as_deref(),
+            Some("gl/stub"),
+            "getContext('webgl') and 'experimental-webgl' must return stubs"
+        );
+    }
+
+    #[test]
+    fn unsupported_context_kind_returns_null() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="scratch"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var cv = document.createElement('canvas');
+            var ctx = cv.getContext('3d');
+            document.getElementById('scratch').setText(
+                ctx === null ? 'null' : 'unexpected'
+            );
+            "#,
+        );
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("scratch"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default();
+        assert_eq!(
+            out.as_deref(),
+            Some("null"),
+            "unsupported context kind must return null"
         );
     }
 }
