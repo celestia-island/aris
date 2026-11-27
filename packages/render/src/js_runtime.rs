@@ -227,6 +227,9 @@ enum Op {
         /// anchor cannot drift between them (round-6 S0: per-arg ops made
         /// mixed argument lists land on the wrong side of the ref).
         child_ids: Vec<u64>,
+        /// PENDING ids (createElement handles) in the same argument order;
+        /// materialized at apply time (L940 family follow-up).
+        pending_ids: Vec<(usize, u32)>,
         /// true = insert AFTER the ref, false = BEFORE it.
         after: bool,
     },
@@ -236,6 +239,8 @@ enum Op {
     ReplaceWith {
         ref_id: u64,
         child_ids: Vec<u64>,
+        /// PENDING ids (createElement handles) to materialize first.
+        pending_ids: Vec<(usize, u32)>,
     },
 }
 
@@ -1063,6 +1068,7 @@ fn apply_op(
         Op::InsertAdjacent {
             ref_id,
             child_ids,
+            pending_ids,
             after,
         } => {
             // The guard above covers the REF (blitz indexes it first). Each
@@ -1173,7 +1179,11 @@ fn apply_op(
                 mutator.insert_nodes_before(ref_node, &live);
             }
         }
-        Op::ReplaceWith { ref_id, child_ids } => {
+        Op::ReplaceWith {
+            ref_id,
+            child_ids,
+            pending_ids,
+        } => {
             // Guards per the hard step: blitz indexes the REF (parent_id
             // lookup + viable_sibling + replace_node_with's
             // insert_nodes_before + remove_node) and each CHILD (detach in
@@ -1182,6 +1192,16 @@ fn apply_op(
             if !node_is_live(doc, *ref_id) {
                 return;
             }
+            // Materialize PENDING (createElement) arguments first: they had
+            // no tree node, so before this they were silently dropped (L940
+            // family follow-up). They join `live` in argument order below.
+            let mut materialized: Vec<u64> = Vec::new();
+            for (_, pid) in pending_ids {
+                if let Some(nid) = materialize_pending(doc, pending, *pid) {
+                    materialized.push(nid);
+                }
+            }
+            let _ = &materialized;
             // Dedup preserving order. Self members stay IN the batch:
             // `replace_with_nodes`'s viable-sibling branch exists exactly
             // for anchor-in-batch shapes (the anchor is excluded from the
@@ -1430,6 +1450,42 @@ fn create_and_append(
         let text_id = mutator.create_text_node(text);
         mutator.append_children(new_id, &[text_id]);
     }
+}
+
+/// Materialize a PENDING node (a `createElement` handle with no tree node
+/// yet) and hand back its node id. Shared by every writing API that can take
+/// a created element as an argument — before this only `appendChild` could
+/// land one, so `x.before(createElement(...))`, `x.replaceWith(...)`,
+/// `parent.append(...)` etc. silently dropped it (L940 family follow-up).
+///
+/// The created node is NOT attached to a parent; callers insert it where
+/// their own semantics say (insert, replace, append). Creation goes through
+/// the same mutator path as `create_and_append` so it gets stylo style data
+/// and, once inserted, `process_added_subtree` (IS_IN_DOCUMENT + damage) —
+/// the materialization the raw create_node dance skipped.
+fn materialize_pending(
+    doc: &mut BaseDocument,
+    pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+    pending_id: u32,
+) -> Option<u64> {
+    let (tag, text, attrs) = pending.get(&pending_id)?;
+    let attrs_vec = attrs
+        .iter()
+        .map(|(k, v)| blitz_dom::Attribute {
+            name: blitz_dom::QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            value: v.as_str().into(),
+        })
+        .collect();
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), tag.as_str().into()),
+        attrs_vec,
+    );
+    if !text.is_empty() {
+        let text_id = mutator.create_text_node(text);
+        mutator.append_children(new_id, &[text_id]);
+    }
+    Some(new_id.as_u64())
 }
 
 // ── Boa document/handle installation ───────────────────────
@@ -14406,6 +14462,7 @@ fn make_element_handle(
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
                             child_ids: batch,
+                            pending_ids: Vec::new(),
                             after: true,
                         });
                     }
@@ -14444,6 +14501,7 @@ fn make_element_handle(
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
                             child_ids: batch,
+                            pending_ids: Vec::new(),
                             after: false,
                         });
                     }
@@ -14521,6 +14579,7 @@ fn make_element_handle(
                         b.borrow_mut().ops.push(Op::ReplaceWith {
                             ref_id,
                             child_ids: batch,
+                            pending_ids: Vec::new(),
                         });
                     }
                 }
