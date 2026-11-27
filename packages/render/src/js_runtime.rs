@@ -116,6 +116,11 @@ struct Bridge {
     /// materialized. A second write through the SAME handle must MOVE that
     /// node, not create another copy (round-2 S2: node-leak amplification).
     materialized_pending: HashMap<u32, u64>,
+    /// node_id -> reusable element handle for SIBLING WALKS. Round-2 S1 of
+    /// PR #101: materialising a full handle (87 keys + a populate_props pass
+    /// that seeds a `_children` array of every child) on EVERY sibling hop
+    /// turned a 49-hop walk from 13 ms into 13 s.
+    walk_handle_cache: HashMap<u64, JsObject>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
     query_by_id: HashMap<String, u64>,
@@ -2123,15 +2128,110 @@ fn resolve_sibling_handle(
     let Some(nid) = read_handle_id(&entry) else {
         return entry;
     };
-    match make_element_handle(ctx, Gc::clone(bridge), nid, None) {
-        Ok(handle) => {
-            if let Some(snap) = bridge.borrow().node_props.get(&nid).cloned() {
-                populate_props(&handle, &snap, Gc::clone(bridge), ctx);
-            }
-            JsValue::from(handle)
-        }
-        Err(_) => entry,
+    walk_handle(nid, bridge, ctx).unwrap_or(entry)
+}
+
+/// Build (or reuse) a handle suitable for SIBLING WALKS.
+///
+/// Deliberately NOT `make_element_handle` + `populate_props`: populate_props
+/// seeds a `_children` array holding one fresh stub per child, so building a
+/// full handle is O(children) — and a walk reads one handle per hop, making
+/// the whole walk O(n^2) (round-2 S1: 49 hops went 13 ms -> 13 s on a
+/// 50-wide list).
+///
+/// This builds the surface a walk actually needs — `_arisId`, `parentNode`,
+/// the sibling accessors, `id` / `tagName` / `nodeType` / `textContent` and
+/// the DOM methods `add_dom_methods` installs — and caches it per node id so
+/// repeated hops reuse one object.
+fn walk_handle(nid: u64, bridge: &Gc<GcRefCell<Bridge>>, ctx: &mut Context) -> Option<JsValue> {
+    if let Some(cached) = bridge.borrow().walk_handle_cache.get(&nid) {
+        return Some(JsValue::from(cached.clone()));
     }
+    let snap = bridge.borrow().node_props.get(&nid).cloned();
+    let handle = make_element_handle(ctx, Gc::clone(bridge), nid, None).ok()?;
+    // The sibling accessors live in add_dom_methods (also mirror-only
+    // appendChild/insertBefore, which the walk does not use).
+    add_dom_methods(&handle, ctx);
+    // Seed an EMPTY `_children` so the accessor chain has an array to walk;
+    // walk handles deliberately skip the per-child fan-out that made the walk
+    // O(n^2) — see this function's doc comment.
+    {
+        let pd = |v: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(v)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        if handle
+            .get(boa_engine::js_string!("_children"), ctx)
+            .map(|v| !v.is_object())
+            .unwrap_or(true)
+        {
+            let _ = handle.insert_property(
+                boa_engine::js_string!("_children"),
+                pd(JsValue::from(new_array(ctx))),
+            );
+        }
+    }
+    // Fill ONLY the cheap scalar properties (no child fan-out).
+    if let Some(snap) = &snap {
+        let pd = |v: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(v)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let _ = handle.insert_property(
+            boa_engine::js_string!("id"),
+            pd(JsValue::from(boa_engine::js_string!(snap.id.clone()))),
+        );
+        let _ = handle.insert_property(
+            boa_engine::js_string!("tagName"),
+            pd(JsValue::from(boa_engine::js_string!(
+                snap.tag_name.to_uppercase()
+            ))),
+        );
+        let _ = handle.insert_property(
+            boa_engine::js_string!("nodeType"),
+            pd(JsValue::from(snap.node_type)),
+        );
+        if snap.parent_id > 0 {
+            // Resolve the parent through the SAME walk cache so
+            // `nextSibling.parentNode.id` is a real value (a bare {_arisId}
+            // stub has no `id` — the defect class #99 fixed on the main path).
+            let parent = match walk_handle(snap.parent_id, bridge, ctx) {
+                Some(p) => p,
+                None => {
+                    let stub = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = stub.insert_property(
+                        boa_engine::js_string!("_arisId"),
+                        pd(JsValue::from(snap.parent_id)),
+                    );
+                    JsValue::from(stub)
+                }
+            };
+            let _ =
+                handle.insert_property(boa_engine::js_string!("parentNode"), pd(parent.clone()));
+            let _ = handle.insert_property(
+                boa_engine::js_string!("parentElement"),
+                pd(JsValue::from(parent)),
+            );
+        } else {
+            let _ =
+                handle.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let _ = handle
+                .insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+        }
+    }
+    bridge
+        .borrow_mut()
+        .walk_handle_cache
+        .insert(nid, handle.clone());
+    Some(JsValue::from(handle))
 }
 
 fn read_handle_id(v: &JsValue) -> Option<u64> {
@@ -15868,29 +15968,26 @@ fn make_element_handle(
                 .ok()
                 .and_then(|v| v.as_number())
                 .unwrap_or(0.0) as u32;
-            let self_id = read_handle_id(this);
-            let mut hit: Option<u32> = None;
-            for i in 0..len {
-                let Ok(child) = ca.get(i, ctx) else {
-                    continue;
-                };
-                let same = child
-                    .as_object()
-                    .map(|co| boa_engine::object::JsObject::equals(&co, &obj))
-                    .unwrap_or(false)
-                    || self_id.is_some_and(|sid| read_handle_id(&child) == Some(sid));
-                if same {
-                    hit = Some(i);
-                    break;
-                }
+            // Locate `this` by NODE ID in the tree snapshot's child list —
+            // O(children) integer compares instead of materialising the
+            // parent's whole `_children` mirror (round-2 S1: the mirror route
+            // was O(n^2) across a walk).
+            let Some(self_id) = read_handle_id(this) else {
+                return Ok(JsValue::null());
+            };
+            let parent_id = read_handle_id(&JsValue::from(parent.clone()));
+            let siblings: Vec<u64> = parent_id
+                .and_then(|pid| bridge.borrow().node_props.get(&pid).cloned())
+                .map(|snap| snap.child_ids.clone())
+                .unwrap_or_default();
+            let (idx, _) = match siblings.iter().enumerate().find(|&(_, c)| *c == self_id) {
+                Some(found) => found,
+                None => return Ok(JsValue::null()),
+            };
+            if idx == 0 {
+                return Ok(JsValue::null());
             }
-            match hit {
-                Some(i) if i > 0 => {
-                    let prev = ca.get(i - 1, ctx).unwrap_or(JsValue::null());
-                    Ok(resolve_sibling_handle(prev, bridge, ctx))
-                }
-                _ => Ok(JsValue::null()),
-            }
+            Ok(walk_handle(siblings[idx - 1], bridge, ctx).unwrap_or(JsValue::null()))
         },
         Gc::clone(&bridge),
     );
@@ -15917,29 +16014,22 @@ fn make_element_handle(
                 .ok()
                 .and_then(|v| v.as_number())
                 .unwrap_or(0.0) as u32;
-            let self_id = read_handle_id(this);
-            let mut hit: Option<u32> = None;
-            for i in 0..len {
-                let Ok(child) = ca.get(i, ctx) else {
-                    continue;
-                };
-                let same = child
-                    .as_object()
-                    .map(|co| boa_engine::object::JsObject::equals(&co, &obj))
-                    .unwrap_or(false)
-                    || self_id.is_some_and(|sid| read_handle_id(&child) == Some(sid));
-                if same {
-                    hit = Some(i);
-                    break;
-                }
+            let Some(self_id) = read_handle_id(this) else {
+                return Ok(JsValue::null());
+            };
+            let parent_id = read_handle_id(&JsValue::from(parent.clone()));
+            let siblings: Vec<u64> = parent_id
+                .and_then(|pid| bridge.borrow().node_props.get(&pid).cloned())
+                .map(|snap| snap.child_ids.clone())
+                .unwrap_or_default();
+            let (idx, _) = match siblings.iter().enumerate().find(|&(_, c)| *c == self_id) {
+                Some(found) => found,
+                None => return Ok(JsValue::null()),
+            };
+            if idx + 1 >= siblings.len() {
+                return Ok(JsValue::null());
             }
-            match hit {
-                Some(i) if i + 1 < len => {
-                    let next = ca.get(i + 1, ctx).unwrap_or(JsValue::null());
-                    Ok(resolve_sibling_handle(next, bridge, ctx))
-                }
-                _ => Ok(JsValue::null()),
-            }
+            Ok(walk_handle(siblings[idx + 1], bridge, ctx).unwrap_or(JsValue::null()))
         },
         Gc::clone(&bridge),
     );
@@ -21809,6 +21899,54 @@ mod next_sibling_tests {
             out_of(&doc),
             "id=b tag=LI hasMethods=true parentIsL=true",
             "the sibling must be a full handle, not an anonymous stub"
+        );
+    }
+}
+
+#[cfg(test)]
+mod next_sibling_perf_tests {
+    //! Round-2 S1 of PR #101: materialising a full handle per sibling hop
+    //! (87 keys + a populate_props pass that seeds a `_children` array of
+    //! every child) turned a 49-hop walk from 13 ms into 13 s. The walk
+    //! cache must keep a long chain cheap.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use std::time::Instant;
+
+    #[test]
+    fn a_long_sibling_walk_stays_cheap() {
+        let li: String = (0..50)
+            .map(|i| format!(r#"<li id="n{i}">{i}</li>"#))
+            .collect();
+        let html =
+            format!(r#"<html><body><ul id="l">{li}</ul><div id="out">i</div></body></html>"#);
+        let mut doc = HtmlDocument::from_html(&html, DocumentConfig::default());
+        let mut rt = JsRuntime::new();
+        let started = Instant::now();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var e = document.getElementById('n0');
+            var hops = 0;
+            while (e && hops < 60) { e = e.nextSibling; hops++; }
+            document.getElementById('out').setText('hops=' + hops);
+            "#,
+        );
+        let elapsed = started.elapsed();
+        let out = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default();
+        println!("PERF 49-hop walk: {elapsed:?} out={out}");
+        assert_eq!(out, "hops=50", "the walk must traverse all 50 siblings");
+        assert!(
+            elapsed.as_millis() < 2000,
+            "a 49-hop sibling walk must stay cheap; took {elapsed:?}"
         );
     }
 }
