@@ -14222,30 +14222,82 @@ fn make_element_handle(
     });
     init.function(contains_fn, boa_engine::js_string!("contains"), 1);
 
-    // replaceChild(newChild, oldChild) — returns oldChild (simplified).
-    let replace_child = NativeFunction::from_copy_closure(|this, args, ctx| {
-        // Per spec: if newChild or oldChild is null/undefined, throw TypeError.
-        let new_child = args.first().cloned().unwrap_or(JsValue::null());
-        let old_child = args.get(1).cloned().unwrap_or(JsValue::null());
-        if new_child.is_null()
-            || new_child.is_undefined()
-            || old_child.is_null()
-            || old_child.is_undefined()
-        {
-            return Err(boa_engine::JsNativeError::typ()
-                .with_message("Argument is not an object")
-                .into());
-        }
-        // JS-level: replace old_child with new_child in _children.
-        if let Some(parent_obj) = this.as_object() {
-            if let (Some(new_obj), Some(old_obj)) = (new_child.as_object(), old_child.as_object()) {
-                // Insert new_child before old_child, then remove old_child.
-                insert_into_children(&parent_obj, &new_obj, Some(old_obj.clone()), ctx);
-                remove_from_children(&parent_obj, &old_obj, ctx);
+    // replaceChild(newChild, oldChild) — returns oldChild.
+    //
+    // Round-5 S3 (PR #99): this was JS-MIRROR-ONLY — it never pushed a bridge
+    // op, so the parsed tree was untouched and the call silently did nothing
+    // (the mirror diverged from the tree). Now reachable through the real
+    // `parentNode` handle, which made the gap user-visible.
+    //
+    // The tree effect is exactly `replaceWith` on the OLD child (replace ref
+    // with ONE item), so it reuses `Op::ReplaceWith` rather than minting a
+    // new op — that arm already carries the round-6 pending/empty-batch
+    // guards.
+    let replace_child = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            // Per spec: if newChild or oldChild is null/undefined, throw TypeError.
+            let new_child = args.first().cloned().unwrap_or(JsValue::null());
+            let old_child = args.get(1).cloned().unwrap_or(JsValue::null());
+            if new_child.is_null()
+                || new_child.is_undefined()
+                || old_child.is_null()
+                || old_child.is_undefined()
+            {
+                return Err(boa_engine::JsNativeError::typ()
+                    .with_message("Argument is not an object")
+                    .into());
             }
-        }
-        Ok(old_child)
-    });
+            if let Some(parent_obj) = this.as_object() {
+                if let (Some(new_obj), Some(old_obj)) =
+                    (new_child.as_object(), old_child.as_object())
+                {
+                    // DOM spec: oldChild must be a child of this parent
+                    // (NotFoundError otherwise). Checked before any mutation.
+                    let ref_id = read_handle_id(&old_child);
+                    let old_is_child = match ref_id {
+                        Some(rid) => b
+                            .borrow()
+                            .node_props
+                            .get(&read_handle_id(&JsValue::from(parent_obj.clone())).unwrap_or(0))
+                            .map(|snap| snap.child_ids.contains(&rid))
+                            .unwrap_or(false),
+                        None => false,
+                    };
+                    if !old_is_child {
+                        return Err(boa_engine::JsNativeError::typ()
+                            .with_message("NotFoundError: The node to be replaced is not a child of this node")
+                            .into());
+                    }
+                    // Build the replacement item: a PENDING createElement arg
+                    // materializes (the family contract), a live node moves.
+                    let item = if let Some(pid) = read_pending(&new_child) {
+                        Some(BatchItem::Pending(pid))
+                    } else {
+                        read_handle_id(&new_child).map(BatchItem::Live)
+                    };
+                    let Some(item) = item else {
+                        // The new child is neither a tree node nor a pending
+                        // createElement: nothing usable to insert. Do not
+                        // touch the tree (a bare replace would delete the old
+                        // node with nothing to take its place).
+                        return Ok(old_child);
+                    };
+                    // Mirror first, then ONE op (the ReplaceWith arm owns the
+                    // tree mutation and the pending materialization).
+                    insert_into_children(&parent_obj, &new_obj, Some(old_obj.clone()), ctx);
+                    remove_from_children(&parent_obj, &old_obj, ctx);
+                    if let Some(rid) = ref_id {
+                        b.borrow_mut().ops.push(Op::ReplaceWith {
+                            ref_id: rid,
+                            items: vec![item],
+                        });
+                    }
+                }
+            }
+            Ok(old_child)
+        },
+        Gc::clone(&bridge),
+    );
     init.function(replace_child, boa_engine::js_string!("replaceChild"), 2);
 
     // hasChildNodes() — true if childNodes.length > 0.
@@ -21232,5 +21284,131 @@ mod parent_node_handle_tests {
             host_kids.is_empty(),
             "the child must leave the tree; got {host_kids:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod replace_child_op_tests {
+    //! Round-5 S3 (PR #99): `replaceChild` was JS-mirror-only — it never
+    //! pushed a bridge op, so the parsed tree was untouched and the call
+    //! silently did nothing.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn kids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| {
+                doc.get_node(i)
+                    .map(|n| {
+                        n.children
+                            .iter()
+                            .filter_map(|&c| doc.get_node(c))
+                            .map(|cn| cn.text_content())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    fn text_of(doc: &HtmlDocument, id: &str) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    /// A live node swapped in for another: the tree must show the NEW child
+    /// and not the old one.
+    #[test]
+    fn live_replace_child_changes_the_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="old">O</span></div><div id="spare">N</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var oldC = document.getElementById('old');
+            var spare = document.getElementById('spare');
+            var ret = host.replaceChild(spare, oldC);
+            document.getElementById('out').setText('ret=' + ret.textContent);
+            "#,
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["N"],
+            "the tree must hold the NEW child (replaceChild used to be mirror-only)"
+        );
+        // DOM spec: replaceChild returns the OLD child (the replaced node).
+        assert_eq!(
+            text_of(&doc, "out"),
+            "ret=O",
+            "replaceChild returns the old child"
+        );
+    }
+
+    /// A pending createElement argument named the #98 family contract: the
+    /// replacement materializes instead of vanishing.
+    #[test]
+    fn pending_replace_child_materializes() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="host"><li id="old">O</li></ul><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var oldC = document.getElementById('old');
+            var made = document.createElement('em');
+            made.setText('M');
+            host.replaceChild(made, oldC);
+            "#,
+        );
+        assert_eq!(
+            kids(&doc, "host"),
+            ["M"],
+            "a createElement argument must materialize in place of the old child"
+        );
+    }
+
+    /// NotFoundError guard: replacing a node that is not a child must throw
+    /// and leave the tree alone.
+    #[test]
+    fn replacing_a_non_child_throws_and_leaves_the_tree_alone() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="old">O</span></div><div id="other"><i id="far">F</i></div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var far = document.getElementById('far');
+            var made = document.createElement('em');
+            made.setText('M');
+            var r;
+            try { host.replaceChild(made, far); r = 'no-throw'; }
+            catch (e) { r = 'threw'; }
+            document.getElementById('out').setText(r);
+            "#,
+        );
+        assert_eq!(
+            text_of(&doc, "out"),
+            "threw",
+            "a non-child must throw NotFoundError"
+        );
+        assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
     }
 }
