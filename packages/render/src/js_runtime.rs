@@ -14454,37 +14454,37 @@ fn make_element_handle(
     // replaceWith(...nodes) — replaces this node with the arguments.
     let replace_with_fn = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, ctx| {
-        if let Some(obj) = this.as_object() {
-            let parent = obj
-                .get(boa_engine::js_string!("parentNode"), ctx)
-                .ok()
-                .and_then(|v| v.as_object());
-            if let Some(parent_obj) = parent {
-                // Real tree node batch: one op replaces the ref in the tree
-                // (mirror-only left the tree unchanged — same family as
-                // before/after, PR #90 R5).
-                let mut batch: Vec<u64> = Vec::new();
-                for arg in args.iter() {
-                    let node = value_to_node(arg, ctx);
-                    if let Some(child_obj) = node.as_object() {
-                        if let Some(cid) = read_handle_id(&node) {
-                            batch.push(cid);
+            if let Some(obj) = this.as_object() {
+                let parent = obj
+                    .get(boa_engine::js_string!("parentNode"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object());
+                if let Some(parent_obj) = parent {
+                    // Real tree node batch: one op replaces the ref in the tree
+                    // (mirror-only left the tree unchanged — same family as
+                    // before/after, PR #90 R5).
+                    let mut batch: Vec<u64> = Vec::new();
+                    for arg in args.iter() {
+                        let node = value_to_node(arg, ctx);
+                        if let Some(child_obj) = node.as_object() {
+                            if let Some(cid) = read_handle_id(&node) {
+                                batch.push(cid);
+                            }
+                            insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
-                        insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+                    }
+                    // Remove this node from the mirror too.
+                    remove_from_children(&parent_obj, &obj, ctx);
+                    if let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone())) {
+                        b.borrow_mut().ops.push(Op::ReplaceWith {
+                            ref_id,
+                            child_ids: batch,
+                        });
                     }
                 }
-                // Remove this node from the mirror too.
-                remove_from_children(&parent_obj, &obj, ctx);
-                if let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone())) {
-                    b.borrow_mut().ops.push(Op::ReplaceWith {
-                        ref_id,
-                        child_ids: batch,
-                    });
-                }
             }
-        }
-        Ok(JsValue::undefined())
-    },
+            Ok(JsValue::undefined())
+        },
         Gc::clone(&bridge),
     );
     init.function(replace_with_fn, boa_engine::js_string!("replaceWith"), 0);
@@ -19466,5 +19466,126 @@ mod before_after_dom_tests {
         );
         // A rebind must walk the relocated tree without aborting.
         rt.bind_and_run(&mut doc, r#"void 0;"#);
+    }
+}
+
+#[cfg(test)]
+mod replace_with_dom_tests {
+    //! L940 (PR #90 R5): `replaceWith(...)` was mirror-only — the tree never
+    //! changed. One batch op replaces the ref in the tree and DETACHES it
+    //! (remove_node, not drop).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn replace_with_swaps_the_ref_for_the_batch_in_the_tree() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="x">x</li><li id="y">y</li></ul><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('old').replaceWith(x, y);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "src"),
+            Vec::<String>::new(),
+            "sources drained"
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["x".to_string(), "y".to_string(), "keep".to_string()],
+            "the batch must land where the ref was, ref detached"
+        );
+        // Detach-not-drop: the replaced node is re-insertable under a new
+        // parent (its own last child position here).
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('keep').appendChild(document.getElementById('old'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "keep"),
+            vec!["#text".to_string(), "old".to_string()],
+            "detach-not-drop: the replaced node is re-insertable"
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["x".to_string(), "y".to_string(), "keep".to_string()],
+            "the list order is unchanged by the re-insert"
+        );
+    }
+
+    #[test]
+    fn replace_with_ref_in_own_subtree_is_rejected() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="outer"><div id="inner"><b id="leaf">x</b></div></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('leaf').replaceWith(document.getElementById('outer'));
+            "#,
+        );
+        let outer_kids = kid_ids(&doc, "outer");
+        assert_eq!(
+            outer_kids,
+            vec!["inner".to_string()],
+            "a cyclic replaceWith must be rejected wholesale"
+        );
+        rt.bind_and_run(&mut doc, r#"void 0;"#);
+    }
+
+    #[test]
+    fn replace_with_no_args_just_detaches_the_ref() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('a').replaceWith();
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["b".to_string()],
+            "replaceWith() with no args detaches the ref"
+        );
     }
 }
