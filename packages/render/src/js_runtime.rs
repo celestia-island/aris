@@ -13789,12 +13789,25 @@ fn make_element_handle(
                                 let mut new_len = 0u32;
                                 for i in 0..len {
                                     if let Ok(h) = arr.get(i as u32, ctx) {
-                                        let matches = match (&handler_obj, h.as_object()) {
-                                            (Some(target), Some(ho)) => {
-                                                boa_engine::object::JsObject::equals(target, &ho)
-                                            }
-                                            _ => false,
-                                        };
+                                        // Entries are stored as {callback,
+                                        // passive} wrappers: compare the
+                                        // callback field. The old code
+                                        // compared the caller's function to
+                                        // the WRAPPER object — always false —
+                                        // so removeEventListener never
+                                        // removed anything from
+                                        // _js_listeners (round-2 S2).
+                                        let matches = h
+                                            .as_object()
+                                            .and_then(|ho| {
+                                                ho.get(boa_engine::js_string!("callback"), ctx).ok()
+                                            })
+                                            .and_then(|cb| cb.as_object())
+                                            .zip(handler_obj.as_ref())
+                                            .map(|(cbo, want)| {
+                                                boa_engine::object::JsObject::equals(&cbo, want)
+                                            })
+                                            .unwrap_or(false);
                                         if !matches {
                                             let _ = new_arr.insert_property(new_len, pd(h));
                                             new_len += 1;
@@ -20174,7 +20187,7 @@ mod listener_ghost_probes {
     #[test]
     fn remove_one_of_two_only_the_survivor_fires() {
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            r#"<html><body><button id="b">go</button><div id="out"></div><div id="res_probe"></div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
@@ -20233,7 +20246,7 @@ mod listener_ghost_probes {
     #[test]
     fn removing_an_unknown_handler_is_harmless() {
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            r#"<html><body><button id="b">go</button><div id="out"></div><div id="res_probe"></div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
@@ -20266,11 +20279,55 @@ mod listener_ghost_probes {
         );
     }
 
+    /// dispatchEvent-path removal, all in ONE window (the `_js_listeners`
+    /// mirror lives on the per-window handle object, so cross-window probes
+    /// cannot see it): add, dispatch (fires), remove by the captured
+    /// identity, dispatch again — the second dispatch must NOT fire, and the
+    /// mirror length must drop to 0. The old code compared the caller's
+    /// function to the stored {callback, passive} WRAPPER — always false —
+    /// so the entry was never removed and the second dispatch re-fired.
+    #[test]
+    fn dispatch_event_removes_the_matching_handler() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var b = document.getElementById('b');
+            var fired = '';
+            var fn = null;
+            b.addEventListener('click', function () {
+                fired += 'A';
+                fn = b._js_listeners.click[0].callback;
+            });
+            b.dispatchEvent({ type: 'click' });
+            document.getElementById('out').setText('mid=' + fired + ' len=' + b._js_listeners.click.length);
+            b.removeEventListener('click', fn);
+            b.dispatchEvent({ type: 'click' });
+            document.getElementById('out').setText('final=' + fired + ' len=' + b._js_listeners.click.length);
+            "#,
+        );
+        // `out` holds the FINAL state (the mid setText was overwritten in the
+        // same window). This single assertion pins the whole contract:
+        // fired == "A" proves the first dispatch fired exactly once (no
+        // ghost refire after removal), len == 0 proves the matching
+        // removeEventListener dropped the _js_listeners entry (the old code
+        // never removed it, yielding "final=A len=1").
+        assert_eq!(
+            text_of(&doc, "out"),
+            "final=A len=0",
+            "fired once, removed cleanly, no ghost refire"
+        );
+    }
+
     /// remove then re-add in the same script — re-add must survive.
     #[test]
     fn remove_then_readd_same_run() {
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><button id="b">go</button><div id="out"></div></body></html>"#,
+            r#"<html><body><button id="b">go</button><div id="out"></div><div id="res_probe"></div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
