@@ -14137,22 +14137,35 @@ fn make_element_handle(
                             .and_then(|snap| snap.child_ids.first().copied())
                     })
                     .unwrap_or(0);
+                // Mirror anchor: the first child STUB, so a prepended node
+                // splices to the HEAD of the JS mirror (master's behavior —
+                // appending at the tail left the mirror reading [a,b,c]
+                // while the tree held [m,a,b,c], round-5 S2).
+                let first_child = parent_obj
+                    .get(boa_engine::js_string!("_children"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_object())
+                    .and_then(|a| a.get(0u32, ctx).ok())
+                    .and_then(|v| v.as_object());
                 for arg in args.iter() {
                     let node = value_to_node(arg, ctx);
                     if let Some(child_obj) = node.as_object() {
-                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node))
-                            && cid != anchor_id
-                        {
-                            // cid == anchor_id (prepend of the current first child) is a DOM
-                            // no-op — pushing it would make blitz detach the child
-                            // and panic on the severed anchor (round-2 S0).
+                        if let (Some(pid), Some(cid)) = (parent_id, read_handle_id(&node)) {
+                            if cid == anchor_id {
+                                // Prepending the current first child is a
+                                // DOM no-op: neither the tree nor the mirror
+                                // may change (pushing the op made blitz
+                                // detach the child and panic on the severed
+                                // anchor — round-2 S0).
+                                continue;
+                            }
                             b.borrow_mut().ops.push(Op::InsertBefore {
                                 parent_id: pid,
                                 child_id: cid,
                                 anchor_id,
                             });
                         }
-                        insert_into_children(&parent_obj, &child_obj, None, ctx);
+                        insert_into_children(&parent_obj, &child_obj, first_child.clone(), ctx);
                     }
                 }
             }
@@ -18855,6 +18868,45 @@ mod append_prepend_dom_tests {
             .map(|n| n.text_content())
             .unwrap_or_default();
         assert_eq!(res, "survived");
+    }
+
+    #[test]
+    fn mixed_prepend_is_consistent_within_the_same_run() {
+        // Round-5 S2: prepend(a, m) where `a` IS the snapshot first child —
+        // the tree skips `a` (self-anchor no-op) and moves `m` to the head,
+        // so the in-run MIRROR must read [m, a, b, c] too. The old code
+        // appended to the mirror tail, leaving [a, b, c] with `m` invisible.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul><ul id="src"><li id="m">m</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var l = document.getElementById('l');
+            var a = document.getElementById('a');
+            var m = document.getElementById('m');
+            l.prepend(a, m);
+            document.getElementById('res').setText('ran');
+            "#,
+        );
+        // NOTE: an in-run `l.childNodes` read would show the BIND-TIME
+        // snapshot (childNodes is snapshot-backed; the JS `_children` mirror
+        // is internal and page-invisible), so the observable assertion here
+        // is the post-apply TREE. The mirror fix itself (head splice, not
+        // tail append) restores master parity and is only indirectly
+        // observable through later same-run splice positions.
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["m".to_string(), "a".to_string(), "b".to_string()],
+            "the tree must match the in-run view after apply"
+        );
+        assert_eq!(
+            kid_ids(&doc, "src"),
+            Vec::<String>::new(),
+            "m must have left its source parent"
+        );
     }
 
     #[test]
