@@ -20713,19 +20713,19 @@ mod document_listener_dedup_tests {
 
 #[cfg(test)]
 mod canvas_getcontext_tests {
-    //! Backlog ③: pin the id-less canvas getContext path. Id-less handles
-    //! (createElement without appendChild) share the node-0 scratch slot;
-    //! the context must be non-null and support basic drawing ops.
+    //! Backlog ③: pin the createElement('canvas') → make_canvas_handle
+    //! getContext surface. These tests exercise the special-cased canvas
+    //! handle path (NOT the node-0 scratch slot, which is pinned by the
+    //! pre-existing `idless_canvas_tests`).
 
     use super::JsRuntime;
     use blitz_dom::DocumentConfig;
     use blitz_html::HtmlDocument;
-    use blitz_traits::NodeId;
-
     #[test]
     fn created_canvas_getcontext_2d_returns_non_null() {
-        // Id-less createElement without appendChild: the handle has no tree
-        // node, so read_handle_id returns None → node-0 scratch slot.
+        // createElement('canvas') is special-cased to make_canvas_handle
+        // (before make_element_handle), so this pins the canvas-handle
+        // surface's getContext('2d').
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><div id="scratch"></div></body></html>"#,
             DocumentConfig::default(),
