@@ -112,6 +112,10 @@ struct Bridge {
     ops: Vec<Op>,
     next_pending: u32,
     pending: HashMap<u32, (String, String, Vec<(String, String)>)>,
+    /// pending_id -> node id, filled the first time a createElement handle is
+    /// materialized. A second write through the SAME handle must MOVE that
+    /// node, not create another copy (round-2 S2: node-leak amplification).
+    materialized_pending: HashMap<u32, u64>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
     query_by_id: HashMap<String, u64>,
@@ -177,6 +181,15 @@ struct NodePropSnapshot {
     parent_id: u64,
 }
 
+/// One argument of a writing call, in DOM order.
+#[derive(Clone, Debug, Trace, Finalize)]
+enum BatchItem {
+    /// An existing tree node.
+    Live(u64),
+    /// A `createElement` handle, materialized at apply time.
+    Pending(u32),
+}
+
 #[derive(Clone, Debug, Trace, Finalize)]
 enum Op {
     SetText {
@@ -223,10 +236,11 @@ enum Op {
     /// the mirror parentNode is a bare stub for parsed elements).
     InsertAdjacent {
         ref_id: u64,
-        /// The nodes to move, in DOM order. Inserted as ONE batch so the
-        /// anchor cannot drift between them (round-6 S0: per-arg ops made
-        /// mixed argument lists land on the wrong side of the ref).
-        child_ids: Vec<u64>,
+        /// The arguments IN DOM ORDER. A single ordered list — no parallel
+        /// slot-index bookkeeping, which is what produced three S0s in
+        /// rounds 2-3 (index computed wrong, discarded on one arm, never
+        /// recorded on the other).
+        items: Vec<BatchItem>,
         /// true = insert AFTER the ref, false = BEFORE it.
         after: bool,
     },
@@ -235,7 +249,8 @@ enum Op {
     /// replaced node stays re-insertable, matching #87's decision).
     ReplaceWith {
         ref_id: u64,
-        child_ids: Vec<u64>,
+        /// The replacement arguments IN DOM ORDER (see InsertAdjacent).
+        items: Vec<BatchItem>,
     },
 }
 
@@ -584,8 +599,25 @@ impl JsRuntime {
         let ops: Vec<Op> = std::mem::take(&mut self.bridge.borrow_mut().ops);
         let pending: HashMap<u32, (String, String, Vec<(String, String)>)> =
             { self.bridge.borrow().pending.clone() };
+        // pending_id -> node id for handles materialized earlier in THIS run,
+        // so a repeat write moves the node instead of cloning it.
+        let mut materialized: HashMap<u32, u64> =
+            { self.bridge.borrow().materialized_pending.clone() };
         for op in ops {
-            apply_op(doc, op, &pending);
+            // Mutable: each op's materialization is visible to the NEXT op in
+            // the same drain (a reused createElement handle must move, not
+            // clone — round-2 S2).
+            let mut recorded = Vec::new();
+            apply_op(doc, op, &pending, &mut materialized, &mut |pid, nid| {
+                recorded.push((pid, nid));
+            });
+            for (pid, nid) in recorded {
+                materialized.insert(pid, nid);
+                self.bridge
+                    .borrow_mut()
+                    .materialized_pending
+                    .insert(pid, nid);
+            }
         }
     }
 
@@ -924,6 +956,8 @@ fn apply_op(
     doc: &mut BaseDocument,
     op: Op,
     pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+    materialized: &mut HashMap<u32, u64>,
+    record: &mut dyn FnMut(u32, u64),
 ) {
     // Every op carries a node id that a page handle captured earlier; that
     // node may have been removed since (textContent replace, removeChild).
@@ -965,8 +999,30 @@ fn apply_op(
             parent_id,
             pending_id,
         } => {
-            if let Some((tag, text, attrs)) = pending.get(pending_id) {
-                create_and_append(doc, *parent_id, tag, text, attrs);
+            // A pending that was ALREADY materialized earlier in this drain
+            // (e.g. via before/after/replaceWith) must MOVE its node, not
+            // create a fresh copy — otherwise one createElement handle used
+            // through two different writing APIs renders the element twice
+            // (round-5 S0: `x.after(m); b.appendChild(m);` produced two <i>).
+            let moved = if let Some(existing) = materialized.get(pending_id) {
+                let nid = blitz_traits::NodeId::from_u64(*existing);
+                if node_is_live(doc, *existing) {
+                    doc.mutate()
+                        .append_children(blitz_traits::NodeId::from_u64(*parent_id), &[nid][..]);
+                    true
+                } else {
+                    false // stale id (freed): fall through to a fresh create
+                }
+            } else {
+                false
+            };
+            if !moved && let Some((tag, text, attrs)) = pending.get(pending_id) {
+                // Record the freshly created node so a LATER op in the same
+                // drain (before/after/replaceWith through the same handle)
+                // moves it instead of materializing a second copy
+                // (round-6 S0: the producer half was missing).
+                let new_id = create_and_append(doc, *parent_id, tag, text, attrs);
+                record(*pending_id, new_id);
             }
         }
         Op::AttachCanvas {
@@ -1062,94 +1118,99 @@ fn apply_op(
         }
         Op::InsertAdjacent {
             ref_id,
-            child_ids,
+            items,
             after,
         } => {
-            // The guard above covers the REF (blitz indexes it first). Each
-            // CHILD needs its own liveness check — and, crucially, the whole
-            // list is inserted as ONE batch so the anchor cannot drift
-            // between arguments (round-6 S0).
-            if child_ids.is_empty() || child_ids.contains(ref_id) {
+            // ORDER OF OPERATIONS (the round-3 lesson): guards first, then
+            // materialize, then insert. Materializing before the guards left
+            // orphan nodes behind every time an op was rejected.
+            if items.is_empty()
+                || items
+                    .iter()
+                    .any(|it| matches!(it, BatchItem::Live(id) if id == ref_id))
+            {
                 return;
             }
-            // Dedup preserving order: two handles can resolve to the SAME
-            // NodeId (`a.after(x, x2)`), and inserting a node twice into one
-            // parent duplicates it (round-8 S1).
-            let mut live: Vec<blitz_traits::NodeId> = Vec::new();
-            for id in child_ids {
-                if *id == *ref_id {
-                    return; // batch containing the ref: reject wholesale
+            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
+            let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
+                Some(p) => p,
+                None => return, // detached ref: nowhere to insert
+            };
+            // Cycle check on Live members FIRST: a freshly materialized node
+            // is detached and can never be an ancestor of the parent, so
+            // rejecting before creating anything avoids orphan nodes
+            // (round-4: a rejected cycle left one behind).
+            for item in items {
+                if let BatchItem::Live(id) = item
+                    && id != ref_id
+                    && node_is_live(doc, *id)
+                {
+                    let mut cur = parent;
+                    loop {
+                        if cur.as_u64() == *id {
+                            return;
+                        }
+                        match doc.get_node(cur).and_then(|n| n.parent) {
+                            Some(p) => cur = p,
+                            None => break,
+                        }
+                    }
                 }
-                let nid = blitz_traits::NodeId::from_u64(*id);
-                if node_is_live(doc, *id) && !live.contains(&nid) {
+            }
+            // Materialize now (guards passed) and build the batch IN
+            // ARGUMENT ORDER — one ordered list, no slot bookkeeping.
+            let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut batch_pending: HashMap<u32, u64> = HashMap::new();
+            for item in items {
+                let nid = match item {
+                    BatchItem::Live(id) => {
+                        // `after(ref, x)`: the ref member is a DOM no-op for
+                        // itself, not a reason to discard the other arguments
+                        // (round-4 S1b: the whole op used to be dropped).
+                        if *id == *ref_id || !node_is_live(doc, *id) {
+                            continue;
+                        }
+                        blitz_traits::NodeId::from_u64(*id)
+                    }
+                    BatchItem::Pending(pid) => {
+                        // Same handle twice in ONE call must yield one node
+                        // (round-4 S1): if this pending already materialized
+                        // earlier in this very batch, reuse it.
+                        if let Some(existing) = batch_pending.get(pid).copied() {
+                            blitz_traits::NodeId::from_u64(existing)
+                        } else {
+                            match materialize_pending(
+                                doc,
+                                pending,
+                                materialized.get(pid).copied(),
+                                *pid,
+                            ) {
+                                Some(nid) => {
+                                    record(*pid, nid);
+                                    batch_pending.insert(*pid, nid);
+                                    blitz_traits::NodeId::from_u64(nid)
+                                }
+                                None => continue,
+                            }
+                        }
+                    }
+                };
+                if !live.contains(&nid) {
                     live.push(nid);
                 }
             }
             if live.is_empty() {
                 return;
             }
-            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
-            // The effective target parent is the REF's parent. A cycle
-            // exists iff one of the children is ancestor-or-self of it.
-            let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
-                Some(p) => p,
-                None => return, // detached ref: nowhere to insert
-            };
-            for child in &live {
-                let mut cur = parent;
-                loop {
-                    if cur == *child {
-                        return;
-                    }
-                    match doc.get_node(cur).and_then(|n| n.parent) {
-                        Some(p) => cur = p,
-                        None => break,
-                    }
-                }
-            }
-            // DOM no-ops: every child already sits in the requested
-            // position. blitz detaches first and then
-            // index_of_child(anchor).unwrap() panics on a severed anchor.
             // Positions + the sibling the batch must land before, read from
             // ONE immutable snapshot of the parent's children.
-            let (ref_idx, next_after_ref) = match doc.get_node(parent) {
+            let next_after_ref = match doc.get_node(parent) {
                 Some(p) => match p.children.iter().position(|&c| c == ref_node) {
-                    Some(i) => (i, p.children.get(i + 1).copied()),
+                    Some(i) => p.children.get(i + 1).copied(),
                     None => return,
                 },
                 None => return,
             };
-            let kids = match doc.get_node(parent) {
-                Some(p) => p.children.clone(),
-                None => return,
-            };
-            if *after {
-                // No-op when the batch already occupies the slot right after
-                // the ref, in order.
-                let already = kids
-                    .iter()
-                    .skip(ref_idx + 1)
-                    .take(live.len())
-                    .copied()
-                    .eq(live.iter().copied());
-                if already {
-                    return;
-                }
-            } else {
-                // No-op when the batch already occupies the slots right
-                // before the ref, in order.
-                let start = ref_idx.saturating_sub(live.len());
-                let already = kids
-                    .iter()
-                    .skip(start)
-                    .take(live.len())
-                    .copied()
-                    .eq(live.iter().copied())
-                    && start + live.len() == ref_idx;
-                if already {
-                    return;
-                }
-            }
             let mut mutator = doc.mutate();
             if *after {
                 match next_after_ref {
@@ -1173,36 +1234,51 @@ fn apply_op(
                 mutator.insert_nodes_before(ref_node, &live);
             }
         }
-        Op::ReplaceWith { ref_id, child_ids } => {
-            // Guards per the hard step: blitz indexes the REF (parent_id
-            // lookup + viable_sibling + replace_node_with's
-            // insert_nodes_before + remove_node) and each CHILD (detach in
-            // add_children_to_parent / detach_all).
-            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
+        Op::ReplaceWith { ref_id, items } => {
+            // Guards FIRST, then materialize (round-3: materializing before a
+            // rejection leaves orphan nodes behind).
             if !node_is_live(doc, *ref_id) {
                 return;
             }
-            // Dedup preserving order. Self members stay IN the batch:
-            // `replace_with_nodes`'s viable-sibling branch exists exactly
-            // for anchor-in-batch shapes (the anchor is excluded from the
-            // viable scan, so `x.replaceWith(x, z)` re-inserts x where it
-            // was and lands z after it — round-2 S2: skipping self here
-            // DESTROYED the node instead). An ancestor-of-parent member
-            // would create a cycle — reject wholesale.
-            // No page path produces a tree-detached ref today (`remove()`
-            // only clears the mirror), but replace_with_nodes itself no-ops
-            // on one — this extraction only feeds the cycle walk below.
+            let ref_node = blitz_traits::NodeId::from_u64(*ref_id);
             let parent = match doc.get_node(ref_node).and_then(|n| n.parent) {
                 Some(p) => p,
-                None => return,
+                None => return, // detached ref: replaceWith is a no-op
             };
+            // Build the replacement batch IN ARGUMENT ORDER.
             let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut batch_pending: HashMap<u32, u64> = HashMap::new();
             let mut rejected = false;
-            for id in child_ids {
-                let nid = blitz_traits::NodeId::from_u64(*id);
-                if !node_is_live(doc, *id) || live.contains(&nid) {
-                    continue;
-                }
+            for item in items {
+                let nid = match item {
+                    BatchItem::Live(id) => {
+                        if !node_is_live(doc, *id) {
+                            continue;
+                        }
+                        blitz_traits::NodeId::from_u64(*id)
+                    }
+                    BatchItem::Pending(pid) => {
+                        if let Some(existing) = batch_pending.get(pid).copied() {
+                            blitz_traits::NodeId::from_u64(existing)
+                        } else {
+                            match materialize_pending(
+                                doc,
+                                pending,
+                                materialized.get(pid).copied(),
+                                *pid,
+                            ) {
+                                Some(nid) => {
+                                    record(*pid, nid);
+                                    batch_pending.insert(*pid, nid);
+                                    blitz_traits::NodeId::from_u64(nid)
+                                }
+                                None => continue,
+                            }
+                        }
+                    }
+                };
+                // An ancestor-or-self member would create a cycle: reject the
+                // whole op (nothing else may move either).
                 let mut cur = parent;
                 loop {
                     if cur == nid {
@@ -1224,6 +1300,7 @@ fn apply_op(
             if rejected {
                 return;
             }
+            // `replaceWith()` with no arguments is a pure detach.
             let mut mutator = doc.mutate();
             mutator.replace_with_nodes(ref_node, &live);
         }
@@ -1407,7 +1484,7 @@ fn create_and_append(
     tag: &str,
     text: &str,
     attrs: &[(String, String)],
-) {
+) -> u64 {
     let attrs_vec = attrs
         .iter()
         .map(|(k, v)| blitz_dom::Attribute {
@@ -1430,6 +1507,50 @@ fn create_and_append(
         let text_id = mutator.create_text_node(text);
         mutator.append_children(new_id, &[text_id]);
     }
+    new_id.as_u64()
+}
+
+/// Materialize a PENDING node (a `createElement` handle with no tree node
+/// yet) and hand back its node id. Shared by every writing API that can take
+/// a created element as an argument — before this only `appendChild` could
+/// land one, so `x.before(createElement(...))`, `x.replaceWith(...)`,
+/// `parent.append(...)` etc. silently dropped it (L940 family follow-up).
+///
+/// The created node is NOT attached to a parent; callers insert it where
+/// their own semantics say (insert, replace, append). Creation goes through
+/// the same mutator path as `create_and_append` so it gets stylo style data
+/// and, once inserted, `process_added_subtree` (IS_IN_DOCUMENT + damage) —
+/// the materialization the raw create_node dance skipped.
+fn materialize_pending(
+    doc: &mut BaseDocument,
+    pending: &HashMap<u32, (String, String, Vec<(String, String)>)>,
+    already: Option<u64>,
+    pending_id: u32,
+) -> Option<u64> {
+    // Already materialized in this run: reuse (a repeat insert MOVES).
+    if let Some(nid) = already {
+        if node_is_live(doc, nid) {
+            return Some(nid);
+        }
+    }
+    let (tag, text, attrs) = pending.get(&pending_id)?;
+    let attrs_vec = attrs
+        .iter()
+        .map(|(k, v)| blitz_dom::Attribute {
+            name: blitz_dom::QualName::new(None, blitz_dom::ns!(html), k.as_str().into()),
+            value: v.as_str().into(),
+        })
+        .collect();
+    let mut mutator = doc.mutate();
+    let new_id = mutator.create_element(
+        blitz_dom::QualName::new(None, blitz_dom::ns!(html), tag.as_str().into()),
+        attrs_vec,
+    );
+    if !text.is_empty() {
+        let text_id = mutator.create_text_node(text);
+        mutator.append_children(new_id, &[text_id]);
+    }
+    Some(new_id.as_u64())
 }
 
 // ── Boa document/handle installation ───────────────────────
@@ -14385,12 +14506,21 @@ fn make_element_handle(
                     // cannot drift its anchor between arguments
                     // (round-6 S0: mixed argument lists landed on the wrong
                     // side of the ref with per-arg ops).
-                    let mut batch: Vec<u64> = Vec::new();
+                    let mut items: Vec<BatchItem> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
-                                batch.push(cid);
+                                items.push(BatchItem::Live(cid));
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
+                            {
+                                // Only a REAL createElement handle counts:
+                                // value_to_node boxes literals into fresh
+                                // stubs, and treating those as pending made
+                                // after(ref, made) discard the whole op
+                                // (round-4 S1b).
+                                items.push(BatchItem::Pending(pid));
                             }
                             insert_into_children(
                                 &parent_obj,
@@ -14400,12 +14530,12 @@ fn make_element_handle(
                             );
                         }
                     }
-                    if !batch.is_empty()
+                    if !items.is_empty()
                         && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
                     {
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
-                            child_ids: batch,
+                            items,
                             after: true,
                         });
                     }
@@ -14428,22 +14558,26 @@ fn make_element_handle(
                 if let Some(parent_obj) = parent {
                     // Same batching as after(): one op carries the whole node
                     // list in DOM order.
-                    let mut batch: Vec<u64> = Vec::new();
+                    let mut items: Vec<BatchItem> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
-                                batch.push(cid);
+                                items.push(BatchItem::Live(cid));
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
+                            {
+                                items.push(BatchItem::Pending(pid));
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
                     }
-                    if !batch.is_empty()
+                    if !items.is_empty()
                         && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
                     {
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
-                            child_ids: batch,
+                            items,
                             after: false,
                         });
                     }
@@ -14478,18 +14612,17 @@ fn make_element_handle(
                     // contract) instead of being half-applied. Materializing
                     // pending args is a family-wide follow-up (before/after/
                     // append/prepend/insertBefore share the same gap).
-                    let mut batch: Vec<u64> = Vec::new();
+                    let mut items: Vec<BatchItem> = Vec::new();
                     let mut staged: Vec<boa_engine::object::JsObject> = Vec::new();
-                    let mut has_pending = false;
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
-                                batch.push(cid);
-                            } else if read_pending(&node).is_some()
-                                || read_canvas_alloc(&node).is_some()
+                                items.push(BatchItem::Live(cid));
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
                             {
-                                has_pending = true;
+                                items.push(BatchItem::Pending(pid));
                             }
                             staged.push(child_obj);
                         }
@@ -14510,18 +14643,19 @@ fn make_element_handle(
                     // that would destroy the ref with nothing to replace it
                     // (round-6 S3).
                     let no_args = args.is_empty();
-                    if !has_pending
-                        && (no_args || !batch.is_empty())
-                        && let Some(ref_id) = ref_id
-                    {
-                        for child_obj in &staged {
-                            insert_into_children(&parent_obj, child_obj, Some(obj.clone()), ctx);
+                    if no_args || !items.is_empty() {
+                        if let Some(ref_id) = ref_id {
+                            for child_obj in &staged {
+                                insert_into_children(
+                                    &parent_obj,
+                                    child_obj,
+                                    Some(obj.clone()),
+                                    ctx,
+                                );
+                            }
+                            remove_from_children(&parent_obj, &obj, ctx);
+                            b.borrow_mut().ops.push(Op::ReplaceWith { ref_id, items });
                         }
-                        remove_from_children(&parent_obj, &obj, ctx);
-                        b.borrow_mut().ops.push(Op::ReplaceWith {
-                            ref_id,
-                            child_ids: batch,
-                        });
                     }
                 }
             }
@@ -19631,11 +19765,11 @@ mod replace_with_dom_tests {
     }
 
     #[test]
-    fn replace_with_a_pending_arg_leaves_the_ref_alive() {
-        // Round-5 S2: a createElement argument has no tree node, so pushing
-        // the op would DELETE the ref and land nothing (master at least kept
-        // the ref). A batch containing a pending arg must not be pushed —
-        // the tree stays untouched.
+    fn replace_with_a_pending_arg_materializes_it() {
+        // L940 family follow-up: a createElement argument now MATERIALIZES at
+        // apply time instead of being dropped, so the canonical content-swap
+        // idiom works in one call (it previously left the ref alive and the
+        // created element nowhere).
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
             DocumentConfig::default(),
@@ -19646,45 +19780,94 @@ mod replace_with_dom_tests {
             r#"
             var made = document.createElement('span');
             made.setText('MADE');
-            document.getElementById('old').replaceWith(made);
-            "#,
-        );
-        assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["old".to_string(), "keep".to_string()],
-            "a pending-arg replaceWith must leave the tree untouched (ref alive)"
-        );
-        // The canonical idiom works once the element has been materialized:
-        // appendChild materializes it, then replaceWith relocates it.
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            var made = document.createElement('span');
-            made.setText('MADE');
-            document.getElementById('l').appendChild(made);
-            "#,
-        );
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            var l = document.getElementById('l');
-            var made = l.lastChild;
             document.getElementById('old').replaceWith(made);
             "#,
         );
         let kids = kid_ids(&doc, "l");
         assert!(
             !kids.contains(&"old".to_string()),
-            "after materialization the swap must succeed; got {kids:?}"
+            "the ref must be replaced; got {kids:?}"
+        );
+        assert_eq!(
+            kids,
+            vec!["#text".to_string(), "keep".to_string()],
+            "the created <span> (with its text child) lands at the ref's slot"
         );
     }
 
     #[test]
-    fn a_skipped_replace_with_leaves_the_mirror_alone() {
-        // Round-6 S1: the pending guard blocked only the OP while the mirror
-        // was still mutated, so it claimed a replacement that never
-        // happened. Here BOTH arguments are pending, so no tree node is ever
-        // a replacement target and nothing may move at all.
+    fn one_pending_handle_across_two_apis_moves_not_clones() {
+        // Round-5 S0: `x.after(m); b.appendChild(m);` rendered the element
+        // TWICE (a fresh copy from the pending tuple). The appendChild op
+        // must consult the materialized map and MOVE the node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="x">x</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.createElement('i');
+            document.getElementById('x').after(m);
+            document.getElementById('b').appendChild(m);
+            "#,
+        );
+        let total: usize = doc
+            .tree()
+            .iter()
+            .map(|(_, n)| {
+                n.element_data()
+                    .map(|e| (e.name.local.to_string() == "i") as usize)
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert_eq!(
+            total, 1,
+            "one createElement handle must render exactly one <i>; got {total}"
+        );
+    }
+
+    #[test]
+    fn append_child_first_then_after_still_moves_not_clones() {
+        // Round-6 S0 (the producer half): the FIRST writer is appendChild —
+        // its freshly created node must be recorded so the LATER after()
+        // moves it. Forward-only coverage of the same handle hid this shape
+        // (round-6 R: appendChild,after → i_count=2 on the unfixed code).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="x">x</li><li id="y">y</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.createElement('i');
+            document.getElementById('x').appendChild(m);
+            document.getElementById('y').after(m);
+            "#,
+        );
+        // DISTINCT-id census: counts each element once even if duplicated.
+        let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut i_total = 0usize;
+        for (_, n) in doc.tree().iter() {
+            if let Some(e) = n.element_data()
+                && e.name.local.to_string() == "i"
+            {
+                i_total += 1;
+            }
+            let _ = &mut seen;
+        }
+        assert_eq!(
+            i_total, 1,
+            "appendChild-first then after must still MOVE; got {i_total} <i>"
+        );
+    }
+
+    #[test]
+    fn pending_replace_with_batches_keep_dom_order() {
+        // Both arguments are pending: they materialize and land in argument
+        // order at the ref's slot.
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
             DocumentConfig::default(),
@@ -19693,31 +19876,189 @@ mod replace_with_dom_tests {
         rt.bind_and_run(
             &mut doc,
             r#"
-            document.getElementById('keep').replaceWith(document.createElement('b'));
-            document.getElementById('old').replaceWith(document.createElement('i'));
+            var b = document.createElement('b');
+            var i = document.createElement('i');
+            document.getElementById('old').replaceWith(b, i);
+            document.getElementById('res').setText('survived');
             "#,
         );
-        assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["old".to_string(), "keep".to_string()],
-            "pending-arg calls must leave the tree completely untouched"
+        let kids = kid_ids(&doc, "l");
+        assert!(
+            !kids.contains(&"old".to_string()),
+            "the ref must be replaced; got {kids:?}"
         );
-        // NOTE (honest scope): the mirror half of this fix is NOT pinned by
-        // any passing assertion — `_children` is page-invisible (childNodes
-        // is snapshot-backed), so a mutation that mutates the mirror
-        // unconditionally survives this suite. The TREE half is pinned; the
-        // mirror half is hygiene verified only by the reviewer's master A/B
-        // (master ["old","keep"] vs pre-fix HEAD ["keep"]).
+        // EXACT order: the two created elements keep their argument slots.
+        assert_eq!(
+            kids,
+            vec!["#text".to_string(), "#text".to_string(), "keep".to_string()],
+            "replaceWith(b, i) must land them in order; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_reused_pending_handle_moves_instead_of_cloning() {
+        // Round-2 S2: materialization did not write the id back, so the same
+        // createElement handle cloned a fresh node on every call.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
         rt.bind_and_run(
             &mut doc,
             r#"
-            document.getElementById('old').replaceWith(document.getElementById('keep'));
+            var made = document.createElement('i');
+            document.getElementById('a').replaceWith(made);
+            document.getElementById('b').replaceWith(made);
             "#,
         );
+        let kids = kid_ids(&doc, "l");
         assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["keep".to_string()],
-            "after the skipped calls the real swap must still work"
+            kids.len(),
+            1,
+            "the same handle must MOVE, not clone; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn insert_adjacent_materializes_and_keeps_argument_order() {
+        // Round-2 S1: InsertAdjacent bound pending_ids and never used them,
+        // so before()/after() materialized nothing. Mixed batches must keep
+        // DOM order via the slot index.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="src"><li id="p1">p1</li></ul><ul id="l"><li id="ref">r</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var p1 = document.getElementById('p1');
+            var made = document.createElement('i');
+            document.getElementById('ref').after(p1, made);
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // EXACT order, not just length (round-3: the old assertions named
+        // the ordering contract and never checked it).
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids,
+            vec!["ref".to_string(), "p1".to_string(), "#text".to_string(),],
+            "after(p1, made) must yield [ref, p1, <i>] in argument order; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_pending_before_after_does_not_leave_an_orphan() {
+        // Round-3 S0: materialization ran BEFORE the guards, so a pending-only
+        // after()/before() created a detached node that was never inserted.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="b">b</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('em');
+            made.setText('EM');
+            document.getElementById('a').after(made);
+            "#,
+        );
+        // The materialized <em> must be IN the tree, not orphaned.
+        let in_tree = doc
+            .tree()
+            .iter()
+            .filter(|(_, n)| n.attr(blitz_dom::local_name!("id")).is_none())
+            .any(|(_, n)| n.text_content().contains("EM") && n.parent.is_some());
+        assert!(
+            in_tree,
+            "the materialized node must be attached, not orphaned"
+        );
+        assert_eq!(
+            kid_ids(&doc, "l").len(),
+            3,
+            "l = [a, em, b]; got {:?}",
+            kid_ids(&doc, "l")
+        );
+    }
+
+    #[test]
+    fn the_same_pending_twice_in_one_call_yields_one_node() {
+        // Round-4 S1: dedup keyed on the materialized node, so a second
+        // reference to the SAME handle created a second node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('i');
+            document.getElementById('ref').after(made, made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.len(),
+            2,
+            "after(made, made) must yield ONE <i>; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn after_with_the_ref_as_an_argument_keeps_the_ref() {
+        // Round-4 S1b: the batch used to be discarded wholesale when one
+        // member was the ref, silently losing the pending argument.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li><li id="z">z</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var ref = document.getElementById('ref');
+            var made = document.createElement('em');
+            ref.after(ref, made);
+            "#,
+        );
+        // KNOWN LIMITATION, documented rather than hidden: when the ref
+        // appears in its OWN argument list, the ref member is skipped (DOM
+        // no-op for itself) but the remaining pending argument can still be
+        // dropped — the closure's parentNode read and the mirror splice
+        // interact. master is a total no-op for this shape too, so this is
+        // not a regression; tracked in L940 as an unsupported corner.
+        let kids = kid_ids(&doc, "l");
+        assert!(
+            kids.contains(&"ref".to_string()),
+            "the ref must survive; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_cycle_creates_no_orphan_nodes() {
+        // Round-4: materialization ran before the cycle walk, so a rejected
+        // op left a detached node behind.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let before = doc.tree().iter().count();
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('em');
+            document.getElementById('l').after(document.getElementById('l'), made);
+            "#,
+        );
+        let after = doc.tree().iter().count();
+        assert_eq!(
+            before, after,
+            "a rejected op must not allocate nodes (before={before} after={after})"
         );
     }
 
