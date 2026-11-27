@@ -1201,7 +1201,6 @@ fn apply_op(
                     materialized.push(nid);
                 }
             }
-            let _ = &materialized;
             // Dedup preserving order. Self members stay IN the batch:
             // `replace_with_nodes`'s viable-sibling branch exists exactly
             // for anchor-in-batch shapes (the anchor is excluded from the
@@ -1243,6 +1242,15 @@ fn apply_op(
             }
             if rejected {
                 return;
+            }
+            // Materialized pending nodes join the batch at the END of the
+            // argument list order (they carry no slot index of their own in
+            // this arm); insertion order is preserved by the splice above.
+            for nid in &materialized {
+                let id = blitz_traits::NodeId::from_u64(*nid);
+                if !live.contains(&id) {
+                    live.push(id);
+                }
             }
             let mut mutator = doc.mutate();
             mutator.replace_with_nodes(ref_node, &live);
@@ -14442,11 +14450,16 @@ fn make_element_handle(
                     // (round-6 S0: mixed argument lists landed on the wrong
                     // side of the ref with per-arg ops).
                     let mut batch: Vec<u64> = Vec::new();
+                    let mut pendings: Vec<(usize, u32)> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
+                            } else if let Some(pid) = read_pending(&node) {
+                                // createElement handle: materialized at apply
+                                // time instead of being dropped (L940 family).
+                                pendings.push((batch.len() + pendings.len(), pid));
                             }
                             insert_into_children(
                                 &parent_obj,
@@ -14456,13 +14469,13 @@ fn make_element_handle(
                             );
                         }
                     }
-                    if !batch.is_empty()
+                    if (!batch.is_empty() || !pendings.is_empty())
                         && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
                     {
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
                             child_ids: batch,
-                            pending_ids: Vec::new(),
+                            pending_ids: pendings,
                             after: true,
                         });
                     }
@@ -14486,22 +14499,25 @@ fn make_element_handle(
                     // Same batching as after(): one op carries the whole node
                     // list in DOM order.
                     let mut batch: Vec<u64> = Vec::new();
+                    let mut pendings: Vec<(usize, u32)> = Vec::new();
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
+                            } else if let Some(pid) = read_pending(&node) {
+                                pendings.push((batch.len() + pendings.len(), pid));
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
                         }
                     }
-                    if !batch.is_empty()
+                    if (!batch.is_empty() || !pendings.is_empty())
                         && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
                     {
                         b.borrow_mut().ops.push(Op::InsertAdjacent {
                             ref_id,
                             child_ids: batch,
-                            pending_ids: Vec::new(),
+                            pending_ids: pendings,
                             after: false,
                         });
                     }
@@ -14537,6 +14553,7 @@ fn make_element_handle(
                     // pending args is a family-wide follow-up (before/after/
                     // append/prepend/insertBefore share the same gap).
                     let mut batch: Vec<u64> = Vec::new();
+                    let mut pendings: Vec<(usize, u32)> = Vec::new();
                     let mut staged: Vec<boa_engine::object::JsObject> = Vec::new();
                     let mut has_pending = false;
                     for arg in args.iter() {
@@ -14544,9 +14561,14 @@ fn make_element_handle(
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 batch.push(cid);
-                            } else if read_pending(&node).is_some()
-                                || read_canvas_alloc(&node).is_some()
-                            {
+                            } else if let Some(pid) = read_pending(&node) {
+                                // createElement handle: materialized at apply
+                                // time now that the family has a shared
+                                // materializer (L940 follow-up).
+                                pendings.push((batch.len() + pendings.len(), pid));
+                            } else if read_canvas_alloc(&node).is_some() {
+                                // Canvas buffers still have no materialization
+                                // path here — keep the old safe skip.
                                 has_pending = true;
                             }
                             staged.push(child_obj);
@@ -14569,7 +14591,7 @@ fn make_element_handle(
                     // (round-6 S3).
                     let no_args = args.is_empty();
                     if !has_pending
-                        && (no_args || !batch.is_empty())
+                        && (no_args || !batch.is_empty() || !pendings.is_empty())
                         && let Some(ref_id) = ref_id
                     {
                         for child_obj in &staged {
@@ -14579,7 +14601,7 @@ fn make_element_handle(
                         b.borrow_mut().ops.push(Op::ReplaceWith {
                             ref_id,
                             child_ids: batch,
-                            pending_ids: Vec::new(),
+                            pending_ids: pendings,
                         });
                     }
                 }
@@ -19690,11 +19712,11 @@ mod replace_with_dom_tests {
     }
 
     #[test]
-    fn replace_with_a_pending_arg_leaves_the_ref_alive() {
-        // Round-5 S2: a createElement argument has no tree node, so pushing
-        // the op would DELETE the ref and land nothing (master at least kept
-        // the ref). A batch containing a pending arg must not be pushed —
-        // the tree stays untouched.
+    fn replace_with_a_pending_arg_materializes_it() {
+        // L940 family follow-up: a createElement argument now MATERIALIZES at
+        // apply time instead of being dropped, so the canonical content-swap
+        // idiom works in one call (it previously left the ref alive and the
+        // created element nowhere).
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
             DocumentConfig::default(),
@@ -19705,45 +19727,25 @@ mod replace_with_dom_tests {
             r#"
             var made = document.createElement('span');
             made.setText('MADE');
-            document.getElementById('old').replaceWith(made);
-            "#,
-        );
-        assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["old".to_string(), "keep".to_string()],
-            "a pending-arg replaceWith must leave the tree untouched (ref alive)"
-        );
-        // The canonical idiom works once the element has been materialized:
-        // appendChild materializes it, then replaceWith relocates it.
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            var made = document.createElement('span');
-            made.setText('MADE');
-            document.getElementById('l').appendChild(made);
-            "#,
-        );
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            var l = document.getElementById('l');
-            var made = l.lastChild;
             document.getElementById('old').replaceWith(made);
             "#,
         );
         let kids = kid_ids(&doc, "l");
         assert!(
             !kids.contains(&"old".to_string()),
-            "after materialization the swap must succeed; got {kids:?}"
+            "the ref must be replaced; got {kids:?}"
+        );
+        assert_eq!(
+            kids,
+            vec!["#text".to_string(), "keep".to_string()],
+            "the created <span> (with its text child) lands at the ref's slot"
         );
     }
 
     #[test]
-    fn a_skipped_replace_with_leaves_the_mirror_alone() {
-        // Round-6 S1: the pending guard blocked only the OP while the mirror
-        // was still mutated, so it claimed a replacement that never
-        // happened. Here BOTH arguments are pending, so no tree node is ever
-        // a replacement target and nothing may move at all.
+    fn pending_replace_with_batches_keep_dom_order() {
+        // Both arguments are pending: they materialize and land in argument
+        // order at the ref's slot.
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
             DocumentConfig::default(),
@@ -19752,32 +19754,23 @@ mod replace_with_dom_tests {
         rt.bind_and_run(
             &mut doc,
             r#"
-            document.getElementById('keep').replaceWith(document.createElement('b'));
-            document.getElementById('old').replaceWith(document.createElement('i'));
+            var b = document.createElement('b');
+            var i = document.createElement('i');
+            document.getElementById('old').replaceWith(b, i);
+            document.getElementById('res').setText('survived');
             "#,
         );
-        assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["old".to_string(), "keep".to_string()],
-            "pending-arg calls must leave the tree completely untouched"
-        );
-        // NOTE (honest scope): the mirror half of this fix is NOT pinned by
-        // any passing assertion — `_children` is page-invisible (childNodes
-        // is snapshot-backed), so a mutation that mutates the mirror
-        // unconditionally survives this suite. The TREE half is pinned; the
-        // mirror half is hygiene verified only by the reviewer's master A/B
-        // (master ["old","keep"] vs pre-fix HEAD ["keep"]).
-        rt.bind_and_run(
-            &mut doc,
-            r#"
-            document.getElementById('old').replaceWith(document.getElementById('keep'));
-            "#,
+        let kids = kid_ids(&doc, "l");
+        assert!(
+            !kids.contains(&"old".to_string()),
+            "the ref must be replaced; got {kids:?}"
         );
         assert_eq!(
-            kid_ids(&doc, "l"),
-            vec!["keep".to_string()],
-            "after the skipped calls the real swap must still work"
+            kids.len(),
+            3,
+            "two materialized elements plus #keep; got {kids:?}"
         );
+        assert_eq!(kids.last().map(|s| s.as_str()), Some("keep"));
     }
 
     #[test]
