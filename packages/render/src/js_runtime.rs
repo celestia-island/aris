@@ -2843,9 +2843,32 @@ fn install_event_api(ctx: &mut Context) {
                     .ok()
                     .and_then(|v| v.as_number())
                     .unwrap_or(0.0) as u32;
-                let _ = arr.insert_property(len, pd(handler));
-                let _ = arr
-                    .insert_property(boa_engine::js_string!("length"), pd(JsValue::from(len + 1)));
+                // WHATWG dedup (same contract as the element and document
+                // surfaces, #95/#96): re-adding the SAME callback on the same
+                // target+type is a no-op. Without it the duplicate stacked and
+                // fired twice, and ONE removeEventListener then dropped both
+                // (probe: dupLen=2 fired=2 rmLen=0). This surface stores the
+                // RAW handler (no {callback, passive} wrapper), so identity is
+                // the whole comparison.
+                let mut dup = false;
+                for i in 0..len {
+                    if let Ok(v) = arr.get(i, ctx)
+                        && let Some(vo) = v.as_object()
+                        && handler
+                            .as_object()
+                            .is_some_and(|h| boa_engine::object::JsObject::equals(&vo, &h))
+                    {
+                        dup = true;
+                        break;
+                    }
+                }
+                if !dup {
+                    let _ = arr.insert_property(len, pd(handler));
+                    let _ = arr.insert_property(
+                        boa_engine::js_string!("length"),
+                        pd(JsValue::from(len + 1)),
+                    );
+                }
             }
             Ok(JsValue::undefined())
         });
@@ -21989,5 +22012,99 @@ mod remove_child_membership_tests {
             document.getElementById('out').setText(r);
             "#);
         assert_eq!(out, "ok", "a real child must still be removable");
+    }
+}
+
+#[cfg(test)]
+mod eventtarget_dedup_tests {
+    //! WHATWG dedup on the EventTarget factory surface: re-adding the SAME
+    //! callback on the same target+type is a no-op. Without it the duplicate
+    //! stacked and fired twice, and one removeEventListener then dropped both
+    //! (the element and document surfaces got this contract in #95/#96).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: duplicate add stacks, fires twice, and ONE remove
+    /// drops both.
+    #[test]
+    fn duplicate_add_is_a_noop_and_one_remove_clears_it() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            var h = function () { log.push('H'); };
+            t.addEventListener('ping', h);
+            t.addEventListener('ping', h);
+            var dupLen = t._js_listeners.ping.length;
+            t.dispatchEvent({ type: 'ping' });
+            var fired = log.length;
+            t.removeEventListener('ping', h);
+            document.getElementById('out').setText(
+                'dupLen=' + dupLen + ' fired=' + fired +
+                ' rmLen=' + t._js_listeners.ping.length
+            );
+            "#);
+        assert_eq!(
+            out, "dupLen=1 fired=1 rmLen=0",
+            "a duplicate add must collapse to one registration"
+        );
+    }
+
+    /// Two DIFFERENT handlers must both register and both fire.
+    #[test]
+    fn distinct_handlers_both_register() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ping', function () { log.push('A'); });
+            t.addEventListener('ping', function () { log.push('B'); });
+            t.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText(
+                'len=' + t._js_listeners.ping.length + ' log=' + log.join('')
+            );
+            "#);
+        assert_eq!(
+            out, "len=2 log=AB",
+            "distinct handlers must both register and fire in order"
+        );
+    }
+
+    /// Removing one of two distinct handlers leaves the other live.
+    #[test]
+    fn removing_one_of_two_leaves_the_other() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            var a = function () { log.push('A'); };
+            var b = function () { log.push('B'); };
+            t.addEventListener('ping', a);
+            t.addEventListener('ping', b);
+            t.removeEventListener('ping', a);
+            t.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText(
+                'len=' + t._js_listeners.ping.length + ' log=' + log.join('')
+            );
+            "#);
+        assert_eq!(out, "len=1 log=B", "the surviving handler must still fire");
     }
 }
