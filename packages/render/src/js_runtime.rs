@@ -1017,7 +1017,12 @@ fn apply_op(
                 false
             };
             if !moved && let Some((tag, text, attrs)) = pending.get(pending_id) {
-                create_and_append(doc, *parent_id, tag, text, attrs);
+                // Record the freshly created node so a LATER op in the same
+                // drain (before/after/replaceWith through the same handle)
+                // moves it instead of materializing a second copy
+                // (round-6 S0: the producer half was missing).
+                let new_id = create_and_append(doc, *parent_id, tag, text, attrs);
+                record(*pending_id, new_id);
             }
         }
         Op::AttachCanvas {
@@ -1479,7 +1484,7 @@ fn create_and_append(
     tag: &str,
     text: &str,
     attrs: &[(String, String)],
-) {
+) -> u64 {
     let attrs_vec = attrs
         .iter()
         .map(|(k, v)| blitz_dom::Attribute {
@@ -1502,6 +1507,7 @@ fn create_and_append(
         let text_id = mutator.create_text_node(text);
         mutator.append_children(new_id, &[text_id]);
     }
+    new_id.as_u64()
 }
 
 /// Materialize a PENDING node (a `createElement` handle with no tree node
@@ -19819,6 +19825,42 @@ mod replace_with_dom_tests {
         assert_eq!(
             total, 1,
             "one createElement handle must render exactly one <i>; got {total}"
+        );
+    }
+
+    #[test]
+    fn append_child_first_then_after_still_moves_not_clones() {
+        // Round-6 S0 (the producer half): the FIRST writer is appendChild —
+        // its freshly created node must be recorded so the LATER after()
+        // moves it. Forward-only coverage of the same handle hid this shape
+        // (round-6 R: appendChild,after → i_count=2 on the unfixed code).
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="x">x</li><li id="y">y</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var m = document.createElement('i');
+            document.getElementById('x').appendChild(m);
+            document.getElementById('y').after(m);
+            "#,
+        );
+        // DISTINCT-id census: counts each element once even if duplicated.
+        let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let mut i_total = 0usize;
+        for (_, n) in doc.tree().iter() {
+            if let Some(e) = n.element_data()
+                && e.name.local.to_string() == "i"
+            {
+                i_total += 1;
+            }
+            let _ = &mut seen;
+        }
+        assert_eq!(
+            i_total, 1,
+            "appendChild-first then after must still MOVE; got {i_total} <i>"
         );
     }
 
