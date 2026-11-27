@@ -116,6 +116,11 @@ struct Bridge {
     /// materialized. A second write through the SAME handle must MOVE that
     /// node, not create another copy (round-2 S2: node-leak amplification).
     materialized_pending: HashMap<u32, u64>,
+    /// node_id -> reusable element handle for SIBLING WALKS. Round-2 S1 of
+    /// PR #101: materialising a full handle (87 keys + a populate_props pass
+    /// that seeds a `_children` array of every child) on EVERY sibling hop
+    /// turned a 49-hop walk from 13 ms into 13 s.
+    walk_handle_cache: HashMap<u64, JsObject>,
     query_by_tag: HashMap<String, u64>,
     query_by_class: HashMap<String, u64>,
     query_by_id: HashMap<String, u64>,
@@ -2108,6 +2113,109 @@ fn populate_props(
         let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
         let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
     }
+}
+
+/// Build (or reuse) a handle suitable for SIBLING WALKS.
+///
+/// Deliberately NOT `make_element_handle` + `populate_props`: populate_props
+/// seeds a `_children` array holding one fresh stub per child, so building a
+/// full handle is O(children) — and a walk reads one handle per hop, making
+/// the whole walk O(n^2) (round-2 S1: 49 hops went 13 ms -> 13 s on a
+/// 50-wide list).
+///
+/// This builds the surface a walk actually needs — `_arisId`, `parentNode`,
+/// the sibling accessors, `id` / `tagName` / `nodeType` / `textContent` and
+/// the DOM methods `add_dom_methods` installs — and caches it per node id so
+/// repeated hops reuse one object.
+fn walk_handle(nid: u64, bridge: &Gc<GcRefCell<Bridge>>, ctx: &mut Context) -> Option<JsValue> {
+    if let Some(cached) = bridge.borrow().walk_handle_cache.get(&nid) {
+        return Some(JsValue::from(cached.clone()));
+    }
+    let snap = bridge.borrow().node_props.get(&nid).cloned();
+    let handle = make_element_handle(ctx, Gc::clone(bridge), nid, None).ok()?;
+    // The sibling accessors live in add_dom_methods (also mirror-only
+    // appendChild/insertBefore, which the walk does not use).
+    add_dom_methods(&handle, ctx);
+    // Seed an EMPTY `_children` so the accessor chain has an array to walk;
+    // walk handles deliberately skip the per-child fan-out that made the walk
+    // O(n^2) — see this function's doc comment.
+    {
+        let pd = |v: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(v)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        if handle
+            .get(boa_engine::js_string!("_children"), ctx)
+            .map(|v| !v.is_object())
+            .unwrap_or(true)
+        {
+            let _ = handle.insert_property(
+                boa_engine::js_string!("_children"),
+                pd(JsValue::from(new_array(ctx))),
+            );
+        }
+    }
+    // Fill ONLY the cheap scalar properties (no child fan-out).
+    if let Some(snap) = &snap {
+        let pd = |v: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(v)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let _ = handle.insert_property(
+            boa_engine::js_string!("id"),
+            pd(JsValue::from(boa_engine::js_string!(snap.id.clone()))),
+        );
+        let _ = handle.insert_property(
+            boa_engine::js_string!("tagName"),
+            pd(JsValue::from(boa_engine::js_string!(
+                snap.tag_name.to_uppercase()
+            ))),
+        );
+        let _ = handle.insert_property(
+            boa_engine::js_string!("nodeType"),
+            pd(JsValue::from(snap.node_type)),
+        );
+        if snap.parent_id > 0 {
+            // Resolve the parent through the SAME walk cache so
+            // `nextSibling.parentNode.id` is a real value (a bare {_arisId}
+            // stub has no `id` — the defect class #99 fixed on the main path).
+            let parent = match walk_handle(snap.parent_id, bridge, ctx) {
+                Some(p) => p,
+                None => {
+                    let stub = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                    let _ = stub.insert_property(
+                        boa_engine::js_string!("_arisId"),
+                        pd(JsValue::from(snap.parent_id)),
+                    );
+                    JsValue::from(stub)
+                }
+            };
+            let _ =
+                handle.insert_property(boa_engine::js_string!("parentNode"), pd(parent.clone()));
+            let _ = handle.insert_property(
+                boa_engine::js_string!("parentElement"),
+                pd(JsValue::from(parent)),
+            );
+        } else {
+            let _ =
+                handle.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
+            let _ = handle
+                .insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
+        }
+    }
+    bridge
+        .borrow_mut()
+        .walk_handle_cache
+        .insert(nid, handle.clone());
+    Some(JsValue::from(handle))
 }
 
 fn read_handle_id(v: &JsValue) -> Option<u64> {
@@ -15815,68 +15923,100 @@ fn make_element_handle(
     );
 
     // previousSibling/nextSibling as accessors: find this in parent's _children.
-    let ps_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
-        if let (Some(obj), Some(parent)) = (
-            this.as_object(),
-            this.as_object()
-                .and_then(|o| o.get(boa_engine::js_string!("parentNode"), ctx).ok())
-                .and_then(|v| v.as_object()),
-        ) {
-            if let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) {
-                if let Some(ca) = cv.as_object() {
-                    let len = ca
-                        .get(boa_engine::js_string!("length"), ctx)
-                        .ok()
-                        .and_then(|v| v.as_number())
-                        .unwrap_or(0.0) as u32;
-                    for i in 0..len {
-                        if let Ok(child) = ca.get(i as u32, ctx) {
-                            if let Some(co) = child.as_object() {
-                                if boa_engine::object::JsObject::equals(&co, &obj) {
-                                    if i > 0 {
-                                        return Ok(ca.get(i - 1, ctx).unwrap_or(JsValue::null()));
-                                    }
-                                    return Ok(JsValue::null());
-                                }
-                            }
-                        }
-                    }
-                }
+    // SIBLING LOOKUPS (L940, R5 of #99): the mirror is seeded with ANONYMOUS
+    // entries carrying only `_arisId`, so identity-only matching never finds
+    // `this` and both accessors returned null for every parsed element. Match
+    // identity first, then `_arisId` (same fallback as remove_from_children),
+    // and resolve the result through make_element_handle so the page gets a
+    // REAL handle rather than the anonymous mirror stub.
+    let ps_get = NativeFunction::from_copy_closure_with_captures(
+        |this, _args, bridge, ctx| {
+            let Some(obj) = this.as_object() else {
+                return Ok(JsValue::null());
+            };
+            let parent = obj
+                .get(boa_engine::js_string!("parentNode"), ctx)
+                .ok()
+                .and_then(|v| v.as_object());
+            let Some(parent) = parent else {
+                return Ok(JsValue::null());
+            };
+            let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) else {
+                return Ok(JsValue::null());
+            };
+            let Some(ca) = cv.as_object() else {
+                return Ok(JsValue::null());
+            };
+            let len = ca
+                .get(boa_engine::js_string!("length"), ctx)
+                .ok()
+                .and_then(|v| v.as_number())
+                .unwrap_or(0.0) as u32;
+            // Locate `this` by NODE ID in the tree snapshot's child list —
+            // O(children) integer compares instead of materialising the
+            // parent's whole `_children` mirror (round-2 S1: the mirror route
+            // was O(n^2) across a walk).
+            let Some(self_id) = read_handle_id(this) else {
+                return Ok(JsValue::null());
+            };
+            let parent_id = read_handle_id(&JsValue::from(parent.clone()));
+            let siblings: Vec<u64> = parent_id
+                .and_then(|pid| bridge.borrow().node_props.get(&pid).cloned())
+                .map(|snap| snap.child_ids.clone())
+                .unwrap_or_default();
+            let (idx, _) = match siblings.iter().enumerate().find(|&(_, c)| *c == self_id) {
+                Some(found) => found,
+                None => return Ok(JsValue::null()),
+            };
+            if idx == 0 {
+                return Ok(JsValue::null());
             }
-        }
-        Ok(JsValue::null())
-    });
-    let ns_get = NativeFunction::from_copy_closure(|this, _args, ctx| {
-        if let (Some(obj), Some(parent)) = (
-            this.as_object(),
-            this.as_object()
-                .and_then(|o| o.get(boa_engine::js_string!("parentNode"), ctx).ok())
-                .and_then(|v| v.as_object()),
-        ) {
-            if let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) {
-                if let Some(ca) = cv.as_object() {
-                    let len = ca
-                        .get(boa_engine::js_string!("length"), ctx)
-                        .ok()
-                        .and_then(|v| v.as_number())
-                        .unwrap_or(0.0) as u32;
-                    for i in 0..len {
-                        if let Ok(child) = ca.get(i as u32, ctx) {
-                            if let Some(co) = child.as_object() {
-                                if boa_engine::object::JsObject::equals(&co, &obj) {
-                                    if i + 1 < len {
-                                        return Ok(ca.get(i + 1, ctx).unwrap_or(JsValue::null()));
-                                    }
-                                    return Ok(JsValue::null());
-                                }
-                            }
-                        }
-                    }
-                }
+            Ok(walk_handle(siblings[idx - 1], bridge, ctx).unwrap_or(JsValue::null()))
+        },
+        Gc::clone(&bridge),
+    );
+    let ns_get = NativeFunction::from_copy_closure_with_captures(
+        |this, _args, bridge, ctx| {
+            let Some(obj) = this.as_object() else {
+                return Ok(JsValue::null());
+            };
+            let parent = obj
+                .get(boa_engine::js_string!("parentNode"), ctx)
+                .ok()
+                .and_then(|v| v.as_object());
+            let Some(parent) = parent else {
+                return Ok(JsValue::null());
+            };
+            let Ok(cv) = parent.get(boa_engine::js_string!("_children"), ctx) else {
+                return Ok(JsValue::null());
+            };
+            let Some(ca) = cv.as_object() else {
+                return Ok(JsValue::null());
+            };
+            let len = ca
+                .get(boa_engine::js_string!("length"), ctx)
+                .ok()
+                .and_then(|v| v.as_number())
+                .unwrap_or(0.0) as u32;
+            let Some(self_id) = read_handle_id(this) else {
+                return Ok(JsValue::null());
+            };
+            let parent_id = read_handle_id(&JsValue::from(parent.clone()));
+            let siblings: Vec<u64> = parent_id
+                .and_then(|pid| bridge.borrow().node_props.get(&pid).cloned())
+                .map(|snap| snap.child_ids.clone())
+                .unwrap_or_default();
+            let (idx, _) = match siblings.iter().enumerate().find(|&(_, c)| *c == self_id) {
+                Some(found) => found,
+                None => return Ok(JsValue::null()),
+            };
+            if idx + 1 >= siblings.len() {
+                return Ok(JsValue::null());
             }
-        }
-        Ok(JsValue::null())
-    });
+            Ok(walk_handle(siblings[idx + 1], bridge, ctx).unwrap_or(JsValue::null()))
+        },
+        Gc::clone(&bridge),
+    );
     let ps_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ps_get).build();
     let ns_fn = boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ns_get).build();
     for (name, getter) in &[
@@ -21638,6 +21778,111 @@ mod replace_child_op_tests {
             kids(&doc, "host"),
             ["V3"],
             "both swaps must land; the tree ends with the last replacement"
+        );
+    }
+}
+
+#[cfg(test)]
+mod next_sibling_tests {
+    //! L940 (R5 of #99): `nextSibling`/`previousSibling` walked the parent's
+    //! `_children` mirror matching by OBJECT IDENTITY, but the mirror is
+    //! seeded with anonymous `{_arisId}` stubs — so both accessors returned
+    //! null for every parsed element. They now fall back to `_arisId` and
+    //! resolve the result into a real element handle.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn middle_siblings_resolve_both_ways() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">A</li><li id="b">B</li><li id="c">C</li></ul><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var a = document.getElementById('a');
+            var b = document.getElementById('b');
+            var c = document.getElementById('c');
+            document.getElementById('out').setText([
+                'a.next=' + (a.nextSibling && a.nextSibling.id),
+                'b.prev=' + (b.previousSibling && b.previousSibling.id),
+                'b.next=' + (b.nextSibling && b.nextSibling.id),
+                'c.prev=' + (c.previousSibling && c.previousSibling.id),
+            ].join(' '));
+            "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "a.next=b b.prev=a b.next=c c.prev=b",
+            "both accessors must resolve the real neighbours"
+        );
+    }
+
+    #[test]
+    fn first_and_last_have_a_null_edge() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">A</li><li id="b">B</li></ul><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var a = document.getElementById('a');
+            var b = document.getElementById('b');
+            document.getElementById('out').setText(
+                'firstPrev=' + (a.previousSibling === null) +
+                ' lastNext=' + (b.nextSibling === null)
+            );
+            "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "firstPrev=true lastNext=true",
+            "the edges must be null, not undefined or a stub"
+        );
+    }
+
+    /// The returned sibling must be a REAL handle (DOM methods + id), not the
+    /// anonymous mirror stub — the same defect class as the `parentNode` bare
+    /// stub fixed in #99.
+    #[test]
+    fn returned_sibling_is_a_real_handle() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">A</li><li id="b">B</li></ul><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var a = document.getElementById('a');
+            var ns = a.nextSibling;
+            document.getElementById('out').setText(
+                'id=' + ns.id +
+                ' tag=' + ns.tagName +
+                ' hasMethods=' + (typeof ns.removeChild === 'function') +
+                ' parentIsL=' + (ns.parentNode !== null && ns.parentNode.id === 'l')
+            );
+            "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "id=b tag=LI hasMethods=true parentIsL=true",
+            "the sibling must be a full handle, not an anonymous stub"
         );
     }
 }
