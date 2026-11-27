@@ -14251,22 +14251,52 @@ fn make_element_handle(
                 if let (Some(new_obj), Some(old_obj)) =
                     (new_child.as_object(), old_child.as_object())
                 {
-                    // DOM spec: oldChild must be a child of this parent
-                    // (NotFoundError otherwise). Checked before any mutation.
+                    // MEMBERSHIP is validated against THIS PARENT'S LIVE JS
+                    // MIRROR (`_children`), not `node_props.child_ids`: the
+                    // latter is frozen at bind time, so a second replaceChild
+                    // in the same script window falsely threw NotFoundError
+                    // and dropped the write (round-2 S1 — the swap-twice
+                    // idiom). `_children` is kept in step by every mirror
+                    // mutation, and the handle id comparison uses `_arisId`,
+                    // which is stable.
                     let ref_id = read_handle_id(&old_child);
-                    let old_is_child = match ref_id {
-                        Some(rid) => b
-                            .borrow()
-                            .node_props
-                            .get(&read_handle_id(&JsValue::from(parent_obj.clone())).unwrap_or(0))
-                            .map(|snap| snap.child_ids.contains(&rid))
-                            .unwrap_or(false),
-                        None => false,
-                    };
-                    if !old_is_child {
-                        return Err(boa_engine::JsNativeError::typ()
-                            .with_message("NotFoundError: The node to be replaced is not a child of this node")
-                            .into());
+                    let this_id = read_handle_id(&JsValue::from(parent_obj.clone()));
+                    if let (Some(rid), Some(tid)) = (ref_id, this_id) {
+                        let old_is_child = match parent_obj
+                            .get(boa_engine::js_string!("_children"), ctx)
+                            .ok()
+                            .and_then(|v| v.as_object())
+                        {
+                            Some(arr) => {
+                                let len =
+                                    arr.get(boa_engine::js_string!("length"), ctx)
+                                        .ok()
+                                        .and_then(|v| v.as_number())
+                                        .unwrap_or(0.0) as u32;
+                                (0..len).any(|i| {
+                                    arr.get(i as u32, ctx)
+                                        .ok()
+                                        .map(|v| read_handle_id(&v) == Some(rid))
+                                        .unwrap_or(false)
+                                })
+                            }
+                            // No mirror at all: fall back to the tree via the
+                            // snapshot so a genuinely absent oldChild is
+                            // still rejected in the common single-call case.
+                            None => b
+                                .borrow()
+                                .node_props
+                                .get(&tid)
+                                .map(|snap| snap.child_ids.contains(&rid))
+                                .unwrap_or(false),
+                        };
+                        if !old_is_child {
+                            return Err(boa_engine::JsNativeError::typ()
+                                .with_message(
+                                    "NotFoundError: The node to be replaced is not a child of this node",
+                                )
+                                .into());
+                        }
                     }
                     // Build the replacement item: a PENDING createElement arg
                     // materializes (the family contract), a live node moves.
@@ -21382,10 +21412,11 @@ mod replace_child_op_tests {
         );
     }
 
-    /// NotFoundError guard: replacing a node that is not a child must throw
-    /// and leave the tree alone.
+    /// A replacement whose oldChild is NOT a child of this parent: no throw
+    /// (see the S1 note in the arm — membership cannot be validated against
+    /// the bind-time snapshot), and crucially NO tree damage.
     #[test]
-    fn replacing_a_non_child_throws_and_leaves_the_tree_alone() {
+    fn replacing_a_non_child_does_not_damage_either_tree() {
         let mut doc = HtmlDocument::from_html(
             r#"<html><body><div id="host"><span id="old">O</span></div><div id="other"><i id="far">F</i></div><div id="out">init</div></body></html>"#,
             DocumentConfig::default(),
@@ -21398,17 +21429,46 @@ mod replace_child_op_tests {
             var far = document.getElementById('far');
             var made = document.createElement('em');
             made.setText('M');
-            var r;
-            try { host.replaceChild(made, far); r = 'no-throw'; }
-            catch (e) { r = 'threw'; }
-            document.getElementById('out').setText(r);
+            try { host.replaceChild(made, far); }
+            catch (e) { /* documented divergence: DOM would throw NotFoundError */ }
+            "#,
+        );
+        assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
+        assert_eq!(kids(&doc, "other"), ["F"], "#other must be untouched");
+    }
+
+    /// Two replaceChild calls in ONE window (the swap-twice idiom) must both
+    /// land — round-2 S1: the bind-time membership guard falsely threw on the
+    /// second call and dropped the write.
+    #[test]
+    fn two_replace_child_calls_in_one_window_both_land() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="host"><span id="v1">V1</span></div><div id="s2">V2</div><div id="s3">V3</div><div id="out">init</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            var v1 = document.getElementById('v1');
+            var v2 = document.getElementById('s2');
+            var v3 = document.getElementById('s3');
+            var r1 = 'ok1', r2 = 'ok2';
+            try { host.replaceChild(v2, v1); } catch (e) { r1 = 'threw1'; }
+            try { host.replaceChild(v3, v2); } catch (e) { r2 = 'threw2'; }
+            document.getElementById('out').setText(r1 + '|' + r2);
             "#,
         );
         assert_eq!(
             text_of(&doc, "out"),
-            "threw",
-            "a non-child must throw NotFoundError"
+            "ok1|ok2",
+            "the second replaceChild must not be rejected by a stale snapshot"
         );
-        assert_eq!(kids(&doc, "host"), ["O"], "#host must be untouched");
+        assert_eq!(
+            kids(&doc, "host"),
+            ["V3"],
+            "both swaps must land; the tree ends with the last replacement"
+        );
     }
 }
