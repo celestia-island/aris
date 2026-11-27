@@ -14127,16 +14127,17 @@ fn make_element_handle(
                     // remove_from_children, round-5 note): the mirror is
                     // seeded with anonymous entries, so identity alone never
                     // matches a caller's handle.
-                    let child_rid = read_handle_id(&child);
+                    // Identity only, deliberately (round-6 S2): an
+                    // `_arisId` fallback here is dead weight — with a stale
+                    // mirror entry the downstream bridge `parent_id` check
+                    // rejects anyway, and with no entry the fallback cannot
+                    // add one. Mutation showed zero behavioural difference,
+                    // so it is not shipped as an unpinned "fix".
                     (0..len).any(|i| {
                         arr.get(i as u32, ctx)
                             .ok()
-                            .map(|v| {
-                                v.as_object()
-                                    .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
-                                    .unwrap_or(false)
-                                    || child_rid.is_some_and(|rid| read_handle_id(&v) == Some(rid))
-                            })
+                            .and_then(|v| v.as_object())
+                            .map(|o| boa_engine::object::JsObject::equals(&o, &child_obj))
                             .unwrap_or(false)
                     })
                 })
