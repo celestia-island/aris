@@ -206,6 +206,17 @@ enum Op {
         parent_id: u64,
         child_id: u64,
     },
+    /// `parent.insertBefore(child, ref)` on real tree nodes. Same family as
+    /// RemoveChild/AppendChild: without an op the parsed tree kept the old
+    /// shape and a remove+insert "move" DESTROYED the node instead of
+    /// relocating it (L940, PR #86 R2).
+    InsertBefore {
+        parent_id: u64,
+        /// A PENDING id for a freshly created node, or the existing node's id.
+        child_id: u64,
+        /// Id of the node to insert before; 0 = append at the end.
+        anchor_id: u64,
+    },
 }
 
 impl JsRuntime {
@@ -909,6 +920,9 @@ fn apply_op(
         // still resolve; the parent is not indexed by remove_and_drop_node).
         | Op::RemoveChild {
             child_id: node_id, ..
+        }
+        | Op::InsertBefore {
+            parent_id: node_id, ..
         } => *node_id,
     };
     if !node_is_live(doc, target) {
@@ -938,21 +952,31 @@ fn apply_op(
             child_id,
         } => {
             // The child must leave the TREE, not just the JS mirror.
-            // Guard the CHILD, not the parent: `remove_and_drop_node`
-            // indexes `doc.nodes[id]` and PANICS on a freed key, so a second
-            // removal of the same node would abort the process (#84's lesson
-            // applied to this op — master's no-op was safe only because it
-            // pushed nothing).
+            // DETACH, not drop: the DOM lets a removed node be re-inserted
+            // later (the remove→insert "move" idiom). `remove_and_drop_node`
+            // would FREE the slab slot, so the node could never come back and
+            // a page-held handle would go dangling. `remove_node` only
+            // detaches; on an already-detached node `parent.take()` yields
+            // None and the call is a safe no-op.
             let child = blitz_traits::NodeId::from_u64(*child_id);
-            if !node_is_live(doc, *child_id) {
-                return;
-            }
-            doc.mutate().remove_and_drop_node(child);
+            doc.mutate().remove_node(child);
+        }
+        Op::InsertBefore {
+            parent_id: _,
+            child_id,
+            anchor_id,
+        } => {
+            let anchor = blitz_traits::NodeId::from_u64(*anchor_id);
+            let mut mutator = doc.mutate();
+            // The first liveness check already returned for a freed child,
+            // so here the child is live: relocate it before the anchor.
+            let nid = blitz_traits::NodeId::from_u64(*child_id);
+            mutator.insert_nodes_before(anchor, &[nid]);
         }
     }
 }
 
-/// Create a real `<canvas>` element under `parent_id` and home the already
+/// Create a real `<canvas>` element under `parent_id` and home the already/// Create a real `<canvas>` element under `parent_id` and home the already
 /// allocated buffer `alloc_id` to the new node id, so the compositor finds
 /// it (createElement handles carry the allocation id, not a node id).
 fn attach_canvas_node(doc: &mut BaseDocument, parent_id: u64, alloc_id: u64) {
@@ -13546,14 +13570,30 @@ fn make_element_handle(
     init.function(remove_child, boa_engine::js_string!("removeChild"), 1);
 
     // insertBefore — inserts child before reference node in _children.
-    let insert_before = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let child = args.first().cloned().unwrap_or(JsValue::null());
-        let ref_node = args.get(1).cloned().unwrap_or(JsValue::null());
-        if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
-            insert_into_children(&parent_obj, &child_obj, ref_node.as_object(), ctx);
-        }
-        Ok(child)
-    });
+    let insert_before = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let child = args.first().cloned().unwrap_or(JsValue::null());
+            let ref_node = args.get(1).cloned().unwrap_or(JsValue::null());
+            if let (Some(parent_obj), Some(child_obj)) = (this.as_object(), child.as_object()) {
+                insert_into_children(&parent_obj, &child_obj, ref_node.as_object(), ctx);
+                // Push the tree-level insert: mirror-only left the parsed tree
+                // unchanged, so a remove→insert "move" destroyed the node instead
+                // of relocating it (L940, PR #86 R2). Anchor 0 = append at end
+                // (the apply arm then behaves like AppendChild).
+                if let Some(parent_id) = read_handle_id(&JsValue::from(parent_obj.clone())) {
+                    let child_id = read_handle_id(&child).unwrap_or(0);
+                    let anchor_id = read_handle_id(&ref_node).unwrap_or(0);
+                    b.borrow_mut().ops.push(Op::InsertBefore {
+                        parent_id,
+                        child_id,
+                        anchor_id,
+                    });
+                }
+            }
+            Ok(child)
+        },
+        Gc::clone(&bridge),
+    );
     init.function(insert_before, boa_engine::js_string!("insertBefore"), 2);
 
     // cloneNode(deep) — returns a copy with all properties cloned from `this`.
@@ -18217,10 +18257,109 @@ mod remove_child_dom_tests {
         // A later run must not see the removed child.
         rt.bind_and_run(&mut doc, r#"var gone = document.getElementById('b');"#);
         assert_eq!(child_count(&doc, "list"), 1, "the tree must hold one child");
-        let still_there = doc
+        // removeChild DETACHES (remove_node), it does not drop: `b` stays in
+        // the slab without a parent — exactly what makes the re-insert/move
+        // idiom possible. Assert the detachment, not slab disappearance.
+        let b_detached = doc
             .tree()
             .iter()
-            .any(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"));
-        assert!(!still_there, "the removed node must be gone from the tree");
+            .filter(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("b"))
+            .all(|(_, n)| n.parent.is_none());
+        assert!(
+            b_detached,
+            "the removed node must be detached (no parent), not gone"
+        );
+    }
+}
+
+#[cfg(test)]
+mod insert_before_dom_tests {
+    //! L940 (PR #86 R2): `insertBefore` was mirror-only, so a remove+insert
+    //! "move" DESTROYED the node from the tree instead of relocating it.
+    //! With RemoveChild landing (#86) and InsertBefore landing here, the move
+    //! finally works end to end.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+    use blitz_traits::NodeId;
+
+    fn kid_ids(doc: &HtmlDocument, id: &str) -> Vec<String> {
+        doc.get_node(NodeId::from_u64(
+            doc.tree()
+                .iter()
+                .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some(id))
+                .map(|(i, _)| i.as_u64())
+                .expect("missing node"),
+        ))
+        .map(|n| {
+            n.children
+                .iter()
+                .filter_map(|&c| doc.get_node(c))
+                .map(|cn| {
+                    cn.attr(blitz_dom::local_name!("id"))
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "#text".to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    #[test]
+    fn insert_before_relocates_an_existing_child() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="list"><li id="a">a</li><li id="b">b</li><li id="anchor">c</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var list = document.getElementById('list');
+            var b = document.getElementById('b');
+            var anchor = document.getElementById('anchor');
+            list.insertBefore(b, anchor);
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "list"),
+            vec!["a".to_string(), "b".to_string(), "anchor".to_string()],
+            "b must be relocated before the anchor, not duplicated or destroyed"
+        );
+    }
+
+    #[test]
+    fn remove_then_insert_moves_a_node_without_destroying_it() {
+        // The exact idiom that used to destroy the node: removeChild freed
+        // the tree slot while insertBefore never touched the tree.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <ul id="from"><li id="mv">moving</li></ul>
+            <ul id="to"><li id="keep">keep</li></ul>
+            <div id="res"></div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var mv = document.getElementById('mv');
+            document.getElementById('from').removeChild(mv);
+            document.getElementById('to').insertBefore(mv, document.getElementById('keep'));
+            var fromAfter = document.getElementById('from').children.length;
+            var toAfter = document.getElementById('to').children.length;
+            document.getElementById('res').setText(fromAfter + '|' + toAfter);
+            "#,
+        );
+        let from_kids = kid_ids(&doc, "from");
+        let to_kids = kid_ids(&doc, "to");
+        assert!(from_kids.is_empty(), "the source must lose the moved node");
+        assert_eq!(
+            to_kids,
+            vec!["mv".to_string(), "keep".to_string()],
+            "the node must be relocated before the anchor"
+        );
     }
 }
