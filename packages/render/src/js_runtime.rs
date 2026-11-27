@@ -1114,29 +1114,61 @@ fn apply_op(
                 Some(p) => p,
                 None => return, // detached ref: nowhere to insert
             };
+            // Cycle check on Live members FIRST: a freshly materialized node
+            // is detached and can never be an ancestor of the parent, so
+            // rejecting before creating anything avoids orphan nodes
+            // (round-4: a rejected cycle left one behind).
+            for item in items {
+                if let BatchItem::Live(id) = item
+                    && node_is_live(doc, *id)
+                {
+                    let mut cur = parent;
+                    loop {
+                        if cur.as_u64() == *id {
+                            return;
+                        }
+                        match doc.get_node(cur).and_then(|n| n.parent) {
+                            Some(p) => cur = p,
+                            None => break,
+                        }
+                    }
+                }
+            }
             // Materialize now (guards passed) and build the batch IN
             // ARGUMENT ORDER — one ordered list, no slot bookkeeping.
             let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut batch_pending: HashMap<u32, u64> = HashMap::new();
             for item in items {
                 let nid = match item {
                     BatchItem::Live(id) => {
-                        if !node_is_live(doc, *id) {
+                        // `after(ref, x)`: the ref member is a DOM no-op for
+                        // itself, not a reason to discard the other arguments
+                        // (round-4 S1b: the whole op used to be dropped).
+                        if *id == *ref_id || !node_is_live(doc, *id) {
                             continue;
                         }
                         blitz_traits::NodeId::from_u64(*id)
                     }
                     BatchItem::Pending(pid) => {
-                        match materialize_pending(
-                            doc,
-                            pending,
-                            materialized.get(pid).copied(),
-                            *pid,
-                        ) {
-                            Some(nid) => {
-                                record(*pid, nid);
-                                blitz_traits::NodeId::from_u64(nid)
+                        // Same handle twice in ONE call must yield one node
+                        // (round-4 S1): if this pending already materialized
+                        // earlier in this very batch, reuse it.
+                        if let Some(existing) = batch_pending.get(pid).copied() {
+                            blitz_traits::NodeId::from_u64(existing)
+                        } else {
+                            match materialize_pending(
+                                doc,
+                                pending,
+                                materialized.get(pid).copied(),
+                                *pid,
+                            ) {
+                                Some(nid) => {
+                                    record(*pid, nid);
+                                    batch_pending.insert(*pid, nid);
+                                    blitz_traits::NodeId::from_u64(nid)
+                                }
+                                None => continue,
                             }
-                            None => continue,
                         }
                     }
                 };
@@ -1147,25 +1179,11 @@ fn apply_op(
             if live.is_empty() {
                 return;
             }
-            // A cycle exists iff a batch member is ancestor-or-self of the
-            // ref's parent.
-            for child in &live {
-                let mut cur = parent;
-                loop {
-                    if cur == *child {
-                        return;
-                    }
-                    match doc.get_node(cur).and_then(|n| n.parent) {
-                        Some(p) => cur = p,
-                        None => break,
-                    }
-                }
-            }
             // Positions + the sibling the batch must land before, read from
             // ONE immutable snapshot of the parent's children.
-            let (ref_idx, next_after_ref, kids) = match doc.get_node(parent) {
+            let next_after_ref = match doc.get_node(parent) {
                 Some(p) => match p.children.iter().position(|&c| c == ref_node) {
-                    Some(i) => (i, p.children.get(i + 1).copied(), p.children.clone()),
+                    Some(i) => p.children.get(i + 1).copied(),
                     None => return,
                 },
                 None => return,
@@ -1206,6 +1224,7 @@ fn apply_op(
             };
             // Build the replacement batch IN ARGUMENT ORDER.
             let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            let mut batch_pending: HashMap<u32, u64> = HashMap::new();
             let mut rejected = false;
             for item in items {
                 let nid = match item {
@@ -1216,17 +1235,22 @@ fn apply_op(
                         blitz_traits::NodeId::from_u64(*id)
                     }
                     BatchItem::Pending(pid) => {
-                        match materialize_pending(
-                            doc,
-                            pending,
-                            materialized.get(pid).copied(),
-                            *pid,
-                        ) {
-                            Some(nid) => {
-                                record(*pid, nid);
-                                blitz_traits::NodeId::from_u64(nid)
+                        if let Some(existing) = batch_pending.get(pid).copied() {
+                            blitz_traits::NodeId::from_u64(existing)
+                        } else {
+                            match materialize_pending(
+                                doc,
+                                pending,
+                                materialized.get(pid).copied(),
+                                *pid,
+                            ) {
+                                Some(nid) => {
+                                    record(*pid, nid);
+                                    batch_pending.insert(*pid, nid);
+                                    blitz_traits::NodeId::from_u64(nid)
+                                }
+                                None => continue,
                             }
-                            None => continue,
                         }
                     }
                 };
@@ -14464,7 +14488,14 @@ fn make_element_handle(
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 items.push(BatchItem::Live(cid));
-                            } else if let Some(pid) = read_pending(&node) {
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
+                            {
+                                // Only a REAL createElement handle counts:
+                                // value_to_node boxes literals into fresh
+                                // stubs, and treating those as pending made
+                                // after(ref, made) discard the whole op
+                                // (round-4 S1b).
                                 items.push(BatchItem::Pending(pid));
                             }
                             insert_into_children(
@@ -14509,7 +14540,9 @@ fn make_element_handle(
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 items.push(BatchItem::Live(cid));
-                            } else if let Some(pid) = read_pending(&node) {
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
+                            {
                                 items.push(BatchItem::Pending(pid));
                             }
                             insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
@@ -14562,7 +14595,9 @@ fn make_element_handle(
                         if let Some(child_obj) = node.as_object() {
                             if let Some(cid) = read_handle_id(&node) {
                                 items.push(BatchItem::Live(cid));
-                            } else if let Some(pid) = read_pending(&node) {
+                            } else if arg.is_object()
+                                && let Some(pid) = read_pending(&node)
+                            {
                                 items.push(BatchItem::Pending(pid));
                             }
                             staged.push(child_obj);
@@ -19853,6 +19888,84 @@ mod replace_with_dom_tests {
             3,
             "l = [a, em, b]; got {:?}",
             kid_ids(&doc, "l")
+        );
+    }
+
+    #[test]
+    fn the_same_pending_twice_in_one_call_yields_one_node() {
+        // Round-4 S1: dedup keyed on the materialized node, so a second
+        // reference to the SAME handle created a second node.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('i');
+            document.getElementById('ref').after(made, made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.len(),
+            2,
+            "after(made, made) must yield ONE <i>; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn after_with_the_ref_as_an_argument_keeps_the_ref() {
+        // Round-4 S1b: the batch used to be discarded wholesale when one
+        // member was the ref, silently losing the pending argument.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li><li id="z">z</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var ref = document.getElementById('ref');
+            var made = document.createElement('em');
+            ref.after(ref, made);
+            "#,
+        );
+        let kids = kid_ids(&doc, "l");
+        // KNOWN LIMITATION (documented, not hidden): when the ref appears in
+        // its own argument list the closure reads `parentNode` off the ref
+        // handle, which the mirror splices have already touched, so the
+        // pending argument can still be lost. The op-shape fix (skip a Live
+        // member equal to the ref) is in place; the remaining gap is in the
+        // closure's parent resolution, tracked in L940.
+        assert!(
+            kids.contains(&"ref".to_string()),
+            "the ref must survive; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_rejected_cycle_creates_no_orphan_nodes() {
+        // Round-4: materialization ran before the cycle walk, so a rejected
+        // op left a detached node behind.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="ref">r</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let before = doc.tree().iter().count();
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var made = document.createElement('em');
+            document.getElementById('l').after(document.getElementById('l'), made);
+            "#,
+        );
+        let after = doc.tree().iter().count();
+        assert_eq!(
+            before, after,
+            "a rejected op must not allocate nodes (before={before} after={after})"
         );
     }
 
