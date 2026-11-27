@@ -2012,13 +2012,16 @@ fn populate_props(
         // method surface (L940: recorded across #85 R3 / #90 R9 / #93 R9 — it
         // also blocked the before/after materialization wiring).
         //
-        // RECURSION BUDGET (round-2 measurement): the walk does NOT terminate
-        // "at the document" — body/html STOP the descent (they resolve to the
-        // document's own handles), and above <html> the chain ends in an empty
-        // object, not null (pre-existing populate_props behaviour). Measured
-        // on an 8-level tree: 11 hops total, no stack growth, repeated walks
-        // identical. Raising this to a proper document/per-node identity model
-        // is a separate change.
+        // RECURSION BUDGET (round-2/round-3 measurement): the walk does NOT
+        // terminate "at the document" — body/html STOP the descent (they
+        // resolve to the document's own handles), and above <html> the chain
+        // ends in an UNPOPULATED handle (34 own keys, but tagName / nodeName /
+        // outerHTML all "", parentNode null), not null and not an empty
+        // literal (pre-existing populate_props behaviour). Measured on an
+        // 8-level tree: 11 hops total, no stack growth, repeated walks
+        // identical; a 1-level tree budgets 4 (leaf, body, html, above-html).
+        // Raising this to a proper document/per-node identity model is a
+        // separate change.
         // REPOPULATE the parent handle's own props (id / tagName /
         // textContent) from the bridge snapshot. make_element_handle already
         // ran populate_props once on the fresh handle; that pass leaves
