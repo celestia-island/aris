@@ -1062,11 +1062,19 @@ fn apply_op(
             if child_ids.is_empty() || child_ids.contains(ref_id) {
                 return;
             }
-            let live: Vec<blitz_traits::NodeId> = child_ids
-                .iter()
-                .filter(|id| node_is_live(doc, **id))
-                .map(|id| blitz_traits::NodeId::from_u64(*id))
-                .collect();
+            // Dedup preserving order: two handles can resolve to the SAME
+            // NodeId (`a.after(x, x2)`), and inserting a node twice into one
+            // parent duplicates it (round-8 S1).
+            let mut live: Vec<blitz_traits::NodeId> = Vec::new();
+            for id in child_ids {
+                if *id == *ref_id {
+                    return; // batch containing the ref: reject wholesale
+                }
+                let nid = blitz_traits::NodeId::from_u64(*id);
+                if node_is_live(doc, *id) && !live.contains(&nid) {
+                    live.push(nid);
+                }
+            }
             if live.is_empty() {
                 return;
             }
@@ -1135,7 +1143,20 @@ fn apply_op(
             let mut mutator = doc.mutate();
             if *after {
                 match next_after_ref {
-                    Some(anchor) => mutator.insert_nodes_before(anchor, &live),
+                    Some(anchor) => {
+                        // The anchor may itself be a batch member
+                        // (`a.after(x, y)` with x already next to a).
+                        // add_children_to_parent detaches batch members
+                        // BEFORE computing the splice index, so the anchor
+                        // must not be among the inserted ids — insert the
+                        // rest before it instead (round-7 S0).
+                        let to_insert: Vec<blitz_traits::NodeId> =
+                            live.iter().copied().filter(|id| *id != anchor).collect();
+                        if to_insert.is_empty() {
+                            return;
+                        }
+                        mutator.insert_nodes_before(anchor, &to_insert);
+                    }
                     None => mutator.append_children(parent, &live),
                 }
             } else {
@@ -19284,6 +19305,61 @@ mod before_after_dom_tests {
         assert!(
             pos_x > 0,
             "the real nodes must land AFTER the ref, not before it; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn after_batch_containing_the_anchor_stays_safe() {
+        // Round-7 S0: `a.after(x, y)` where x IS a's next sibling — the
+        // anchor is a batch member, blitz detaches it first, and
+        // index_of_child(severed anchor) unwrapped None. DOM semantics:
+        // x keeps its slot, y lands right after it → [a, x, y].
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="a">a</li><li id="x">x</li><li id="z">z</li></ul><ul id="src"><li id="y">y</li></ul><div id="res"></div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var x = document.getElementById('x');
+            var y = document.getElementById('y');
+            document.getElementById('a').after(x, y);
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        // NOTE on the expected order: per WHATWG, viableNextSibling is
+        // computed ONCE (= x), the nodes are pre-inserted reversed
+        // (y before x), and re-inserting x with reference==x adjusts the
+        // reference to x's first child (null -> append). Chrome yields
+        // [a, y, x, z] for this shape — so we assert SAFETY + membership,
+        // not a specific permutation.
+        assert_eq!(kid_ids(&doc, "src"), Vec::<String>::new(), "source drained");
+        let kids = kid_ids(&doc, "l");
+        assert_eq!(
+            kids.iter()
+                .filter(|s| s.as_str() == "x" || s.as_str() == "y")
+                .count(),
+            2,
+            "both moved nodes must be present exactly once; got {kids:?}"
+        );
+        assert_eq!(
+            kids.first().map(|s| s.as_str()),
+            Some("a"),
+            "the ref must stay first; got {kids:?}"
+        );
+        // The panic used to kill the rest of the script run.
+        assert_eq!(
+            doc.get_node(NodeId::from_u64(
+                doc.tree()
+                    .iter()
+                    .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("res"))
+                    .map(|(i, _)| i.as_u64())
+                    .expect("missing #res"),
+            ))
+            .map(|n| n.text_content())
+            .unwrap_or_default(),
+            "survived"
         );
     }
 
