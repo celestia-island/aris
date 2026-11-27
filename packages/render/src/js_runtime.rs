@@ -116,6 +116,15 @@ struct Bridge {
     /// materialized. A second write through the SAME handle must MOVE that
     /// node, not create another copy (round-2 S2: node-leak amplification).
     materialized_pending: HashMap<u32, u64>,
+    /// node_id -> THE element handle for this node. `getElementById` /
+    /// `querySelector` used to build a FRESH object on every call, so any
+    /// per-handle state (`_js_listeners`) was invisible to a later fetch:
+    /// `getElementById('el').addEventListener(...)` then
+    /// `getElementById('el').dispatchEvent(...)` registered and dispatched
+    /// against different objects and never fired (L940, PR #103 R3).
+    /// The cached handle is re-populated on every hit, so its properties stay
+    /// fresh while its identity — and therefore its listeners — persist.
+    element_handle_cache: HashMap<u64, JsObject>,
     /// node_id -> reusable element handle for SIBLING WALKS. Round-2 S1 of
     /// PR #101: materialising a full handle (87 keys + a populate_props pass
     /// that seeds a `_children` array of every child) on EVERY sibling hop
@@ -2216,6 +2225,35 @@ fn walk_handle(nid: u64, bridge: &Gc<GcRefCell<Bridge>>, ctx: &mut Context) -> O
         .walk_handle_cache
         .insert(nid, handle.clone());
     Some(JsValue::from(handle))
+}
+
+/// The ONE handle for `nid`, re-populated so its properties are fresh.
+/// Identity must be stable across `getElementById` calls: per-handle state
+/// (`_js_listeners`) lives on the handle, so a fresh object per call made
+/// register-then-dispatch silently fail (L940, PR #103 R3).
+fn cached_element_handle(
+    nid: u64,
+    bridge: &Gc<GcRefCell<Bridge>>,
+    ctx: &mut Context,
+) -> JsResult<JsObject> {
+    let cached = bridge.borrow().element_handle_cache.get(&nid).cloned();
+    let handle = match cached {
+        Some(h) => h,
+        None => {
+            let h = make_element_handle(ctx, Gc::clone(bridge), nid, None)?;
+            bridge
+                .borrow_mut()
+                .element_handle_cache
+                .insert(nid, h.clone());
+            h
+        }
+    };
+    // Re-populate on every access (cheap scalars + child mirrors): the tree
+    // may have changed since the handle was minted.
+    if let Some(snap) = bridge.borrow().node_props.get(&nid).cloned() {
+        populate_props(&handle, &snap, Gc::clone(bridge), ctx);
+    }
+    Ok(handle)
 }
 
 fn read_handle_id(v: &JsValue) -> Option<u64> {
@@ -10096,15 +10134,9 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
         |_this, args, b, ctx| {
             let id = arg_string(args, 0);
             let nid = b.borrow().ids.get(&id).copied();
-            if let Some(nid) = nid {
-                let snap = b.borrow().node_props.get(&nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                }
-                Ok(handle.into())
-            } else {
-                Ok(JsValue::null())
+            match nid {
+                Some(nid) => Ok(cached_element_handle(nid, b, ctx)?.into()),
+                None => Ok(JsValue::null()),
             }
         },
         Gc::clone(&bridge),
@@ -22199,6 +22231,119 @@ mod document_handle_event_tests {
         assert_eq!(
             out, "this=MINE",
             "handleEvent must be invoked with the listener object as `this`"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stable_handle_identity_tests {
+    //! L940 (PR #103 R3): `getElementById` / `querySelector` built a FRESH
+    //! handle object per call, so per-handle state was invisible to a later
+    //! fetch — `getElementById('el').addEventListener(...)` then
+    //! `getElementById('el').dispatchEvent(...)` registered and dispatched
+    //! against different objects and never fired. Handles are now cached per
+    //! node id and re-populated on each access, so identity persists while
+    //! properties stay fresh.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape — and the THREE other add/dispatch combinations that
+    /// all failed before the fix (only "same held variable" worked).
+    #[test]
+    fn every_add_dispatch_combination_fires() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "fresh_add_fresh_dispatch",
+                "document.getElementById('el').addEventListener('ping', function(){n++;});",
+                "document.getElementById('el').dispatchEvent({type:'ping'});",
+            ),
+            (
+                "held_add_fresh_dispatch",
+                "var el = document.getElementById('el'); el.addEventListener('ping', function(){n++;});",
+                "document.getElementById('el').dispatchEvent({type:'ping'});",
+            ),
+            (
+                "fresh_add_held_dispatch",
+                "document.getElementById('el').addEventListener('ping', function(){n++;});",
+                "var el2 = document.getElementById('el'); el2.dispatchEvent({type:'ping'});",
+            ),
+            (
+                "held_add_held_dispatch",
+                "var el3 = document.getElementById('el'); el3.addEventListener('ping', function(){n++;});",
+                "el3.dispatchEvent({type:'ping'});",
+            ),
+        ];
+        for (name, add, disp) in cases {
+            let out = run(&format!(
+                "var n = 0; {add} {disp} document.getElementById('out').setText('n=' + n);"
+            ));
+            assert_eq!(out, "n=1", "{name} must fire exactly once");
+        }
+    }
+
+    /// Identity must be stable across fetches.
+    #[test]
+    fn repeated_fetches_return_the_same_handle() {
+        let out = run(r#"
+            var a = document.getElementById('el');
+            var b = document.getElementById('el');
+            document.getElementById('out').setText('same=' + (a === b));
+            "#);
+        assert_eq!(out, "same=true", "two fetches must yield the same object");
+    }
+
+    /// ... while properties stay FRESH (the cache re-populates on each hit).
+    #[test]
+    fn cached_handle_properties_stay_fresh() {
+        let out = run(r#"
+            var h = document.getElementById('el');
+            h.setText('CHANGED');
+            document.getElementById('out').setText(
+                'text=' + document.getElementById('el').textContent
+            );
+            "#);
+        assert_eq!(
+            out, "text=CHANGED",
+            "a cached handle must reflect later writes, not a frozen snapshot"
+        );
+    }
+
+    /// A removed listener must not survive through the cache.
+    #[test]
+    fn remove_still_works_through_the_cache() {
+        let out = run(r#"
+            var n = 0;
+            var fn = function () { n++; };
+            document.getElementById('el').addEventListener('ping', fn);
+            document.getElementById('el').dispatchEvent({type:'ping'});
+            document.getElementById('el').removeEventListener('ping', fn);
+            document.getElementById('el').dispatchEvent({type:'ping'});
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(
+            out, "n=1",
+            "the removed listener must not fire on the second dispatch"
         );
     }
 }
