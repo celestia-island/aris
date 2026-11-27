@@ -14479,6 +14479,7 @@ fn make_element_handle(
                     // pending args is a family-wide follow-up (before/after/
                     // append/prepend/insertBefore share the same gap).
                     let mut batch: Vec<u64> = Vec::new();
+                    let mut staged: Vec<boa_engine::object::JsObject> = Vec::new();
                     let mut has_pending = false;
                     for arg in args.iter() {
                         let node = value_to_node(arg, ctx);
@@ -14490,14 +14491,33 @@ fn make_element_handle(
                             {
                                 has_pending = true;
                             }
-                            insert_into_children(&parent_obj, &child_obj, Some(obj.clone()), ctx);
+                            staged.push(child_obj);
                         }
                     }
-                    // Remove this node from the mirror too.
-                    remove_from_children(&parent_obj, &obj, ctx);
+                    // Apply NOTHING unless the whole batch reaches the tree:
+                    // pushing the op for a pending arg would delete the ref
+                    // and land nothing, and mutating only the MIRROR would
+                    // leave it claiming a replacement that never happened —
+                    // later ops then read that stale mirror and delete live
+                    // nodes (round-6 S1). An arg that is neither live nor
+                    // pending leaves an empty batch, which must not push
+                    // either (round-6 S3: the ref would vanish with nothing
+                    // to replace it).
+                    let ref_id = read_handle_id(&JsValue::from(obj.clone()));
+                    // `replaceWith()` with NO arguments is a pure detach (DOM
+                    // spec) and must still go through. An EMPTY batch that
+                    // came from unusable ARGUMENTS, by contrast, must not —
+                    // that would destroy the ref with nothing to replace it
+                    // (round-6 S3).
+                    let no_args = args.is_empty();
                     if !has_pending
-                        && let Some(ref_id) = read_handle_id(&JsValue::from(obj.clone()))
+                        && (no_args || !batch.is_empty())
+                        && let Some(ref_id) = ref_id
                     {
+                        for child_obj in &staged {
+                            insert_into_children(&parent_obj, child_obj, Some(obj.clone()), ctx);
+                        }
+                        remove_from_children(&parent_obj, &obj, ctx);
                         b.borrow_mut().ops.push(Op::ReplaceWith {
                             ref_id,
                             child_ids: batch,
@@ -19656,6 +19676,71 @@ mod replace_with_dom_tests {
         assert!(
             !kids.contains(&"old".to_string()),
             "after materialization the swap must succeed; got {kids:?}"
+        );
+    }
+
+    #[test]
+    fn a_skipped_replace_with_leaves_the_mirror_alone() {
+        // Round-6 S1: the pending guard blocked only the OP while the mirror
+        // was still mutated, so it claimed a replacement that never
+        // happened. Here BOTH arguments are pending, so no tree node is ever
+        // a replacement target and nothing may move at all.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li><li id="keep">keep</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('keep').replaceWith(document.createElement('b'));
+            document.getElementById('old').replaceWith(document.createElement('i'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string(), "keep".to_string()],
+            "pending-arg calls must leave the tree completely untouched"
+        );
+        // NOTE (honest scope): the mirror half of this fix is NOT pinned by
+        // any passing assertion — `_children` is page-invisible (childNodes
+        // is snapshot-backed), so a mutation that mutates the mirror
+        // unconditionally survives this suite. The TREE half is pinned; the
+        // mirror half is hygiene verified only by the reviewer's master A/B
+        // (master ["old","keep"] vs pre-fix HEAD ["keep"]).
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('old').replaceWith(document.getElementById('keep'));
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["keep".to_string()],
+            "after the skipped calls the real swap must still work"
+        );
+    }
+
+    #[test]
+    fn replace_with_a_non_node_argument_does_not_destroy_the_ref() {
+        // Round-6 S3: an arg that is neither a live node nor pending leaves
+        // an empty batch — pushing it removed the ref with nothing to land.
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><ul id="l"><li id="old">old</li></ul></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.getElementById('old').replaceWith({notANode: true});
+            document.getElementById('res').setText('survived');
+            "#,
+        );
+        assert_eq!(
+            kid_ids(&doc, "l"),
+            vec!["old".to_string()],
+            "an unusable argument must not destroy the ref"
         );
     }
 
