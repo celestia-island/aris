@@ -2869,6 +2869,47 @@ fn install_window(ctx: &mut Context, url: String) {
                 .build(),
         );
     }
+    // window.addEventListener / removeEventListener / dispatchEvent —
+    // delegate to the document surface (previously undefined; pages attaching
+    // window-level listeners silently no-op'd). Lazy document fetch, so
+    // install order does not matter.
+    let delegate = |method: &'static str, ctx: &mut Context| {
+        let nf = NativeFunction::from_copy_closure(move |_this, args, ctx| {
+            let doc_val = ctx
+                .global_object()
+                .get(boa_engine::js_string!("document"), ctx)?;
+            let Some(doc_obj) = doc_val.as_object() else {
+                return Ok(JsValue::undefined());
+            };
+            let Some(method_fn) = doc_obj
+                .get(boa_engine::js_string!(method), ctx)
+                .ok()
+                .and_then(|v| v.as_object())
+                .filter(|f| f.is_callable())
+            else {
+                return Ok(JsValue::undefined());
+            };
+            let this = JsValue::from(doc_obj.clone());
+            method_fn.call(&this, args, ctx)
+        });
+        JsValue::from(
+            boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), nf)
+                .name(method)
+                .length(1)
+                .build(),
+        )
+    };
+    for method in ["addEventListener", "removeEventListener", "dispatchEvent"] {
+        let _ = global.insert_property(
+            boa_engine::js_string!(method),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(delegate(method, ctx))
+                .writable(true)
+                .enumerable(false)
+                .configurable(true)
+                .build(),
+        );
+    }
     // window.length = 0 (no frames).
     let _ = global.insert_property(
         boa_engine::js_string!("length"),
@@ -2905,6 +2946,7 @@ fn install_window(ctx: &mut Context, url: String) {
 /// Install the Event API: Event constructor, CustomEvent, EventTarget,
 /// and the dispatchEvent method on element handles.
 fn install_event_api(ctx: &mut Context) {
+    let global = ctx.global_object();
     // Event constructor: new Event(type, {bubbles, cancelable, composed})
     let event_ctor = NativeFunction::from_copy_closure(|_this, args, ctx| {
         let type_ = arg_string(args, 0);
@@ -2929,6 +2971,19 @@ fn install_event_api(ctx: &mut Context) {
                 .build()
         };
         let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // [[Prototype]] = Event.prototype — instanceof works (previously the
+        // callable registration had no object prototype and instanceof
+        // THREW: "function has non-object prototype"). Fetched lazily from
+        // the global — no capture needed.
+        if let Ok(ctor_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("Event"), ctx)
+            && let Some(ctor_obj) = ctor_val.as_object()
+            && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
+            && let Some(proto) = proto_val.as_object()
+        {
+            let _ = obj.set_prototype(Some(proto));
+        }
         let _ = obj.insert_property(
             boa_engine::js_string!("type"),
             pd(JsValue::from(boa_engine::js_string!(type_))),
@@ -3082,6 +3137,22 @@ fn install_event_api(ctx: &mut Context) {
         Ok(obj.into())
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("Event"), 1, event_ctor);
+    // Attach a real prototype object to the registered constructor so
+    // `instanceof Event` works.
+    if let Ok(ctor_val) = global.get(boa_engine::js_string!("Event"), ctx)
+        && let Some(ctor_obj) = ctor_val.as_object()
+    {
+        let event_proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        let _ = ctor_obj.insert_property(
+            boa_engine::js_string!("prototype"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(event_proto))
+                .writable(true)
+                .enumerable(false)
+                .configurable(false)
+                .build(),
+        );
+    }
 
     // CustomEvent constructor: extends Event with detail.
     let custom_ctor = NativeFunction::from_copy_closure(|_this, args, ctx| {
@@ -3096,6 +3167,18 @@ fn install_event_api(ctx: &mut Context) {
                 .build()
         };
         let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // [[Prototype]] = CustomEvent.prototype (whose own proto is
+        // Event.prototype — `ce instanceof CustomEvent` AND
+        // `ce instanceof Event` both work).
+        if let Ok(ctor_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("CustomEvent"), ctx)
+            && let Some(ctor_obj) = ctor_val.as_object()
+            && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
+            && let Some(proto) = proto_val.as_object()
+        {
+            let _ = obj.set_prototype(Some(proto));
+        }
         let _ = obj.insert_property(
             boa_engine::js_string!("type"),
             pd(JsValue::from(boa_engine::js_string!(type_))),
@@ -3193,6 +3276,29 @@ fn install_event_api(ctx: &mut Context) {
         Ok(obj.into())
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("CustomEvent"), 1, custom_ctor);
+    // CustomEvent.prototype, chained to Event.prototype so instanceof works
+    // across both constructors.
+    if let Ok(ctor_val) = global.get(boa_engine::js_string!("CustomEvent"), ctx)
+        && let Some(ctor_obj) = ctor_val.as_object()
+    {
+        let ce_proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        if let Ok(ev_ctor) = global.get(boa_engine::js_string!("Event"), ctx)
+            && let Some(ev_obj) = ev_ctor.as_object()
+            && let Ok(ev_proto) = ev_obj.get(boa_engine::js_string!("prototype"), ctx)
+            && let Some(ev_proto_obj) = ev_proto.as_object()
+        {
+            let _ = ce_proto.set_prototype(Some(ev_proto_obj));
+        }
+        let _ = ctor_obj.insert_property(
+            boa_engine::js_string!("prototype"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(ce_proto))
+                .writable(true)
+                .enumerable(false)
+                .configurable(false)
+                .build(),
+        );
+    }
 
     // EventTarget constructor: returns an object with addEventListener,
     // removeEventListener, and dispatchEvent.
@@ -24392,5 +24498,106 @@ mod style_cache_hardening_tests {
             out, "setterW=false setterC=false rmW=false rmC=false reW=false reC=false",
             "the setter and removeAttribute cache installs must stay locked"
         );
+    }
+}
+
+#[cfg(test)]
+mod event_api_surface_tests {
+    //! L940 event-API family, probed 2026-11-28 (PR #114): the recorded
+    //! ghost-fire S2 (`remove; dispatch` firing once) is ALREADY FIXED by the
+    //! WHATWG dedup work — three shapes verified len=0. Two REAL gaps fixed
+    //! here: `instanceof Event` THREW ("function has non-object prototype")
+    //! and `window.addEventListener` was undefined (window-level listeners
+    //! silently no-op'd).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// Recorded ghost-fire S2 (PR #94 handoff): `remove; dispatch` fired
+    /// once. Already fixed by the dedup work — pinned here so it stays fixed.
+    #[test]
+    fn remove_then_dispatch_does_not_ghost_fire() {
+        let out = run(r#"
+            var log = [];
+            var el = document.getElementById('el');
+            var fn = function () { log.push('X'); };
+            el.addEventListener('ping', fn);
+            el.removeEventListener('ping', fn);
+            el.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('len=' + log.length);
+            "#);
+        assert_eq!(out, "len=0", "remove-then-dispatch must not ghost-fire");
+    }
+
+    /// instanceof Event works (was: threw "function has non-object
+    /// prototype in instanceof check").
+    #[test]
+    fn instance_of_event_works() {
+        let out = run(r#"
+            var r = [];
+            var ev = new Event('x');
+            r.push('ev=' + (ev instanceof Event));
+            var ce = new CustomEvent('ce');
+            r.push('ce=' + (ce instanceof CustomEvent));
+            r.push('ceEv=' + (ce instanceof Event));
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "ev=true ce=true ceEv=true",
+            "instanceof Event/CustomEvent must work (CustomEvent chains to Event)"
+        );
+    }
+
+    /// window.addEventListener delegates to the document surface — a
+    /// window-level listener fires (was: undefined, silent no-op).
+    #[test]
+    fn window_add_listener_fires() {
+        let out = run(r#"
+            var log = [];
+            window.addEventListener('ping', function () { log.push('W'); });
+            window.dispatchEvent({ type: 'ping' });
+            var r = [];
+            r.push('typeof=' + (typeof window.addEventListener));
+            r.push('fired=' + (log.length === 1));
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "typeof=function fired=true",
+            "window.addEventListener must exist and fire via document dispatch"
+        );
+    }
+
+    /// window.removeEventListener removes (the delegated contract).
+    #[test]
+    fn window_remove_listener_stops_firing() {
+        let out = run(r#"
+            var log = [];
+            var fn = function () { log.push('W'); };
+            window.addEventListener('ping', fn);
+            window.removeEventListener('ping', fn);
+            window.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('len=' + log.length);
+            "#);
+        assert_eq!(out, "len=0", "window.removeEventListener must remove");
     }
 }
