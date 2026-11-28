@@ -3143,6 +3143,16 @@ fn install_event_api(ctx: &mut Context) {
         && let Some(ctor_obj) = ctor_val.as_object()
     {
         let event_proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // DOM: Event.prototype.constructor === Event.
+        let _ = event_proto.insert_property(
+            boa_engine::js_string!("constructor"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(ctor_obj.clone()))
+                .writable(true)
+                .enumerable(false)
+                .configurable(true)
+                .build(),
+        );
         let _ = ctor_obj.insert_property(
             boa_engine::js_string!("prototype"),
             boa_engine::property::PropertyDescriptor::builder()
@@ -3282,6 +3292,16 @@ fn install_event_api(ctx: &mut Context) {
         && let Some(ctor_obj) = ctor_val.as_object()
     {
         let ce_proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // DOM: CustomEvent.prototype.constructor === CustomEvent.
+        let _ = ce_proto.insert_property(
+            boa_engine::js_string!("constructor"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(ctor_obj.clone()))
+                .writable(true)
+                .enumerable(false)
+                .configurable(true)
+                .build(),
+        );
         if let Ok(ev_ctor) = global.get(boa_engine::js_string!("Event"), ctx)
             && let Some(ev_obj) = ev_ctor.as_object()
             && let Ok(ev_proto) = ev_obj.get(boa_engine::js_string!("prototype"), ctx)
@@ -24505,7 +24525,9 @@ mod style_cache_hardening_tests {
 mod event_api_surface_tests {
     //! L940 event-API family, probed 2026-11-28 (PR #114): the recorded
     //! ghost-fire S2 (`remove; dispatch` firing once) is ALREADY FIXED by the
-    //! WHATWG dedup work — three shapes verified len=0. Two REAL gaps fixed
+    //! WHATWG dedup work — one shape pinned here; R2 probes verified the
+    //! other two (refetch, double-add) plus a positive control. Two REAL
+    //! gaps fixed
     //! here: `instanceof Event` THREW ("function has non-object prototype")
     //! and `window.addEventListener` was undefined (window-level listeners
     //! silently no-op'd).
@@ -24574,15 +24596,19 @@ mod event_api_surface_tests {
     fn window_add_listener_fires() {
         let out = run(r#"
             var log = [];
-            window.addEventListener('ping', function () { log.push('W'); });
-            window.dispatchEvent({ type: 'ping' });
+            var err = '';
+            try {
+                window.addEventListener('ping', function () { log.push('W'); });
+                window.dispatchEvent({ type: 'ping' });
+            } catch (e) { err = 'threw:' + e.message; }
             var r = [];
             r.push('typeof=' + (typeof window.addEventListener));
             r.push('fired=' + (log.length === 1));
+            r.push(err);
             document.getElementById('out').setText(r.join(' '));
             "#);
         assert_eq!(
-            out, "typeof=function fired=true",
+            out, "typeof=function fired=true ",
             "window.addEventListener must exist and fire via document dispatch"
         );
     }
@@ -24593,11 +24619,14 @@ mod event_api_surface_tests {
         let out = run(r#"
             var log = [];
             var fn = function () { log.push('W'); };
-            window.addEventListener('ping', fn);
-            window.removeEventListener('ping', fn);
-            window.dispatchEvent({ type: 'ping' });
-            document.getElementById('out').setText('len=' + log.length);
+            var err = '';
+            try {
+                window.addEventListener('ping', fn);
+                window.removeEventListener('ping', fn);
+                window.dispatchEvent({ type: 'ping' });
+            } catch (e) { err = 'threw:' + e.message; }
+            document.getElementById('out').setText('len=' + log.length + ' ' + err);
             "#);
-        assert_eq!(out, "len=0", "window.removeEventListener must remove");
+        assert_eq!(out, "len=0 ", "window.removeEventListener must remove");
     }
 }
