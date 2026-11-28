@@ -408,8 +408,13 @@ impl JsRuntime {
         self.timers.clear();
         // Reinstall the document global (id snapshot now lives in the bridge).
         let _ = install_document(&mut self.ctx, Gc::clone(&self.bridge));
-        install_dom_globals(&mut self.ctx);
+        // ORDER MATTERS: install_event_api registers EventTarget (the root of
+        // the node inheritance chain), and install_dom_globals links
+        // Node.prototype -> EventTarget.prototype — so the event API must run
+        // FIRST (this site had them swapped, which silently skipped the root
+        // link and left every element non-`instanceof EventTarget`).
         install_event_api(&mut self.ctx);
+        install_dom_globals(&mut self.ctx);
         install_window(&mut self.ctx, url.to_string());
 
         // Populate document.documentElement / body / head with real element
@@ -2550,6 +2555,13 @@ fn cached_element_handle(
     // may have changed since the handle was minted.
     if let Some(snap) = bridge.borrow().node_props.get(&nid).cloned() {
         populate_props(&handle, &snap, Gc::clone(bridge), ctx);
+        // The element-class [[Prototype]] must be set here too: every lookup
+        // that routes through this cache (getElementById, querySelector, the
+        // collections) used to skip set_element_prototype, so `el instanceof
+        // HTMLElement` was false for every by-id handle (the sibling mint
+        // paths call set_element_prototype directly; the prototype objects
+        // themselves were only just created).
+        set_element_prototype(&handle, &snap.tag_name, ctx);
     }
     Ok(handle)
 }
@@ -7291,26 +7303,62 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
-        // NOTE: `register_global_callable` does NOT create a `.prototype`
-        // object (boa's FunctionObjectBuilder has no MakeConstructor), so this
-        // block silently no-ops for every interface constructor whose
-        // prototype was never built — the exact misconception that made
-        // `instanceof EventTarget` throw (PR #115). Building them is a
-        // separate, larger change.
-        let global = ctx.global_object();
-        if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
-            if let Some(ctor_obj) = ctor_val.as_object() {
-                if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), &mut *ctx)
-                {
-                    if let Some(proto) = proto_val.as_object() {
-                        let _ = proto.insert_property(
-                            boa_engine::js_string!("constructor"),
-                            pd(ctor_obj.clone().into()),
-                        );
-                    }
-                }
+        // `register_global_callable` does NOT create a `.prototype` object
+        // (boa's FunctionObjectBuilder has no MakeConstructor), so every
+        // interface constructor registered here had none — which made
+        // `el instanceof HTMLElement/Element/Node` THROW
+        // ("function has non-object prototype in instanceof check"; the same
+        // defect PR #115 fixed for EventTarget). Create one with the
+        // ECMA-262 descriptors and back-reference `constructor`.
+        {
+            let g = ctx.global_object();
+            if let Ok(ctor_val) = g.get(boa_engine::js_string!(name), &mut *ctx)
+                && let Some(ctor_obj) = ctor_val.as_object()
+            {
+                let proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+                let _ = proto.insert_property(
+                    boa_engine::js_string!("constructor"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(ctor_obj.clone()))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+                let _ = ctor_obj.insert_property(
+                    boa_engine::js_string!("prototype"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(proto))
+                        .writable(false)
+                        .enumerable(false)
+                        .configurable(false)
+                        .build(),
+                );
             }
         }
+        // (The prototype-creation block above already installed the
+        // `constructor` back-reference with a spec-correct non-enumerable
+        // descriptor; an earlier second pass re-inserted it via `pd()` —
+        // which hardcodes enumerable(true) — silently undoing that on all
+        // 121 prototypes, so it is gone: round-2 S2.)
+    }
+
+    // Round-2 S2 #2: the `document` global is a plain object otherwise —
+    // `document instanceof Node/Document` was false. Its prototype is only
+    // available now (the loop above created Document.prototype), which is
+    // why this cannot live in install_document (it runs before this loop).
+    if let Ok(doc_val) = ctx
+        .global_object()
+        .get(boa_engine::js_string!("document"), ctx)
+        && let Some(doc_obj) = doc_val.as_object()
+        && let Ok(ctor_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("Document"), ctx)
+        && let Some(ctor_obj) = ctor_val.as_object()
+        && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
+        && let Some(proto) = proto_val.as_object()
+    {
+        let _ = doc_obj.set_prototype(Some(proto));
     }
 
     // Set up prototype chain links between constructors' .prototype objects:
@@ -7333,6 +7381,12 @@ fn install_dom_globals(ctx: &mut Context) {
     ) {
         let _ = elem_proto.set_prototype(Some(node_proto.clone()));
         let _ = html_proto.set_prototype(Some(elem_proto.clone()));
+        // Real DOM: EventTarget is the ROOT of the node inheritance chain, so
+        // Node.prototype -> EventTarget.prototype. Without this, elements and
+        // the document were NOT `instanceof EventTarget`.
+        if let Some(et_proto) = get_proto("EventTarget", ctx) {
+            let _ = node_proto.set_prototype(Some(et_proto));
+        }
         // Add Node constants to Node.prototype so element.ELEMENT_NODE works.
         let pd = |val: JsValue| {
             boa_engine::property::PropertyDescriptor::builder()
@@ -24749,6 +24803,83 @@ mod eventtarget_instanceof_tests {
             "et=true proto=object ctor=true plain=false ev=false dispatched=true \
              derivedIsof=true protoMth=undefined ctorCfg=true pw=false/false/false",
             "EventTarget instanceof must work and stay non-permissive"
+        );
+    }
+}
+
+#[cfg(test)]
+mod element_prototype_tests {
+    //! Element `instanceof` was completely broken: `register_global_callable`
+    //! creates no `.prototype`, so every interface constructor
+    //! (Node/Element/HTMLElement/HTML*Element/Document) had none and the
+    //! checks THREW ("function has non-object prototype in instanceof
+    //! check"). Fixing only the constructors was not enough — the lookups
+    //! (getElementById, collections) mint handles through
+    //! cached_element_handle, which never called set_element_prototype — and
+    //! the chain was missing the HTML*Element -> HTMLElement links plus the
+    //! EventTarget root.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="d">D</div><span id="s">S</span><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The element-class chain, by identity, through getElementById.
+    #[test]
+    fn element_instanceof_chain_works() {
+        let out = run(r#"
+            var d = document.getElementById('d');
+            var r = [];
+            r.push('div=' + (d instanceof HTMLDivElement));
+            r.push('html=' + (d instanceof HTMLElement));
+            r.push('elem=' + (d instanceof Element));
+            r.push('node=' + (d instanceof Node));
+            // Real DOM: EventTarget is the root of the node inheritance chain.
+            r.push('et=' + (d instanceof EventTarget));
+            // Non-permissive: a <span> is NOT an HTMLDivElement.
+            r.push('span=' + (document.getElementById('s') instanceof HTMLDivElement));
+            r.push('plain=' + (({}) instanceof Node));
+            r.push('protoT=' + (typeof HTMLElement.prototype));
+            r.push('ctorBR=' + (HTMLElement.prototype.constructor === HTMLElement));
+            // Round-2 S2 #2: the document global itself must be a Node AND a
+            // Document (its prototype used to never be set).
+            r.push('docNode=' + (document instanceof Node));
+            r.push('docDoc=' + (document instanceof Document));
+            r.push('docElem=' + (document instanceof Element));
+            // Round-2 S2 #1: `constructor` on the new prototypes must be
+            // non-enumerable (for..in must not leak it).
+            var cd = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'constructor');
+            r.push('ctorE=' + (cd && cd.enumerable === false));
+            var ctorLeaks = [];
+            for (var k in HTMLElement.prototype) { if (k === 'constructor') ctorLeaks.push(k); }
+            r.push('ctorLeak=' + ctorLeaks.length);
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out,
+            "div=true html=true elem=true node=true et=true \
+             span=false plain=false protoT=object ctorBR=true \
+             docNode=true docDoc=true docElem=false ctorE=true ctorLeak=0",
+            "the element prototype chain must resolve by identity, include the \
+             document, and not leak constructor"
         );
     }
 }
