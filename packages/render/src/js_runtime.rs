@@ -9782,14 +9782,6 @@ fn get_or_create_children(parent: &JsObject, ctx: &mut Context) -> JsArray {
         .get(boa_engine::js_string!("_children"), ctx)
         .ok()
         .and_then(|v| v.as_object());
-    eprintln!(
-        "[gocc] found={} isArray={}",
-        children.is_some(),
-        children
-            .as_ref()
-            .map(|c| JsArray::from_object(c.clone()).is_ok())
-            .unwrap_or(false)
-    );
     match children {
         Some(obj) => JsArray::from_object(obj).unwrap_or_else(|_| new_array(ctx)),
         None => {
@@ -24936,6 +24928,19 @@ mod element_prototype_tests {
             // non-enumerable (for..in must not leak it).
             var cd = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'constructor');
             r.push('ctorE=' + (cd && cd.enumerable === false));
+            // Round-2 S2: the sweep uses a PARTIAL defineProperty — accessors
+            // must remain accessors (a data-descriptor rewrite would keep
+            // values but silently flatten innerHTML/textContent writes).
+            var accBad = [];
+            var accAbsent = [];
+            ['innerHTML', 'textContent', 'nodeValue', 'nextSibling',
+                'previousSibling'].forEach(function (k) {
+                    var dd = Object.getOwnPropertyDescriptor(d, k);
+                    if (!dd) { accAbsent.push(k); return; }
+                    if (typeof dd.get !== 'function') accBad.push(k);
+                });
+            r.push('accBad=' + accBad.join(';'));
+            r.push('accAbsent=' + accAbsent.join(';'));
             var ctorLeaks = [];
             for (var k in HTMLElement.prototype) { if (k === 'constructor') ctorLeaks.push(k); }
             r.push('ctorLeak=' + ctorLeaks.length);
@@ -24945,7 +24950,8 @@ mod element_prototype_tests {
             out,
             "div=true html=true elem=true node=true et=true \
              span=false plain=false protoT=object ctorBR=true \
-             docNode=true docDoc=true docElem=false ctorE=true ctorLeak=0",
+             docNode=true docDoc=true docElem=false ctorE=true \
+             accBad= accAbsent= ctorLeak=0",
             "the element prototype chain must resolve by identity, include the \
              document, and not leak constructor"
         );
@@ -25094,12 +25100,23 @@ mod populate_props_enumerable_tests {
             })());
             r.push('hasAttr=' + d.hasAttribute('class'));
             r.push('clone=' + (d.cloneNode(true) && d.cloneNode(true).id));
+            // Round-2 S2: accessors must remain accessors after the sweep.
+            var accBad = [];
+            var accAbsent = [];
+            ['innerHTML', 'textContent', 'nodeValue', 'nextSibling',
+                'previousSibling'].forEach(function (k) {
+                    var dd = Object.getOwnPropertyDescriptor(d, k);
+                    if (!dd) { accAbsent.push(k); return; }
+                    if (typeof dd.get !== 'function') accBad.push(k);
+                });
+            r.push('accBad=' + accBad.join(';'));
+            r.push('accAbsent=' + accAbsent.join(';'));
             document.getElementById('out').setText(r.join(' '));
         "#);
         assert_eq!(
             out,
             "text=X id=d cls=c dx=1 attrs=3 kids=1 parent=1 pe=1 append=1 rm=1 \
-             hasAttr=true clone=d",
+             hasAttr=true clone=d accBad= accAbsent=",
             "every member must keep working after the enumerable sweep"
         );
     }
