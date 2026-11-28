@@ -22964,7 +22964,8 @@ mod query_selector_live_tests {
 
     fn run(script: &str) -> String {
         let mut doc = HtmlDocument::from_html(
-            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            r#"<html><body><div id="el">E</div><span id="sp">S</span>
+            <em class="parsecls">P</em><div id="out">i</div></body></html>"#,
             DocumentConfig::default(),
         );
         let mut rt = JsRuntime::new();
@@ -22996,20 +22997,26 @@ mod query_selector_live_tests {
         // Round-2 S3-c: assert IDENTITY against getElementById (non-null
         // would pass even if the tag arm returned the LAST div).
         let out = run(r#"
-            var q = document.querySelector('div');
-            var ref = document.getElementById('el');
-            var upper = document.querySelector('DIV');
+            var d1 = document.querySelector('div');
+            var d1u = document.querySelector('DIV');
+            var d1ref = document.getElementById('el');
+            var sp = document.querySelector('span');
+            var n1 = document.querySelector('#el');
+            var c1 = document.querySelector('.parsecls');
+            var emref = document.querySelector('em');
+            var nope = document.querySelector('nosuchtag');
             var r = [];
-            r.push('same=' + (q === ref));
-            r.push('tag=' + (q && q.tagName));
-            r.push('upperSame=' + (upper === ref));
-            r.push('cls_null=' + (document.querySelector('.nope') === null));
-            r.push('nsm_null=' + (document.querySelector('nosuchtag') === null));
+            r.push('d1=' + (d1 === d1ref) + '/' + (d1 && d1.textContent));
+            r.push('d1u=' + (d1u === d1ref));
+            r.push('sp=' + (sp && sp.id));
+            r.push('n1=' + (n1 === d1ref));
+            r.push('c1=' + (c1 === emref) + '/' + (c1 && c1.tagName));
+            r.push('nope=' + (nope === null));
             document.getElementById('out').setText(r.join(' '));
             "#);
         assert_eq!(
-            out, "same=true tag=DIV upperSame=true cls_null=true nsm_null=true",
-            "the selector forms must keep their existing semantics"
+            out, "d1=true/E d1u=true sp=sp n1=true c1=true/EM nope=true",
+            "tag/.cls/#id forms must resolve by identity across spellings"
         );
     }
 }
