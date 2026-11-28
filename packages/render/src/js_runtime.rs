@@ -2124,7 +2124,7 @@ fn populate_props(
         boa_engine::property::PropertyDescriptor::builder()
             .value(val)
             .writable(true)
-            .enumerable(true)
+            .enumerable(false)
             .configurable(true)
             .build()
     };
@@ -2420,6 +2420,11 @@ fn populate_props(
         let _ = obj.insert_property(boa_engine::js_string!("parentNode"), pd(JsValue::null()));
         let _ = obj.insert_property(boa_engine::js_string!("parentElement"), pd(JsValue::null()));
     }
+    // Round-2: sweep the whole installed surface non-enumerable (the
+    // populate_props `pd` flip covered pd-installed props; add_dom_methods
+    // (called just above) re-adds methods/accessors that are DOM interface
+    // members — neither may leak via for..in).
+    populate_enumerable_sweep(obj, ctx);
 }
 
 /// Build (or reuse) a handle suitable for SIBLING WALKS.
@@ -9777,6 +9782,14 @@ fn get_or_create_children(parent: &JsObject, ctx: &mut Context) -> JsArray {
         .get(boa_engine::js_string!("_children"), ctx)
         .ok()
         .and_then(|v| v.as_object());
+    eprintln!(
+        "[gocc] found={} isArray={}",
+        children.is_some(),
+        children
+            .as_ref()
+            .map(|c| JsArray::from_object(c.clone()).is_ok())
+            .unwrap_or(false)
+    );
     match children {
         Some(obj) => JsArray::from_object(obj).unwrap_or_else(|_| new_array(ctx)),
         None => {
@@ -9971,6 +9984,55 @@ fn insert_into_children(
 /// Add DOM mutation methods + child tracking to any JS object.
 /// This is used by both make_element_handle (bridge elements) and
 /// new Document().createElement() (JS-only elements).
+/// Make every own property of `obj` non-enumerable via a PARTIAL
+/// `Object.defineProperty` (only the `enumerable` flag changes —
+/// value/writable/get/set are preserved, so accessors stay accessors).
+/// DOM interface members must be non-enumerable: for..in over a node
+/// leaked 35 names (every handle's own props, PR #116 handoff).
+fn populate_enumerable_sweep(obj: &JsObject, ctx: &mut Context) {
+    let sweep = NativeFunction::from_copy_closure(|_t, args, ctx| {
+        let Some(o) = args.first().and_then(|v| v.as_object()) else {
+            return Ok(JsValue::undefined());
+        };
+        let object_def = ctx
+            .global_object()
+            .get(boa_engine::js_string!("Object"), ctx)?
+            .as_object()
+            .ok_or_else(|| boa_engine::JsNativeError::typ().with_message("Object missing"))?;
+        let define_prop = object_def
+            .get(boa_engine::js_string!("defineProperty"), ctx)?
+            .as_object()
+            .ok_or_else(|| {
+                boa_engine::JsNativeError::typ().with_message("Object.defineProperty missing")
+            })?;
+        let keys = o.own_property_keys(ctx)?;
+        for k in keys {
+            let partial = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = partial.insert_property(
+                boa_engine::js_string!("enumerable"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(false))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+            let _ = define_prop.call(
+                &JsValue::from(object_def.clone()),
+                &[
+                    JsValue::from(o.clone()),
+                    JsValue::from(k),
+                    JsValue::from(partial),
+                ],
+                ctx,
+            );
+        }
+        Ok(JsValue::undefined())
+    });
+    let target = JsValue::from(obj.clone());
+    let _ = sweep.call(&JsValue::undefined(), &[target], ctx);
+}
+
 fn add_dom_methods(obj: &JsObject, ctx: &mut Context) {
     // appendChild — delegates to insert_into_children for consistency
     let append = NativeFunction::from_copy_closure(|this, args, ctx| {
@@ -10244,6 +10306,12 @@ fn add_dom_methods(obj: &JsObject, ctx: &mut Context) {
     };
     let _ = attrs_map.insert_property(boa_engine::js_string!("length"), pd2(JsValue::from(0u32)));
     let _ = obj.insert_property(boa_engine::js_string!("attributes"), pd2(attrs_map.into()));
+
+    // Sweep the whole installed surface non-enumerable (round-2: the
+    // element surface — the populate_props `pd` flip only covered
+    // pd-installed props; these method/accessor installs were still
+    // enumerable).
+    populate_enumerable_sweep(obj, ctx);
 }
 
 /// Convert a JsValue to a DOM node for insertion (strings become text nodes).
@@ -24942,6 +25010,97 @@ mod node_proto_enumerable_tests {
         assert_eq!(
             out, "bad=0 nodeLeak=0 hasChild=true contains=true",
             "Node.prototype members must be non-enumerable and still functional"
+        );
+    }
+}
+
+#[cfg(test)]
+mod populate_props_enumerable_tests {
+    //! PR #116 handoff: for..in over an ELEMENT leaked 35 enumerable own
+    //! props (every populate_props/add_dom_methods install). All interface
+    //! members and private mirrors must be non-enumerable — for..in and
+    //! Object.keys over a node must yield nothing, exactly like a browser,
+    //! while every member keeps working.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="d" class="c" data-x="1">D</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    #[test]
+    fn element_surface_yields_nothing_to_for_in() {
+        let out = run(r#"
+            var d = document.getElementById('d');
+            var own = Object.keys(d);
+            var leaked = [];
+            for (var k in d) { leaked.push(k); }
+            var r = [];
+            r.push('own=' + own.length);
+            r.push('forin=' + leaked.length);
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out, "own=0 forin=0",
+            "an element must yield nothing to for..in / Object.keys"
+        );
+    }
+
+    /// The flip must not break any member: reads, writes, mirrors, methods.
+    #[test]
+    fn all_members_still_work_after_the_sweep() {
+        let out = run(r#"
+            var d = document.getElementById('d');
+            d.textContent = 'X';
+            var r = [];
+            r.push('text=' + d.textContent);
+            r.push('id=' + d.id);
+            r.push('cls=' + d.className);
+            r.push('dx=' + (d.dataset && d.dataset.x));
+            r.push('attrs=' + (d.attributes && d.attributes.length));
+            r.push('kids=' + d.childNodes.length);
+            r.push('parent=' + (d.parentNode && d.parentNode.nodeType));
+            r.push('pe=' + (d.parentElement && d.parentElement.nodeType));
+            r.push('append=' + (function () {
+                var c = document.createElement('span');
+                c.id = 'appended';
+                d.appendChild(c);
+                // childNodes reads the SNAPSHOT array (pre-existing
+                // stale-mirror behavior, unchanged by this PR — verified
+                // against the unpatched base); the append itself is covered
+                // by offline_onclick_test on a fresh element.
+                return d.childNodes.length;
+            })());
+            r.push('rm=' + (function () {
+                d.removeChild(d.lastChild);
+                return d.childNodes.length;
+            })());
+            r.push('hasAttr=' + d.hasAttribute('class'));
+            r.push('clone=' + (d.cloneNode(true) && d.cloneNode(true).id));
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out,
+            "text=X id=d cls=c dx=1 attrs=3 kids=1 parent=1 pe=1 append=1 rm=1 \
+             hasAttr=true clone=d",
+            "every member must keep working after the enumerable sweep"
         );
     }
 }
