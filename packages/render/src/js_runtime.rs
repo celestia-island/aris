@@ -535,24 +535,17 @@ impl JsRuntime {
             if stop_propagation && stop_node != Some(this_node) {
                 continue;
             }
-            // Look up the stashed callback and call it with a fresh element
-            // handle as `this` (functions) or with the listener object as
-            // `this` (handleEvent objects).
-            let mut this = match make_element_handle(
-                &mut self.ctx,
-                Gc::clone(&self.bridge),
-                this_node,
-                None,
-            ) {
+            // Look up the stashed callback and call it with the STABLE
+            // cached handle as `this` (functions) or with the listener object
+            // as `this` (handleEvent objects). cached_element_handle (not a
+            // bare make_element_handle) so `this === btn` holds — the same
+            // identity contract as getElementById (round-2 S3: a fresh
+            // handle per entry made `this ===` and `e.currentTarget ===`
+            // false against prefetched handles).
+            let this = match cached_element_handle(this_node, &self.bridge, &mut self.ctx) {
                 Ok(o) => o,
                 Err(_) => continue,
             };
-            // Populate the handle's properties from the node snapshot: a bare
-            // make_element_handle leaves `id` / `tagName` / `textContent`
-            // empty, so a handler branching on `this.id` silently saw "".
-            if let Some(snap) = self.bridge.borrow().node_props.get(&this_node).cloned() {
-                populate_props(&this, &snap, Gc::clone(&self.bridge), &mut self.ctx);
-            }
             let key = boa_engine::js_string!(name.clone());
             let func_val = match self.ctx.global_object().get(key.clone(), &mut self.ctx) {
                 Ok(v) => v,
@@ -562,6 +555,20 @@ impl JsRuntime {
                 continue;
             };
             let this_val = JsValue::from(this.clone());
+            // DOM: currentTarget is the node WHOSE listener runs — update it
+            // per entry (round-2 S2: a static copy of the click target lied
+            // to ancestor and document handlers).
+            if let Some(ev_obj) = click_event_value.as_object() {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!("currentTarget"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(this_val.clone())
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
+            }
             // DOM: an event listener is either a function or an object with a
             // `handleEvent` method. The callable-only guard silently dropped
             // the latter (L940 follow-up). The click event object is passed
@@ -627,6 +634,18 @@ impl JsRuntime {
                 stop_node = Some(this_node);
             }
         }
+        // WHATWG: currentTarget is null once dispatch completes.
+        if let Some(ev_obj) = click_event_value.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::null())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+        }
         // stopPropagation: ancestors (and the document walk) must not receive
         // the event — skip everything below the entry that stopped it.
         if stop_propagation {
@@ -668,25 +687,16 @@ impl JsRuntime {
         };
         // DOM: the click target — handlers can read e.target / e.currentTarget
         // (previously the minted event carried neither, and preventDefault
-        // did not exist on it at all).
-        if let Ok(target_handle) =
-            make_element_handle(&mut self.ctx, Gc::clone(&self.bridge), target_nid, None)
-        {
-            // A bare make_element_handle leaves `id` / `tagName` empty, so
-            // `e.target.id` read "" — populate from the node snapshot like
-            // every other minted handle.
-            if let Some(snap) = self.bridge.borrow().node_props.get(&target_nid).cloned() {
-                populate_props(
-                    &target_handle,
-                    &snap,
-                    Gc::clone(&self.bridge),
-                    &mut self.ctx,
-                );
-            }
+        // did not exist on it at all). cached_element_handle (not a bare
+        // make_element_handle) so `e.target === btn` holds — the runtime's
+        // stable-handle-identity contract. currentTarget starts null: the
+        // walk sets it per listener (round-2 S2 — a static copy of the
+        // target lied to ancestor/document handlers).
+        if let Ok(target_handle) = cached_element_handle(target_nid, &self.bridge, &mut self.ctx) {
             let t = JsValue::from(target_handle);
-            let _ = ev.insert_property(boa_engine::js_string!("target"), pd(t.clone()));
-            let _ = ev.insert_property(boa_engine::js_string!("currentTarget"), pd(t));
+            let _ = ev.insert_property(boa_engine::js_string!("target"), pd(t));
         }
+        let _ = ev.insert_property(boa_engine::js_string!("currentTarget"), pd(JsValue::null()));
         let _ = ev.insert_property(
             boa_engine::js_string!("defaultPrevented"),
             pd(JsValue::from(false)),
@@ -818,6 +828,19 @@ impl JsRuntime {
             .global_object()
             .get(boa_engine::js_string!("document"), &mut self.ctx)
             .unwrap_or(JsValue::null());
+        // DOM: currentTarget is the document for document-level listeners
+        // (round-2 S2: it still pointed at the click target here).
+        if let Some(ev_obj) = click_event_value.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(this_val.clone())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+        }
         for cb in handlers {
             let Some(f) = cb.as_object() else { continue };
             // DOM: function or object with `handleEvent`.
@@ -24116,6 +24139,55 @@ mod event_object_polish_tests {
             out_of(&doc),
             "type=click tgt=btn cur=btn pd=function dp=false",
             "the click event must carry target/currentTarget/preventDefault"
+        );
+    }
+
+    /// Round-2 S2/S3: (a) e.target is the STABLE handle (=== the prefetched
+    /// getElementById handle); (b) currentTarget is the node WHOSE listener
+    /// runs — the ancestor handler sees the ancestor, the document handler
+    /// sees document (a static copy of the click target lied to both).
+    #[test]
+    fn fire_click_current_target_tracks_the_listening_node() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="host"><div id="btn">B</div></div><div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            var log = [];
+            btn.addEventListener('click', function (e) {
+                log.push('btn:tgt===' + (e.target === btn) +
+                    ' cur=btn:' + (e.currentTarget === btn));
+            });
+            var host = document.getElementById('host');
+            host.addEventListener('click', function (e) {
+                log.push('host:cur=host:' + (e.currentTarget === host) +
+                    ' tgt=btn:' + (e.target === btn));
+            });
+            document.addEventListener('click', function (e) {
+                log.push('doc:cur=doc:' + (e.currentTarget === document));
+                // fire_click runs AFTER the script, so the last handler
+                // publishes the collected log.
+                document.getElementById('out').setText(log.join(' '));
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(
+            out_of(&doc),
+            "btn:tgt===true cur=btn:true host:cur=host:true tgt=btn:true doc:cur=doc:true",
+            "currentTarget must track the listening node; target must be the stable handle"
         );
     }
 
