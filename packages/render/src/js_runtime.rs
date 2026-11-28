@@ -308,6 +308,15 @@ impl JsRuntime {
         install_timers(&mut ctx, &bridge);
         install_event_api(&mut ctx);
         install_dom_globals(&mut ctx);
+        // Sweep the document surface non-enumerable (install_document's
+        // ObjectInitializer installs its members enumerable).
+        if let Ok(doc_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("document"), &mut ctx)
+            && let Some(doc_obj) = doc_val.as_object()
+        {
+            populate_enumerable_sweep(&doc_obj, &mut ctx);
+        }
         install_webrtc_stubs(&mut ctx);
         Self {
             ctx,
@@ -1222,6 +1231,10 @@ impl JsRuntime {
                 let _ = doc_obj.insert_property(boa_engine::js_string!("body"), pd(handle));
             }
         }
+        // The re-installed documentElement/head/body handles (and everything
+        // else on the document object) must stay non-enumerable — sweep the
+        // document surface after the (re)install.
+        populate_enumerable_sweep(&doc_obj, &mut self.ctx);
     }
 
     /// Count red pixels across all canvas buffers (for testing).
@@ -10928,9 +10941,6 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 return Err(boa_engine::JsNativeError::typ()
                     .with_message("InvalidCharacterError: The string contains an invalid character")
                     .into());
-                return Err(boa_engine::JsNativeError::typ()
-                    .with_message("InvalidCharacterError: The string contains an invalid character")
-                    .into());
             }
             // Special-case <canvas>: allocate via thread_local and return a handle.
             if tag == "canvas" {
@@ -12874,12 +12884,18 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let _ = global.insert_property(
         boa_engine::js_string!("document"),
         boa_engine::property::PropertyDescriptor::builder()
-            .value(document)
+            .value(document.clone())
             .writable(true)
             .enumerable(false)
             .configurable(true)
             .build(),
     );
+    // DOM: `Object.keys(document)` is empty in browsers — every document
+    // interface member is non-enumerable. The ObjectInitializer above
+    // installs them all enumerable(true), so sweep the surface here
+    // (populate_doc_elements may add more later; the rebind path sweeps
+    // again after it).
+    populate_enumerable_sweep(&document, ctx);
     Ok(())
 }
 
@@ -25118,6 +25134,82 @@ mod populate_props_enumerable_tests {
             "text=X id=d cls=c dx=1 attrs=3 kids=1 parent=1 pe=1 append=1 rm=1 \
              hasAttr=true clone=d accBad= accAbsent=",
             "every member must keep working after the enumerable sweep"
+        );
+    }
+}
+
+#[cfg(test)]
+mod document_enumerable_tests {
+    //! R2 of PR #118 quantified: for..in over the global `document` leaked
+    //! 34 enumerable own props (every install_document ObjectInitializer
+    //! member is Attribute::all() = enumerable). Browsers: `Object.keys(
+    //! document)` is empty. The document surface is now swept at the end of
+    //! install_document, after populate_doc_elements (rebind), and on the
+    //! initial path.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="d">D</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    #[test]
+    fn document_surface_yields_nothing_to_for_in() {
+        let out = run(r#"
+            var own = Object.keys(document);
+            var leaked = [];
+            for (var k in document) { leaked.push(k); }
+            var r = [];
+            r.push('own=' + own.length);
+            r.push('forin=' + leaked.length);
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out, "own=0 forin=0",
+            "the document must yield nothing to for..in / Object.keys"
+        );
+    }
+
+    /// The sweep must not break any member: body/head/documentElement
+    /// handles, creation factories, the instanceof chain.
+    #[test]
+    fn document_members_still_work_after_the_sweep() {
+        let out = run(r#"
+            var r = [];
+            r.push('body=' + (document.body && document.body.nodeType));
+            r.push('elem=' + (document.documentElement && document.documentElement.nodeType));
+            r.push('create=' + (typeof document.createElement));
+            r.push('qsa=' + (typeof document.querySelectorAll));
+            r.push('ctn=' + (typeof document.createTextNode));
+            r.push('docNode=' + (document instanceof Node));
+            r.push('docDoc=' + (document instanceof Document));
+            r.push('docElem=' + (document instanceof Element));
+            var made = document.createElement('span');
+            r.push('made=' + (made && made.nodeType));
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out,
+            "body=1 elem=1 create=function qsa=function ctn=function \
+             docNode=true docDoc=true docElem=false made=1",
+            "every document member must keep working after the sweep"
         );
     }
 }
