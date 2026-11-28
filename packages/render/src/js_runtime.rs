@@ -3157,7 +3157,7 @@ fn install_event_api(ctx: &mut Context) {
             boa_engine::js_string!("prototype"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(event_proto))
-                .writable(true)
+                .writable(false)
                 .enumerable(false)
                 .configurable(false)
                 .build(),
@@ -3313,7 +3313,7 @@ fn install_event_api(ctx: &mut Context) {
             boa_engine::js_string!("prototype"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(ce_proto))
-                .writable(true)
+                .writable(false)
                 .enumerable(false)
                 .configurable(false)
                 .build(),
@@ -3332,6 +3332,16 @@ fn install_event_api(ctx: &mut Context) {
                 .build()
         };
         let obj = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+        // [[Prototype]] = EventTarget.prototype — instanceof now works.
+        if let Ok(ctor_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("EventTarget"), ctx)
+            && let Some(ctor_obj) = ctor_val.as_object()
+            && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
+            && let Some(proto) = proto_val.as_object()
+        {
+            let _ = obj.set_prototype(Some(proto));
+        }
         // The three methods used to be stubs: add/remove discarded their
         // arguments and dispatchEvent always returned true, so a listener on
         // a self-made EventTarget never ran (L940 follow-up). They now keep
@@ -3589,6 +3599,38 @@ fn install_event_api(ctx: &mut Context) {
         Ok(obj.into())
     });
     let _ = ctx.register_global_callable(boa_engine::js_string!("EventTarget"), 0, et_ctor);
+    // `x instanceof EventTarget` previously THREW ("function has non-object
+    // prototype in instanceof check"): register_global_callable does not
+    // create a `.prototype` object. Create one with the ECMA-262 descriptors:
+    // `X.prototype` is non-writable/non-enumerable/non-configurable, while
+    // `X.prototype.constructor` is writable/non-enumerable/CONFIGURABLE
+    // (ECMA-262 §10.2.5 / §17.4.1.2 — round-2 S3 caught the flag).
+    {
+        let global = ctx.global_object();
+        if let Ok(ctor_val) = global.get(boa_engine::js_string!("EventTarget"), &mut *ctx)
+            && let Some(ctor_obj) = ctor_val.as_object()
+        {
+            let proto = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
+            let _ = proto.insert_property(
+                boa_engine::js_string!("constructor"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(ctor_obj.clone()))
+                    .writable(true)
+                    .enumerable(false)
+                    .configurable(true)
+                    .build(),
+            );
+            let _ = ctor_obj.insert_property(
+                boa_engine::js_string!("prototype"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(proto))
+                    .writable(false)
+                    .enumerable(false)
+                    .configurable(false)
+                    .build(),
+            );
+        }
+    }
 
     // Event constants on the Event constructor object itself.
     // (Already set as properties on each Event instance above.)
@@ -7249,8 +7291,12 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
-        // Use the .prototype already created by register_global_callable.
-        // Just add constructor back-reference if not present.
+        // NOTE: `register_global_callable` does NOT create a `.prototype`
+        // object (boa's FunctionObjectBuilder has no MakeConstructor), so this
+        // block silently no-ops for every interface constructor whose
+        // prototype was never built — the exact misconception that made
+        // `instanceof EventTarget` throw (PR #115). Building them is a
+        // separate, larger change.
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
             if let Some(ctor_obj) = ctor_val.as_object() {
@@ -24628,5 +24674,81 @@ mod event_api_surface_tests {
             document.getElementById('out').setText('len=' + log.length + ' ' + err);
             "#);
         assert_eq!(out, "len=0 ", "window.removeEventListener must remove");
+    }
+}
+
+#[cfg(test)]
+mod eventtarget_instanceof_tests {
+    //! `new EventTarget() instanceof EventTarget` THREW "function has
+    //! non-object prototype in instanceof check" — register_global_callable
+    //! does not create a `.prototype` object. EventTarget.prototype now
+    //! exists (with the constructor back-reference) and minted targets use it
+    //! as [[Prototype]].
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn eventtarget_instanceof_and_prototype() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var r = [];
+            r.push('et=' + (new EventTarget() instanceof EventTarget));
+            r.push('proto=' + (typeof EventTarget.prototype));
+            r.push('ctor=' + (EventTarget.prototype.constructor === EventTarget));
+            // Non-permissive: a plain object and an Event are NOT EventTargets.
+            r.push('plain=' + (({}) instanceof EventTarget));
+            r.push('ev=' + (new Event('x') instanceof EventTarget));
+            // An EventTarget still dispatches after the prototype change.
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('old', function () { log.push('O'); });
+            t.dispatchEvent(new Event('old'));
+            r.push('dispatched=' + (log.length === 1));
+            // KNOWN LIMIT (round-2 S2, pinned so it is documented rather than
+            // silent): the methods are OWN properties of each minted target,
+            // not on the prototype — so `Object.create(EventTarget.prototype)`
+            // is instanceof-correct but has no addEventListener (the canonical
+            // polyfill idiom does not work). Moving them to the prototype is a
+            // separate refactor.
+            var derived = Object.create(EventTarget.prototype);
+            r.push('derivedIsof=' + (derived instanceof EventTarget));
+            r.push('protoMth=' + (typeof EventTarget.prototype.addEventListener));
+            // ECMA-262: prototype.constructor is CONFIGURABLE.
+            var cd = Object.getOwnPropertyDescriptor(EventTarget.prototype, 'constructor');
+            r.push('ctorCfg=' + cd.configurable);
+            // FAMILY CONSISTENCY (round-5 S3): Event / CustomEvent /
+            // EventTarget must agree on the `prototype` descriptor —
+            // PR #114 wrote writable(true) for Event/CustomEvent while
+            // EventTarget is spec-correct writable(false). Three-way pinned.
+            var pw = function (C) {
+                return Object.getOwnPropertyDescriptor(C, 'prototype').writable;
+            };
+            r.push('pw=' + pw(Event) + '/' + pw(CustomEvent) + '/' + pw(EventTarget));
+            document.getElementById('out').setText(r.join(' '));
+        "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "et=true proto=object ctor=true plain=false ev=false dispatched=true \
+             derivedIsof=true protoMth=undefined ctorCfg=true pw=false/false/false",
+            "EventTarget instanceof must work and stay non-permissive"
+        );
     }
 }
