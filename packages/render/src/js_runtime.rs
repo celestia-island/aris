@@ -11557,15 +11557,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                 bb.query_by_tag.get(&sel).copied()
             };
             drop(bb);
-            if let Some(nid) = nid {
-                let snap = b.borrow().node_props.get(&nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                }
-                Ok(handle.into())
-            } else {
-                Ok(JsValue::null())
+            // Route through the handle cache (L940, PR #104 R2): a fresh
+            // handle per call made this lookup's listeners invisible to a
+            // later `getElementById` / `querySelector` fetch, so register-
+            // then-dispatch silently never fired.
+            match nid {
+                Some(nid) => Ok(cached_element_handle(nid, b, ctx)?.into()),
+                None => Ok(JsValue::null()),
             }
         },
         Gc::clone(&bridge),
@@ -11595,11 +11593,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .build()
             };
             for (i, nid) in matching.iter().enumerate() {
-                let snap = b.borrow().node_props.get(nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                    set_element_prototype(&handle, &s.tag_name, ctx);
+                // Same cache as getElementById / querySelector (L940, PR
+                // #104 R2): a fresh handle per call made this lookup's
+                // listeners invisible to a later fetch.
+                let tag = b.borrow().node_props.get(nid).map(|s| s.tag_name.clone());
+                let handle = cached_element_handle(*nid, b, ctx)?;
+                if let Some(tag) = tag {
+                    set_element_prototype(&handle, &tag, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
             }
@@ -11658,11 +11658,13 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .build()
             };
             for (i, nid) in matching.iter().enumerate() {
-                let snap = b.borrow().node_props.get(nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                    set_element_prototype(&handle, &s.tag_name, ctx);
+                // Same cache as getElementById / querySelector (L940, PR
+                // #104 R2): a fresh handle per call made this lookup's
+                // listeners invisible to a later fetch.
+                let tag = b.borrow().node_props.get(nid).map(|s| s.tag_name.clone());
+                let handle = cached_element_handle(*nid, b, ctx)?;
+                if let Some(tag) = tag {
+                    set_element_prototype(&handle, &tag, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
             }
@@ -15465,11 +15467,13 @@ fn make_element_handle(
                     .build()
             };
             for (i, nid) in matching.iter().enumerate() {
-                let snap = b.borrow().node_props.get(nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                    set_element_prototype(&handle, &s.tag_name, ctx);
+                // Same cache as getElementById / querySelector (L940, PR
+                // #104 R2): a fresh handle per call made this lookup's
+                // listeners invisible to a later fetch.
+                let tag = b.borrow().node_props.get(nid).map(|s| s.tag_name.clone());
+                let handle = cached_element_handle(*nid, b, ctx)?;
+                if let Some(tag) = tag {
+                    set_element_prototype(&handle, &tag, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
             }
@@ -15562,11 +15566,13 @@ fn make_element_handle(
                     .build()
             };
             for (i, nid) in matching.iter().enumerate() {
-                let snap = b.borrow().node_props.get(nid).cloned();
-                let handle = make_element_handle(ctx, Gc::clone(b), *nid, None)?;
-                if let Some(s) = snap {
-                    populate_props(&handle, &s, Gc::clone(b), ctx);
-                    set_element_prototype(&handle, &s.tag_name, ctx);
+                // Same cache as getElementById / querySelector (L940, PR
+                // #104 R2): a fresh handle per call made this lookup's
+                // listeners invisible to a later fetch.
+                let tag = b.borrow().node_props.get(nid).map(|s| s.tag_name.clone());
+                let handle = cached_element_handle(*nid, b, ctx)?;
+                if let Some(tag) = tag {
+                    set_element_prototype(&handle, &tag, ctx);
                 }
                 let _ = arr.insert_property(i as u32, pd(handle.into()));
             }
@@ -22377,6 +22383,130 @@ mod stable_handle_identity_tests {
         assert_eq!(
             out, "n=1",
             "the removed listener must not fire on the second dispatch"
+        );
+    }
+}
+
+#[cfg(test)]
+mod selector_handle_cache_tests {
+    //! L940 (PR #104 R2): only `getElementById` was routed through the handle
+    //! cache, so `querySelector` and the `getElementsBy*` lookups still minted
+    //! a fresh handle per call and their listeners stayed invisible to a later
+    //! fetch — the same defect class #104 fixed for one entry point.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el" class="kel">E</div><span id="sp" class="ksp">S</span><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// `querySelector` and `getElementById` must yield the SAME object.
+    #[test]
+    fn query_selector_matches_get_element_by_id() {
+        let out = run(r#"
+            var a = document.getElementById('el');
+            var b = document.querySelector('#el');
+            document.getElementById('out').setText('same=' + (a === b));
+            "#);
+        assert_eq!(out, "same=true", "both lookups must return one handle");
+    }
+
+    /// A listener registered through `querySelector` must be visible to a
+    /// dispatch through `getElementById` (and vice versa).
+    #[test]
+    fn query_selector_listener_survives_a_second_fetch() {
+        let out = run(r#"
+            var n = 0;
+            document.querySelector('#el').addEventListener('ping', function(){ n++; });
+            document.getElementById('el').dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(
+            out, "n=1",
+            "the listener must survive a different entry point"
+        );
+    }
+
+    /// Same for `getElementsByClassName`.
+    #[test]
+    fn get_elements_by_class_name_shares_the_handle() {
+        // Round-2 S2: register AND dispatch through the SAME by-class lookup,
+        // so reverting the by-class call site to a fresh handle is caught
+        // here (at af2fbe4 this test dispatched via getElementById and a
+        // revert of the by-class site survived).
+        let out = run(r#"
+            var n = 0;
+            var viaClass = document.getElementsByClassName('kel')[0];
+            viaClass.addEventListener('ping', function(){ n++; });
+            viaClass.dispatchEvent({ type: 'ping' });
+            document.getElementById('el').dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(
+            out, "n=2",
+            "both dispatches must reach the one registration"
+        );
+    }
+
+    /// Same for `getElementsByTagName`.
+    #[test]
+    fn get_elements_by_tag_name_shares_the_handle() {
+        let out = run(r#"
+            var n = 0;
+            // Resolve the index by id so the test does not depend on
+            // collection order (that ordering is a separate, pre-existing
+            // concern); the point is that the SAME handle is returned.
+            var list = document.getElementsByTagName('div');
+            var target = null;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === 'el') target = list[i];
+            }
+            target.addEventListener('ping', function(){ n++; });
+            document.getElementById('el').dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(out, "n=1", "the by-tag lookup must share the handle too");
+    }
+
+    /// The prototype must still be set on handles returned from the
+    /// collection lookups (they used to call set_element_prototype).
+    #[test]
+    fn collection_lookups_still_carry_their_prototype() {
+        // Resolve BY ID: the collection order is hash-based and not stable
+        // across runs (round-2 S1-b of PR #105) — indexing [0] pins whatever
+        // element the hash happens to yield, not the one this test names.
+        let out = run(r#"
+            var list = document.getElementsByClassName('kel');
+            var el = null;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === 'el') el = list[i];
+            }
+            document.getElementById('out').setText(
+                'found=' + (el !== null) +
+                ' tag=' + (el && el.tagName) +
+                ' id=' + (el && el.id)
+            );
+            "#);
+        assert_eq!(
+            out, "found=true tag=DIV id=el",
+            "the collection handle for #el must be populated"
         );
     }
 }
