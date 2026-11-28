@@ -23756,9 +23756,10 @@ mod stop_propagation_tests {
         );
     }
 
-    /// Round-4 S3: the ELEMENT dispatch clear is pinned separately — the
-    /// EventTarget-path test cannot see this block (its mutation left 205
-    /// green).
+    /// Round-4 S3: the ELEMENT dispatch clear (the flat block inside
+    /// `make_element_handle`'s `dispatchEvent`, ~14541) is pinned separately
+    /// — the EventTarget-path test (`new EventTarget()`, block ~3279) cannot
+    /// see it. Each of the three clear blocks has exactly one test.
     #[test]
     fn element_dispatch_reused_event_starts_clean() {
         let out = run(r#"
@@ -23781,7 +23782,8 @@ mod stop_propagation_tests {
         );
     }
 
-    /// Round-4 S3: the DOCUMENT dispatch clear is pinned separately.
+    /// Round-4 S3: the DOCUMENT dispatch clear (the indented block in the
+    /// document's `disp_ev`, ~12282) is pinned separately.
     #[test]
     fn document_dispatch_reused_event_starts_clean() {
         let out = run(r#"
