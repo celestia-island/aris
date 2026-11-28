@@ -7499,7 +7499,7 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), isn_fn).build())
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7603,7 +7603,7 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ien_fn).build())
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7644,7 +7644,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7679,7 +7679,7 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), grn_fn).build())
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7715,7 +7715,7 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::property::PropertyDescriptor::builder()
                 .value(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), hcn_fn).build())
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7739,7 +7739,7 @@ fn install_dom_globals(ctx: &mut Context) {
             boa_engine::js_string!("parentElement"),
             boa_engine::property::PropertyDescriptor::builder()
                 .get(boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pe_get).build())
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7892,7 +7892,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7917,7 +7917,7 @@ fn install_dom_globals(ctx: &mut Context) {
                     .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7977,7 +7977,7 @@ fn install_dom_globals(ctx: &mut Context) {
                     .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -7994,7 +7994,7 @@ fn install_dom_globals(ctx: &mut Context) {
                     .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -8008,7 +8008,7 @@ fn install_dom_globals(ctx: &mut Context) {
                         .build(),
                 )
                 .writable(true)
-                .enumerable(true)
+                .enumerable(false)
                 .configurable(true)
                 .build(),
         );
@@ -24880,6 +24880,65 @@ mod element_prototype_tests {
              docNode=true docDoc=true docElem=false ctorE=true ctorLeak=0",
             "the element prototype chain must resolve by identity, include the \
              document, and not leak constructor"
+        );
+    }
+}
+
+#[cfg(test)]
+mod node_proto_enumerable_tests {
+    //! The 11 Node.prototype methods/accessors (isSameNode, isEqualNode,
+    //! contains, getRootNode, hasChildNodes, parentElement, normalize,
+    //! cloneNode, lookupNamespaceURI, lookupPrefix, isDefaultNamespace) were
+    //! installed enumerable(true) — DOM prototype members must be
+    //! non-enumerable, and for..in over an element leaked every name (PR #116
+    //! recorded the leak while pinning `constructor`).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree().iter().find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content())).unwrap_or_default().unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="d">D</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    #[test]
+    fn node_prototype_members_are_non_enumerable() {
+        let out = run(r#"
+            var names = ['isSameNode','isEqualNode','contains','getRootNode','hasChildNodes',
+                'parentElement','normalize','cloneNode','lookupNamespaceURI','lookupPrefix','isDefaultNamespace'];
+            var r = [];
+            var bad = [];
+            for (var i = 0; i < names.length; i++) {
+                var d = Object.getOwnPropertyDescriptor(Node.prototype, names[i]);
+                if (!d) { bad.push(names[i] + ':absent'); continue; }
+                if (d.enumerable) bad.push(names[i] + ':enum');
+            }
+            r.push('bad=' + bad.length);
+            // for..in over Node.prototype must yield nothing enumerable.
+            var leaked = [];
+            for (var k in Node.prototype) { leaked.push(k); }
+            r.push('nodeLeak=' + leaked.length);
+            // The methods still WORK (non-enumerable != absent).
+            var d = document.getElementById('d');
+            r.push('hasChild=' + d.hasChildNodes());
+            r.push('contains=' + d.contains(d));
+            document.getElementById('out').setText(r.join(' '));
+        "#);
+        assert_eq!(
+            out,
+            "bad=0 nodeLeak=0 hasChild=true contains=true",
+            "Node.prototype members must be non-enumerable and still functional"
         );
     }
 }
