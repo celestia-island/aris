@@ -3157,7 +3157,7 @@ fn install_event_api(ctx: &mut Context) {
             boa_engine::js_string!("prototype"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(event_proto))
-                .writable(true)
+                .writable(false)
                 .enumerable(false)
                 .configurable(false)
                 .build(),
@@ -3313,7 +3313,7 @@ fn install_event_api(ctx: &mut Context) {
             boa_engine::js_string!("prototype"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(ce_proto))
-                .writable(true)
+                .writable(false)
                 .enumerable(false)
                 .configurable(false)
                 .build(),
@@ -7291,8 +7291,12 @@ fn install_dom_globals(ctx: &mut Context) {
         );
         let _ = ctx.register_global_callable(boa_engine::js_string!(name), 0, ctor_fn);
 
-        // Use the .prototype already created by register_global_callable.
-        // Just add constructor back-reference if not present.
+        // NOTE: `register_global_callable` does NOT create a `.prototype`
+        // object (boa's FunctionObjectBuilder has no MakeConstructor), so this
+        // block silently no-ops for every interface constructor whose
+        // prototype was never built — the exact misconception that made
+        // `instanceof EventTarget` throw (PR #115). Building them is a
+        // separate, larger change.
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
             if let Some(ctor_obj) = ctor_val.as_object() {
@@ -24729,13 +24733,21 @@ mod eventtarget_instanceof_tests {
             // ECMA-262: prototype.constructor is CONFIGURABLE.
             var cd = Object.getOwnPropertyDescriptor(EventTarget.prototype, 'constructor');
             r.push('ctorCfg=' + cd.configurable);
+            // FAMILY CONSISTENCY (round-5 S3): Event / CustomEvent /
+            // EventTarget must agree on the `prototype` descriptor —
+            // PR #114 wrote writable(true) for Event/CustomEvent while
+            // EventTarget is spec-correct writable(false). Three-way pinned.
+            var pw = function (C) {
+                return Object.getOwnPropertyDescriptor(C, 'prototype').writable;
+            };
+            r.push('pw=' + pw(Event) + '/' + pw(CustomEvent) + '/' + pw(EventTarget));
             document.getElementById('out').setText(r.join(' '));
         "#,
         );
         assert_eq!(
             out_of(&doc),
             "et=true proto=object ctor=true plain=false ev=false dispatched=true \
-             derivedIsof=true protoMth=undefined ctorCfg=true",
+             derivedIsof=true protoMth=undefined ctorCfg=true pw=false/false/false",
             "EventTarget instanceof must work and stay non-permissive"
         );
     }
