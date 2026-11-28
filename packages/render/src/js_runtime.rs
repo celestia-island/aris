@@ -7315,6 +7315,11 @@ fn install_dom_globals(ctx: &mut Context) {
                     obj.insert_property(boa_engine::js_string!("head"), pd_doc(JsValue::null()));
                 let _ =
                     obj.insert_property(boa_engine::js_string!("body"), pd_doc(JsValue::null()));
+                // DOM: `Object.keys(doc)` is empty in browsers — sweep the
+                // instance surface non-enumerable (round-2 S3 of PR #119:
+                // `new Document()` instances were the last unswept members
+                // of the document family).
+                populate_enumerable_sweep(&obj, ctx);
                 Ok(obj.into())
             },
             name_for_proto,
@@ -25203,12 +25208,20 @@ mod document_enumerable_tests {
             r.push('docElem=' + (document instanceof Element));
             var made = document.createElement('span');
             r.push('made=' + (made && made.nodeType));
+            // Round-2 S3: `new Document()` instances are part of the
+            // document family — swept like the global.
+            var nd = new Document();
+            var ndOwn = Object.keys(nd);
+            r.push('nd=' + (nd && nd.nodeType));
+            r.push('ndOwn=' + ndOwn.length);
+            r.push('ndNode=' + (nd instanceof Node));
             document.getElementById('out').setText(r.join(' '));
         "#);
         assert_eq!(
             out,
             "body=1 elem=1 create=function qsa=function ctn=function \
-             docNode=true docDoc=true docElem=false made=1",
+             docNode=true docDoc=true docElem=false made=1 \
+             nd=9 ndOwn=0 ndNode=true",
             "every document member must keep working after the sweep"
         );
     }
