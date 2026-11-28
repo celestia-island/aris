@@ -141,8 +141,13 @@ struct Bridge {
     /// that seeds a `_children` array of every child) on EVERY sibling hop
     /// turned a 49-hop walk from 13 ms into 13 s.
     walk_handle_cache: HashMap<u64, JsObject>,
-    query_by_tag: HashMap<String, u64>,
-    query_by_class: HashMap<String, u64>,
+    /// tag -> the matching node ids IN TREE ORDER (an HTMLCollection is
+    /// document-ordered, and a per-key single id made `[0]` hash-dependent —
+    /// L940, PR #105 R2). `querySelector` reads `.first()`.
+    query_by_tag: HashMap<String, Vec<u64>>,
+    /// class token -> matching node ids IN TREE ORDER (see query_by_tag).
+    query_by_class: HashMap<String, Vec<u64>>,
+    /// id attr -> node id (ids are unique, one entry each).
     query_by_id: HashMap<String, u64>,
     /// Snapshot of node properties: node_id → (tag_name, text_content, id_attr, class_attr, node_type)
     node_props: HashMap<u64, NodePropSnapshot>,
@@ -1482,14 +1487,20 @@ fn collect_node_props(doc: &BaseDocument) -> HashMap<u64, NodePropSnapshot> {
 fn collect_query_index(
     doc: &BaseDocument,
 ) -> (
-    HashMap<String, u64>,
-    HashMap<String, u64>,
+    HashMap<String, Vec<u64>>,
+    HashMap<String, Vec<u64>>,
     HashMap<String, u64>,
 ) {
-    let mut by_tag = HashMap::new();
-    let mut by_class = HashMap::new();
+    // by_tag / by_class accumulate a LIST per key in TREE ORDER (this loop
+    // walks doc.tree() in document order), which is what HTMLCollection
+    // semantics require. PR #105's R2 measured the previous single-id form as
+    // hash-order-nondeterministic: `getElementsByClassName(cls)[0]` differed
+    // across runs.
+    let mut by_tag: HashMap<String, Vec<u64>> = HashMap::new();
+    let mut by_class: HashMap<String, Vec<u64>> = HashMap::new();
     let mut by_id = HashMap::new();
     for (id, node) in doc.tree().iter() {
+        let nid = id.as_u64();
         if let Some(el) = node.element_data() {
             let dbg = format!("{:?}", el.name.local);
             let tag = if let Some(rest) = dbg.strip_prefix("Atom('") {
@@ -1501,15 +1512,15 @@ fn collect_query_index(
             } else {
                 String::new()
             };
-            by_tag.entry(tag).or_insert(id.as_u64());
+            by_tag.entry(tag).or_default().push(nid);
             if let Some(cls) = node.attr(local_name!("class")) {
                 for c in cls.split_whitespace() {
-                    by_class.entry(c.to_string()).or_insert(id.as_u64());
+                    by_class.entry(c.to_string()).or_default().push(nid);
                 }
             }
         }
         if let Some(id_attr) = node.attr(local_name!("id")) {
-            by_id.entry(id_attr.to_string()).or_insert(id.as_u64());
+            by_id.entry(id_attr.to_string()).or_insert(nid);
         }
     }
     (by_tag, by_class, by_id)
@@ -11582,9 +11593,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let nid = if let Some(id) = sel.strip_prefix('#') {
                 bb.query_by_id.get(id).copied()
             } else if let Some(cls) = sel.strip_prefix('.') {
-                bb.query_by_class.get(cls).copied()
+                // querySelector takes the FIRST match in tree order.
+                bb.query_by_class.get(cls).and_then(|v| v.first()).copied()
             } else {
-                bb.query_by_tag.get(&sel).copied()
+                bb.query_by_tag.get(&sel).and_then(|v| v.first()).copied()
             };
             drop(bb);
             // Route through the handle cache (L940, PR #104 R2): a fresh
@@ -11603,15 +11615,18 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let doc_by_tag = NativeFunction::from_copy_closure_with_captures(
         move |_this, args, b, ctx| {
             let tag = arg_string(args, 0).to_lowercase();
+            // TREE-ORDER index (L940, PR #105 R2): node_props hash order made
+            // `[0]` differ across runs. `*` still returns every element, also
+            // in order.
             let bb = b.borrow();
-            let matching: Vec<u64> = bb
-                .node_props
-                .iter()
-                .filter(|(_, s)| {
-                    s.node_type == 1 && (tag == "*" || s.tag_name.to_lowercase() == tag)
-                })
-                .map(|(&id, _)| id)
-                .collect();
+            let matching: Vec<u64> = if tag == "*" {
+                bb.query_by_tag
+                    .values()
+                    .flat_map(|v| v.iter().copied())
+                    .collect()
+            } else {
+                bb.query_by_tag.get(&tag).cloned().unwrap_or_default()
+            };
             drop(bb);
             let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let pd = |val: JsValue| {
@@ -11668,15 +11683,10 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let doc_by_class = NativeFunction::from_copy_closure_with_captures(
         move |_this, args, b, ctx| {
             let cls = arg_string(args, 0);
+            // TREE-ORDER index (see doc_by_tag above): node_props hash order
+            // made `[0]` differ across runs (L940, PR #105 R2).
             let bb = b.borrow();
-            let matching: Vec<u64> = bb
-                .node_props
-                .iter()
-                .filter(|(_, s)| {
-                    s.node_type == 1 && s.class_name.split_whitespace().any(|c| c == cls)
-                })
-                .map(|(&id, _)| id)
-                .collect();
+            let matching: Vec<u64> = bb.query_by_class.get(&cls).cloned().unwrap_or_default();
             drop(bb);
             let arr = boa_engine::object::JsObject::with_object_proto(ctx.intrinsics());
             let pd = |val: JsValue| {
@@ -15486,16 +15496,26 @@ fn make_element_handle(
             // modes and would not compile.)
             let ancestor: u64 = read_handle_id(this).unwrap_or(0);
             let bb = b.borrow();
-            let mut matching: Vec<u64> = Vec::new();
-            for (cand, s) in bb.node_props.iter() {
-                let cand_id = *cand;
-                if s.node_type != 1 || (tag != "*" && s.tag_name.to_lowercase() != tag) {
-                    continue;
-                }
-                if ancestor != 0 && snapshot_is_descendant_of(cand_id, ancestor, &bb.node_props) {
-                    matching.push(cand_id);
-                }
-            }
+            // TREE-ORDER index, scoped to this element's descendants.
+            let mut matching: Vec<u64> = if tag == "*" {
+                bb.query_by_tag
+                    .values()
+                    .flat_map(|v| v.iter().copied())
+                    .filter(|&nid| {
+                        ancestor == 0 || snapshot_is_descendant_of(nid, ancestor, &bb.node_props)
+                    })
+                    .collect()
+            } else {
+                bb.query_by_tag
+                    .get(&tag)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|&nid| {
+                        ancestor == 0 || snapshot_is_descendant_of(nid, ancestor, &bb.node_props)
+                    })
+                    .collect()
+            };
             drop(bb);
             // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
             // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
@@ -15591,20 +15611,27 @@ fn make_element_handle(
             // modes and would not compile.)
             let ancestor: u64 = read_handle_id(this).unwrap_or(0);
             let bb = b.borrow();
-            let mut matching: Vec<u64> = Vec::new();
-            for (cand, s) in bb.node_props.iter() {
-                let cand_id = *cand;
-                if s.node_type != 1
-                    || !wanted
-                        .iter()
-                        .all(|w| s.class_name.split_whitespace().any(|c| c == *w))
-                {
-                    continue;
+            // TREE-ORDER index scoped to this element's descendants.
+            let mut matching: Vec<u64> = {
+                let mut lists: Vec<&Vec<u64>> = wanted
+                    .iter()
+                    .filter_map(|w| bb.query_by_class.get(*w))
+                    .collect();
+                match lists.len() {
+                    0 => Vec::new(),
+                    _ => {
+                        let first = lists.remove(0).clone();
+                        first
+                            .into_iter()
+                            .filter(|&nid| {
+                                ancestor == 0
+                                    || snapshot_is_descendant_of(nid, ancestor, &bb.node_props)
+                            })
+                            .filter(|&nid| lists.iter().all(|l| l.contains(&nid)))
+                            .collect()
+                    }
                 }
-                if ancestor != 0 && snapshot_is_descendant_of(cand_id, ancestor, &bb.node_props) {
-                    matching.push(cand_id);
-                }
-            }
+            };
             drop(bb);
             // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
             // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
@@ -22631,5 +22658,119 @@ mod element_scoped_collections_tests {
             document.getElementById('out').setText(txt);
             "#);
         assert_eq!(out, "in-p", "the scoped lookup must return the in-#p span");
+    }
+}
+
+#[cfg(test)]
+mod collection_order_tests {
+    //! L940 (PR #105 R2): the collection lookups walked `node_props` (a
+    //! HashMap) in HASH ORDER, so `getElementsByClassName(cls)[0]` differed
+    //! across runs and was generally NOT the first match in document order.
+    //! The `query_by_tag` / `query_by_class` indexes now store id LISTS built
+    //! in TREE ORDER, and every collection read goes through them.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="first" class="k">F</div>
+            <div id="mid" class="k">M</div>
+            <div id="last" class="k">L</div>
+            <div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// `[0]` must be the FIRST element in DOCUMENT order, on repeated runs.
+    #[test]
+    fn by_class_index_zero_is_the_document_first() {
+        let out = run(r#"
+            var c = document.getElementsByClassName('k');
+            document.getElementById('out').setText('n=' + c.length + ' first=' + c[0].id);
+            "#);
+        assert_eq!(
+            out, "n=3 first=first",
+            "[0] must be the document-order first match"
+        );
+    }
+
+    /// And the full sequence must be in document order.
+    #[test]
+    fn by_class_sequence_is_document_order() {
+        let out = run(r#"
+            var c = document.getElementsByClassName('k');
+            var seq = [];
+            for (var i = 0; i < c.length; i++) { seq.push(c[i].id); }
+            document.getElementById('out').setText(seq.join(','));
+            "#);
+        assert_eq!(
+            out, "first,mid,last",
+            "the collection must be in document order"
+        );
+    }
+
+    /// Same for `getElementsByTagName`.
+    #[test]
+    fn by_tag_sequence_is_document_order() {
+        let out = run(r#"
+            var c = document.getElementsByTagName('div');
+            var seq = [];
+            for (var i = 0; i < c.length; i++) {
+                if (c[i].id) { seq.push(c[i].id); }
+            }
+            document.getElementById('out').setText(seq.join(','));
+            "#);
+        // #out is also a <div> and sits after #last in document order — its
+        // presence is CORRECT document ordering, not a regression.
+        assert_eq!(
+            out, "first,mid,last,out",
+            "the by-tag collection must be in document order"
+        );
+    }
+
+    /// querySelector takes the FIRST match in tree order.
+    #[test]
+    fn query_selector_returns_the_first_match() {
+        let out = run(r#"
+            var el = document.querySelector('.k');
+            document.getElementById('out').setText('id=' + el.id);
+            "#);
+        assert_eq!(out, "id=first", "querySelector must take the first match");
+    }
+
+    /// Determinism across repeated lookups: every read returns the same order.
+    #[test]
+    fn repeated_lookups_are_stable() {
+        let out = run(r#"
+            var s1 = [];
+            var c1 = document.getElementsByClassName('k');
+            for (var i = 0; i < c1.length; i++) { s1.push(c1[i].id); }
+            var s2 = [];
+            var c2 = document.getElementsByClassName('k');
+            for (var i = 0; i < c2.length; i++) { s2.push(c2[i].id); }
+            document.getElementById('out').setText(
+                (s1.join(',') === s2.join(',')) + '|' + s1.join(',')
+            );
+            "#);
+        assert_eq!(
+            out, "true|first,mid,last",
+            "repeated lookups must be stable"
+        );
     }
 }
