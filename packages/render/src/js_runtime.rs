@@ -23756,6 +23756,52 @@ mod stop_propagation_tests {
         );
     }
 
+    /// Round-4 S3: the ELEMENT dispatch clear is pinned separately — the
+    /// EventTarget-path test cannot see this block (its mutation left 205
+    /// green).
+    #[test]
+    fn element_dispatch_reused_event_starts_clean() {
+        let out = run(r#"
+            var log = [];
+            var el = document.getElementById('el');
+            el.addEventListener('ping', function () { log.push('E1'); });
+            el.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            el.addEventListener('ping', function () { log.push('E2'); });
+            var ev = new Event('ping');
+            el.dispatchEvent(ev);
+            el.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "E1SE1S",
+            "element dispatch must reset the flags per dispatch"
+        );
+    }
+
+    /// Round-4 S3: the DOCUMENT dispatch clear is pinned separately.
+    #[test]
+    fn document_dispatch_reused_event_starts_clean() {
+        let out = run(r#"
+            var log = [];
+            document.addEventListener('ping', function () { log.push('D1'); });
+            document.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            var ev = new Event('ping');
+            document.dispatchEvent(ev);
+            document.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "D1SD1S",
+            "document dispatch must reset the flags per dispatch"
+        );
+    }
+
     /// Control: WITHOUT stopPropagation the document listener fires.
     #[test]
     fn fire_click_without_stop_propagation_reaches_document() {
