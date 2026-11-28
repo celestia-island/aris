@@ -3601,8 +3601,10 @@ fn install_event_api(ctx: &mut Context) {
     let _ = ctx.register_global_callable(boa_engine::js_string!("EventTarget"), 0, et_ctor);
     // `x instanceof EventTarget` previously THREW ("function has non-object
     // prototype in instanceof check"): register_global_callable does not
-    // create a `.prototype` object. Create one (ECMA-262: writable +
-    // non-enumerable + non-configurable) and back-reference `constructor`.
+    // create a `.prototype` object. Create one with the ECMA-262 descriptors:
+    // `X.prototype` is non-writable/non-enumerable/non-configurable, while
+    // `X.prototype.constructor` is writable/non-enumerable/CONFIGURABLE
+    // (ECMA-262 §10.2.5 / §17.4.1.2 — round-2 S3 caught the flag).
     {
         let global = ctx.global_object();
         if let Ok(ctor_val) = global.get(boa_engine::js_string!("EventTarget"), &mut *ctx)
@@ -3615,7 +3617,7 @@ fn install_event_api(ctx: &mut Context) {
                     .value(JsValue::from(ctor_obj.clone()))
                     .writable(true)
                     .enumerable(false)
-                    .configurable(false)
+                    .configurable(true)
                     .build(),
             );
             let _ = ctor_obj.insert_property(
@@ -24715,12 +24717,25 @@ mod eventtarget_instanceof_tests {
             t.addEventListener('old', function () { log.push('O'); });
             t.dispatchEvent(new Event('old'));
             r.push('dispatched=' + (log.length === 1));
+            // KNOWN LIMIT (round-2 S2, pinned so it is documented rather than
+            // silent): the methods are OWN properties of each minted target,
+            // not on the prototype — so `Object.create(EventTarget.prototype)`
+            // is instanceof-correct but has no addEventListener (the canonical
+            // polyfill idiom does not work). Moving them to the prototype is a
+            // separate refactor.
+            var derived = Object.create(EventTarget.prototype);
+            r.push('derivedIsof=' + (derived instanceof EventTarget));
+            r.push('protoMth=' + (typeof EventTarget.prototype.addEventListener));
+            // ECMA-262: prototype.constructor is CONFIGURABLE.
+            var cd = Object.getOwnPropertyDescriptor(EventTarget.prototype, 'constructor');
+            r.push('ctorCfg=' + cd.configurable);
             document.getElementById('out').setText(r.join(' '));
         "#,
         );
         assert_eq!(
             out_of(&doc),
-            "et=true proto=object ctor=true plain=false ev=false dispatched=true",
+            "et=true proto=object ctor=true plain=false ev=false dispatched=true \
+             derivedIsof=true protoMth=undefined ctorCfg=true",
             "EventTarget instanceof must work and stay non-permissive"
         );
     }
