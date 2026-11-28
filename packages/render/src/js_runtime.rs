@@ -9172,6 +9172,36 @@ fn get_next_sibling(parent: &JsObject, child: &JsObject, ctx: &mut Context) -> O
     None
 }
 
+/// True when `nid` is a strict descendant of `ancestor_id`, walking the
+/// SNAPSHOT parent chain (round-5 S2 of PR #105: the element-level
+/// `getElementsBy*` lookups ignored `this` and returned whole-document
+/// matches). Handles fetched through the cache do not carry a real
+/// `parentNode` property, so the existing JS-level `is_descendant_of` cannot
+/// be used here.
+fn snapshot_is_descendant_of(
+    nid: u64,
+    ancestor_id: u64,
+    node_props: &std::collections::HashMap<u64, NodePropSnapshot>,
+) -> bool {
+    let mut cur = match node_props.get(&nid) {
+        Some(s) => s.parent_id,
+        None => return false,
+    };
+    for _ in 0..4096 {
+        if cur == ancestor_id {
+            return true;
+        }
+        if cur == 0 {
+            return false;
+        }
+        match node_props.get(&cur) {
+            Some(s) => cur = s.parent_id,
+            None => return false,
+        }
+    }
+    false
+}
+
 fn remove_from_children(parent: &JsObject, child: &JsObject, ctx: &mut Context) {
     let arr = get_or_create_children(parent, ctx);
     let len = arr.length(ctx).ok().unwrap_or(0) as u32;
@@ -15443,17 +15473,29 @@ fn make_element_handle(
 
     // getElementsByTagName — returns array of matching element handles.
     let by_tag = NativeFunction::from_copy_closure_with_captures(
-        |_this, args, b, ctx| {
+        |this, args, b, ctx| {
             let tag = arg_string(args, 0).to_lowercase();
+            // DOM: element.getElementsByTagName is scoped to THIS element's
+            // descendants (round-5 S2 of PR #105: it used to walk the whole
+            // document, so `#p.getElementsByTagName('span')` also returned
+            // spans outside `#p`).
+            // 0 = "no scope" sentinel: real node ids are never 0, so a
+            // missing `this` handle simply matches nothing extra. (Plain
+            // `match scope_id { Some(sid) => ... }` inside this filter
+            // closure bound `sid` as &u64 under edition-2024 default binding
+            // modes and would not compile.)
+            let ancestor: u64 = read_handle_id(this).unwrap_or(0);
             let bb = b.borrow();
-            let matching: Vec<u64> = bb
-                .node_props
-                .iter()
-                .filter(|(_, s)| {
-                    s.node_type == 1 && (tag == "*" || s.tag_name.to_lowercase() == tag)
-                })
-                .map(|(&id, _)| id)
-                .collect();
+            let mut matching: Vec<u64> = Vec::new();
+            for (cand, s) in bb.node_props.iter() {
+                let cand_id = *cand;
+                if s.node_type != 1 || (tag != "*" && s.tag_name.to_lowercase() != tag) {
+                    continue;
+                }
+                if ancestor != 0 && snapshot_is_descendant_of(cand_id, ancestor, &bb.node_props) {
+                    matching.push(cand_id);
+                }
+            }
             drop(bb);
             // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
             // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
@@ -15538,21 +15580,31 @@ fn make_element_handle(
 
     // getElementsByClassName — returns array of matching element handles.
     let by_class = NativeFunction::from_copy_closure_with_captures(
-        |_this, args, b, ctx| {
+        |this, args, b, ctx| {
             let cls = arg_string(args, 0);
             let wanted: Vec<&str> = cls.split_whitespace().collect();
+            // Same descendant scoping as by_tag above (round-5 S2 of #105).
+            // 0 = "no scope" sentinel: real node ids are never 0, so a
+            // missing `this` handle simply matches nothing extra. (Plain
+            // `match scope_id { Some(sid) => ... }` inside this filter
+            // closure bound `sid` as &u64 under edition-2024 default binding
+            // modes and would not compile.)
+            let ancestor: u64 = read_handle_id(this).unwrap_or(0);
             let bb = b.borrow();
-            let matching: Vec<u64> = bb
-                .node_props
-                .iter()
-                .filter(|(_, s)| {
-                    s.node_type == 1
-                        && wanted
-                            .iter()
-                            .all(|w| s.class_name.split_whitespace().any(|c| c == *w))
-                })
-                .map(|(&id, _)| id)
-                .collect();
+            let mut matching: Vec<u64> = Vec::new();
+            for (cand, s) in bb.node_props.iter() {
+                let cand_id = *cand;
+                if s.node_type != 1
+                    || !wanted
+                        .iter()
+                        .all(|w| s.class_name.split_whitespace().any(|c| c == *w))
+                {
+                    continue;
+                }
+                if ancestor != 0 && snapshot_is_descendant_of(cand_id, ancestor, &bb.node_props) {
+                    matching.push(cand_id);
+                }
+            }
             drop(bb);
             // Use a plain object (NOT JsArray — JsArray doesn't support custom methods).
             // Do NOT set HTMLCollection.prototype as it breaks integer-index property lookup.
@@ -22508,5 +22560,76 @@ mod selector_handle_cache_tests {
             out, "found=true tag=DIV id=el",
             "the collection handle for #el must be populated"
         );
+    }
+}
+
+#[cfg(test)]
+mod element_scoped_collections_tests {
+    //! Round-5 S2 of PR #105: element-level `getElementsByTagName` /
+    //! `getElementsByClassName` ignored `this` and returned whole-document
+    //! matches. DOM scopes them to THIS element's descendants.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="p"><span class="same">in-p</span><em id="in-p-em">e</em></div>
+            <div id="q"><span class="same">in-q</span></div>
+            <div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// `#p.getElementsByClassName("same")` must return ONLY the span inside
+    /// #p — not the document-wide match set.
+    #[test]
+    fn element_class_collection_is_scoped_to_this() {
+        let out = run(r#"
+            var p = document.getElementById('p');
+            var n = p.getElementsByClassName('same').length;
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(out, "n=1", "only the descendant span must match");
+    }
+
+    /// `#p.getElementsByTagName("span")` — same scoping for the by-tag form.
+    #[test]
+    fn element_tag_collection_is_scoped_to_this() {
+        let out = run(r#"
+            var p = document.getElementById('p');
+            var n = p.getElementsByTagName('span').length;
+            document.getElementById('out').setText('n=' + n);
+            "#);
+        assert_eq!(out, "n=1", "only the descendant span must match");
+    }
+
+    /// The elements returned by the scoped lookup must be the RIGHT ones
+    /// (the in-#p span, not the in-#q one).
+    #[test]
+    fn scoped_lookup_returns_the_right_elements() {
+        let out = run(r#"
+            var p = document.getElementById('p');
+            var c = p.getElementsByClassName('same');
+            var txt = '';
+            for (var i = 0; i < c.length; i++) { txt += c[i].textContent; }
+            document.getElementById('out').setText(txt);
+            "#);
+        assert_eq!(out, "in-p", "the scoped lookup must return the in-#p span");
     }
 }
