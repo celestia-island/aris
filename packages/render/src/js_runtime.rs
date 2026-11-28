@@ -491,7 +491,7 @@ impl JsRuntime {
         // stopPropagation / stopImmediatePropagation on it (previously no
         // event argument was passed at all, so a handler could neither see
         // the event nor stop propagation — L940 event-object model).
-        let click_event = self.mint_click_event();
+        let click_event = self.mint_click_event(node_id);
         let mut stop_propagation = false;
         // The node whose SAME-TARGET listeners may still run after a plain
         // stopPropagation; later entries on other nodes are skipped.
@@ -514,8 +514,8 @@ impl JsRuntime {
         if entries.is_empty() {
             // Even with no node-level listener the document may have one.
             // Mint the same click event object (round-2 of PR #111).
-            let click_event_value = self.mint_click_event();
-            self.dispatch_document_click(&click_event_value.into());
+            let click_event_value: JsValue = self.mint_click_event(node_id).into();
+            self.dispatch_document_click(&click_event_value);
             self.apply_ops(doc);
             self.harvest_listeners();
             self.harvest_timers();
@@ -656,7 +656,7 @@ impl JsRuntime {
     /// `stopPropagation` / `stopImmediatePropagation` flag setters. Handlers
     /// previously received NO event argument at all, so they could neither
     /// see the event nor stop propagation (L940 event-object model).
-    fn mint_click_event(&mut self) -> JsObject {
+    fn mint_click_event(&mut self, target_nid: u64) -> JsObject {
         let ev = boa_engine::object::JsObject::with_object_proto(self.ctx.intrinsics());
         let pd = |v: JsValue| {
             boa_engine::property::PropertyDescriptor::builder()
@@ -666,6 +666,57 @@ impl JsRuntime {
                 .configurable(true)
                 .build()
         };
+        // DOM: the click target — handlers can read e.target / e.currentTarget
+        // (previously the minted event carried neither, and preventDefault
+        // did not exist on it at all).
+        if let Ok(target_handle) =
+            make_element_handle(&mut self.ctx, Gc::clone(&self.bridge), target_nid, None)
+        {
+            // A bare make_element_handle leaves `id` / `tagName` empty, so
+            // `e.target.id` read "" — populate from the node snapshot like
+            // every other minted handle.
+            if let Some(snap) = self.bridge.borrow().node_props.get(&target_nid).cloned() {
+                populate_props(
+                    &target_handle,
+                    &snap,
+                    Gc::clone(&self.bridge),
+                    &mut self.ctx,
+                );
+            }
+            let t = JsValue::from(target_handle);
+            let _ = ev.insert_property(boa_engine::js_string!("target"), pd(t.clone()));
+            let _ = ev.insert_property(boa_engine::js_string!("currentTarget"), pd(t));
+        }
+        let _ = ev.insert_property(
+            boa_engine::js_string!("defaultPrevented"),
+            pd(JsValue::from(false)),
+        );
+        let prevent_fn = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("defaultPrevented"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
+        let _ = ev.insert_property(
+            boa_engine::js_string!("preventDefault"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(self.ctx.realm(), prevent_fn)
+                        .build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
         let _ = ev.insert_property(
             boa_engine::js_string!("type"),
             pd(JsValue::from(boa_engine::js_string!("click"))),
@@ -3018,10 +3069,19 @@ fn install_event_api(ctx: &mut Context) {
             pd(JsValue::from(false)),
         );
         let _ = obj.insert_property(boa_engine::js_string!("target"), pd(JsValue::null()));
-        let _ = obj.insert_property(
-            boa_engine::js_string!("detail"),
-            pd(args.get(1).cloned().unwrap_or(JsValue::null())),
-        );
+        // DOM: detail comes from the init dict's `detail` member —
+        // `new CustomEvent('ce', { detail: 42 })` must read 42, not the raw
+        // options object (previously the whole dict was stored).
+        let detail = args
+            .get(1)
+            .and_then(|v| v.as_object())
+            .and_then(|o| {
+                o.get(boa_engine::js_string!("detail"), ctx)
+                    .ok()
+                    .filter(|v| !v.is_undefined())
+            })
+            .unwrap_or(JsValue::null());
+        let _ = obj.insert_property(boa_engine::js_string!("detail"), pd(detail));
         let noop_fn = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
         let _ = obj.insert_property(
             boa_engine::js_string!("preventDefault"),
@@ -23999,5 +24059,126 @@ mod stop_propagation_ancestor_tests {
             .expect("missing #btn");
         rt.fire_click(&mut doc, btn_nid);
         assert_eq!(out_of(&doc), "DOC", "control: document walk runs");
+    }
+}
+
+#[cfg(test)]
+mod event_object_polish_tests {
+    //! PR #111 residuals: the fire_click event carried no target /
+    //! currentTarget / preventDefault, and CustomEvent stored the raw init
+    //! dict as `detail`.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    /// The fire_click event carries target/currentTarget (the click target)
+    /// and a working preventDefault.
+    #[test]
+    fn fire_click_event_has_target_and_prevent_default() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="btn">B</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            btn.addEventListener('click', function (e) {
+                document.getElementById('out').setText(
+                    'type=' + e.type +
+                    ' tgt=' + (e.target && e.target.id) +
+                    ' cur=' + (e.currentTarget && e.currentTarget.id) +
+                    ' pd=' + (typeof e.preventDefault) +
+                    ' dp=' + e.defaultPrevented
+                );
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(
+            out_of(&doc),
+            "type=click tgt=btn cur=btn pd=function dp=false",
+            "the click event must carry target/currentTarget/preventDefault"
+        );
+    }
+
+    /// preventDefault flips defaultPrevented on the event.
+    #[test]
+    fn fire_click_prevent_default_sets_the_flag() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="btn">B</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.getElementById('out').setText('dp=' + e.defaultPrevented);
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(
+            out_of(&doc),
+            "dp=true",
+            "preventDefault must flip defaultPrevented"
+        );
+    }
+
+    /// CustomEvent detail unwraps the init dict's `detail` member.
+    #[test]
+    fn custom_event_detail_unwraps_the_init_dict() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ce', function (e) {
+                log.push('d=' + e.detail);
+            });
+            t.addEventListener('ce2', function (e) {
+                log.push('d2=' + e.detail);
+            });
+            t.dispatchEvent(new CustomEvent('ce', { detail: 42 }));
+            t.dispatchEvent(new CustomEvent('ce2'));
+            document.getElementById('out').setText(log.join(' '));
+            "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "d=42 d2=null",
+            "detail must unwrap the init dict; absent detail is null"
+        );
     }
 }
