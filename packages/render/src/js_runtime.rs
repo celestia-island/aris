@@ -2182,9 +2182,9 @@ fn populate_props(
                     boa_engine::js_string!("_arisCssTextCache"),
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(v.clone())))
-                        .writable(true)
+                        .writable(false)
                         .enumerable(false)
-                        .configurable(true)
+                        .configurable(false)
                         .build(),
                 );
             }
@@ -13288,9 +13288,9 @@ fn make_element_handle(
                     boa_engine::js_string!("_arisCssTextCache"),
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(value)))
-                        .writable(true)
+                        .writable(false)
                         .enumerable(false)
-                        .configurable(true)
+                        .configurable(false)
                         .build(),
                 );
             }
@@ -14023,9 +14023,9 @@ fn make_element_handle(
                             boa_engine::js_string!("_arisCssTextCache"),
                             boa_engine::property::PropertyDescriptor::builder()
                                 .value(JsValue::from(boa_engine::js_string!("")))
-                                .writable(true)
+                                .writable(false)
                                 .enumerable(false)
-                                .configurable(true)
+                                .configurable(false)
                                 .build(),
                         );
                     }
@@ -24309,6 +24309,77 @@ mod event_object_polish_tests {
             out_of(&doc),
             "d=42 d2=null",
             "detail must unwrap the init dict; absent detail is null"
+        );
+    }
+}
+
+#[cfg(test)]
+mod style_cache_hardening_tests {
+    //! The `_arisCssTextCache` property was writable+configurable, so a page
+    //! could poison it (`el.style._arisCssTextCache = 'garbage'`) and the
+    //! next `cssText` read returned the garbage verbatim. The cache is now
+    //! non-writable / non-configurable: runtime writes go through
+    //! `insert_property` (internal channel) and still work; page scribbles
+    //! are no-ops (sloppy mode).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body style="color:red"><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: scribble the cache, read cssText.
+    #[test]
+    fn scribbling_the_cache_does_not_poison_csstext() {
+        let out = run(r#"
+            var r = [];
+            var el = document.body;
+            r.push('seeded=' + el.style.cssText);
+            el.style._arisCssTextCache = 'garbage';
+            r.push('after=' + el.style.cssText);
+            el.style.cssText = 'color:blue';
+            r.push('rewrite=' + el.style.cssText);
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "seeded=color:red after=color:red rewrite=color:blue",
+            "a page scribble must not poison cssText; runtime writes still work"
+        );
+    }
+
+    /// removeAttribute('style') clears the cache to empty and the setter
+    /// still works.
+    #[test]
+    fn remove_attribute_resets_and_setter_works() {
+        let out = run(r#"
+            var r = [];
+            var el = document.body;
+            el.removeAttribute('style');
+            r.push('cleared=' + (el.style.cssText === ''));
+            el.style.cssText = 'color:green';
+            r.push('set=' + el.style.cssText);
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "cleared=true set=color:green",
+            "removeAttribute clears the cache; the setter still works"
         );
     }
 }
