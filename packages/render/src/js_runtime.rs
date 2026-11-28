@@ -11602,14 +11602,40 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
     let query_sel = NativeFunction::from_copy_closure_with_captures(
         |_this, args, b, ctx| {
             let sel = arg_string(args, 0);
+            // Scan the TREE-ORDER element list for the first match (L940,
+            // PR #107 R3: the per-key indexes are frozen at bind, so a
+            // same-run `setAttribute('class', ...)` — now reflected into
+            // `node_props.class_name` by the set_attr cobweb — was invisible
+            // to `querySelector('.cls')` while `getElementsByClassName` saw
+            // it). `#id` still prefers the id index (ids are unique and the
+            // set_attr cobweb updates the snapshot `id` too).
             let bb = b.borrow();
             let nid = if let Some(id) = sel.strip_prefix('#') {
-                bb.query_by_id.get(id).copied()
+                match bb.query_by_id.get(id).copied() {
+                    Some(nid) => Some(nid),
+                    None => {
+                        bb.all_element_ids.iter().copied().find(|&nid| {
+                            bb.node_props.get(&nid).map(|s| s.id == id).unwrap_or(false)
+                        })
+                    }
+                }
             } else if let Some(cls) = sel.strip_prefix('.') {
-                // querySelector takes the FIRST match in tree order.
-                bb.query_by_class.get(cls).and_then(|v| v.first()).copied()
+                bb.all_element_ids.iter().copied().find(|&nid| {
+                    bb.node_props
+                        .get(&nid)
+                        .map(|s| {
+                            s.node_type == 1 && s.class_name.split_whitespace().any(|c| c == cls)
+                        })
+                        .unwrap_or(false)
+                })
             } else {
-                bb.query_by_tag.get(&sel).and_then(|v| v.first()).copied()
+                let tag_lower = sel.to_lowercase();
+                bb.all_element_ids.iter().copied().find(|&nid| {
+                    bb.node_props
+                        .get(&nid)
+                        .map(|s| s.node_type == 1 && s.tag_name.to_lowercase() == tag_lower)
+                        .unwrap_or(false)
+                })
             };
             drop(bb);
             // Route through the handle cache (L940, PR #104 R2): a fresh
@@ -22911,6 +22937,73 @@ mod collection_uniform_order_tests {
         assert_eq!(
             out, "n=1 hasHost=true",
             "a multi-token class query must match elements carrying both tokens"
+        );
+    }
+}
+
+#[cfg(test)]
+mod query_selector_live_tests {
+    //! PR #107 R3 S3: `querySelector('.cls')` read the frozen per-key index,
+    //! so a same-run `setAttribute('class', ...)` (now reflected into
+    //! `node_props.class_name` by the set_attr cobweb) was invisible to
+    //! `querySelector` while `getElementsByClassName` saw it. querySelector
+    //! now scans the same tree-order element list the collections use.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: same-run setAttribute then querySelector.
+    #[test]
+    fn query_selector_sees_a_same_run_class_write() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.setAttribute('class', 'fresh');
+            var q = document.querySelector('.fresh');
+            document.getElementById('out').setText(
+                'found=' + (q !== null) + ' same=' + (q === el)
+            );
+            "#);
+        assert_eq!(
+            out, "found=true same=true",
+            "querySelector must see a same-run class write"
+        );
+    }
+
+    /// Semantic invariants: #id, .cls and tag forms still resolve parsed
+    /// elements, and no-match returns null.
+    #[test]
+    fn selector_forms_still_resolve() {
+        let out = run(r#"
+            var r = [];
+            r.push('id=' + (document.querySelector('#el') !== null));
+            r.push('cls_null=' + (document.querySelector('.nope') === null));
+            r.push('tag=' + (document.querySelector('div') !== null));
+            r.push('nsm_null=' + (document.querySelector('nosuchtag') === null));
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "id=true cls_null=true tag=true nsm_null=true",
+            "the selector forms must keep their existing semantics"
         );
     }
 }
