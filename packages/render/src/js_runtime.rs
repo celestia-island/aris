@@ -7340,7 +7340,7 @@ fn install_dom_globals(ctx: &mut Context) {
         // `constructor` back-reference with a spec-correct non-enumerable
         // descriptor; an earlier second pass re-inserted it via `pd()` —
         // which hardcodes enumerable(true) — silently undoing that on all
-        // ~60 prototypes, so it is gone: round-2 S2.)
+        // 121 prototypes, so it is gone: round-2 S2.)
     }
 
     // Round-2 S2 #2: the `document` global is a plain object otherwise —
