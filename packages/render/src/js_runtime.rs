@@ -2555,11 +2555,12 @@ fn cached_element_handle(
     // may have changed since the handle was minted.
     if let Some(snap) = bridge.borrow().node_props.get(&nid).cloned() {
         populate_props(&handle, &snap, Gc::clone(bridge), ctx);
-        // The element-class [[Prototype]] must be set here too: getElementById
-        // and the collection lookups all route through this cache, and none of
-        // them called set_element_prototype — so `el instanceof HTMLElement`
-        // was false for every handle obtained by id/selector (the prototype
-        // objects themselves were only just created).
+        // The element-class [[Prototype]] must be set here too: every lookup
+        // that routes through this cache (getElementById, querySelector, the
+        // collections) used to skip set_element_prototype, so `el instanceof
+        // HTMLElement` was false for every by-id handle (the sibling mint
+        // paths call set_element_prototype directly; the prototype objects
+        // themselves were only just created).
         set_element_prototype(&handle, &snap.tag_name, ctx);
     }
     Ok(handle)
@@ -7335,20 +7336,25 @@ fn install_dom_globals(ctx: &mut Context) {
                 );
             }
         }
-        let global = ctx.global_object();
-        if let Ok(ctor_val) = global.get(boa_engine::js_string!(name), &mut *ctx) {
-            if let Some(ctor_obj) = ctor_val.as_object() {
-                if let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), &mut *ctx)
-                {
-                    if let Some(proto) = proto_val.as_object() {
-                        let _ = proto.insert_property(
-                            boa_engine::js_string!("constructor"),
-                            pd(ctor_obj.clone().into()),
-                        );
-                    }
-                }
-            }
-        }
+        // (The prototype-creation block above already installed the
+        // `constructor` back-reference with a spec-correct non-enumerable
+        // descriptor; an earlier second pass re-inserted it via `pd()` —
+        // which hardcodes enumerable(true) — silently undoing that on all
+        // ~60 prototypes, so it is gone: round-2 S2.)
+    }
+
+    // Round-2 S2 #2: the `document` global is a plain object otherwise —
+    // `document instanceof Node/Document` was false. Its prototype is only
+    // available now (the loop above created Document.prototype), which is
+    // why this cannot live in install_document (it runs before this loop).
+    if let Ok(doc_val) = ctx.global_object().get(boa_engine::js_string!("document"), ctx)
+        && let Some(doc_obj) = doc_val.as_object()
+        && let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("Document"), ctx)
+        && let Some(ctor_obj) = ctor_val.as_object()
+        && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
+        && let Some(proto) = proto_val.as_object()
+    {
+        let _ = doc_obj.set_prototype(Some(proto));
     }
 
     // Set up prototype chain links between constructors' .prototype objects:
@@ -24849,13 +24855,27 @@ mod element_prototype_tests {
             r.push('plain=' + (({}) instanceof Node));
             r.push('protoT=' + (typeof HTMLElement.prototype));
             r.push('ctorBR=' + (HTMLElement.prototype.constructor === HTMLElement));
+            // Round-2 S2 #2: the document global itself must be a Node AND a
+            // Document (its prototype used to never be set).
+            r.push('docNode=' + (document instanceof Node));
+            r.push('docDoc=' + (document instanceof Document));
+            r.push('docElem=' + (document instanceof Element));
+            // Round-2 S2 #1: `constructor` on the new prototypes must be
+            // non-enumerable (for..in must not leak it).
+            var cd = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'constructor');
+            r.push('ctorE=' + (cd && cd.enumerable === false));
+            var ctorLeaks = [];
+            for (var k in HTMLElement.prototype) { if (k === 'constructor') ctorLeaks.push(k); }
+            r.push('ctorLeak=' + ctorLeaks.length);
             document.getElementById('out').setText(r.join(' '));
         "#);
         assert_eq!(
             out,
             "div=true html=true elem=true node=true et=true \
-             span=false plain=false protoT=object ctorBR=true",
-            "the element prototype chain must resolve by identity and stay non-permissive"
+             span=false plain=false protoT=object ctorBR=true \
+             docNode=true docDoc=true docElem=false ctorE=true ctorLeak=0",
+            "the element prototype chain must resolve by identity, include the \
+             document, and not leak constructor"
         );
     }
 }
