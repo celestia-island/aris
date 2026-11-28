@@ -13483,7 +13483,6 @@ fn make_element_handle(
     // removeAttribute — removes from attributes NamedNodeMap (best-effort).
     let remove_attr = NativeFunction::from_copy_closure_with_captures(
         |this, args, b, ctx| {
-            eprintln!("[rm-attr] closure entered, args0={:?}", args.first());
             let name = arg_string(args, 0).to_ascii_lowercase();
             if let Some(o) = this.as_object() {
                 // Remove from attributes NamedNodeMap.
