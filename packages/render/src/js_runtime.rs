@@ -7347,9 +7347,13 @@ fn install_dom_globals(ctx: &mut Context) {
     // `document instanceof Node/Document` was false. Its prototype is only
     // available now (the loop above created Document.prototype), which is
     // why this cannot live in install_document (it runs before this loop).
-    if let Ok(doc_val) = ctx.global_object().get(boa_engine::js_string!("document"), ctx)
+    if let Ok(doc_val) = ctx
+        .global_object()
+        .get(boa_engine::js_string!("document"), ctx)
         && let Some(doc_obj) = doc_val.as_object()
-        && let Ok(ctor_val) = ctx.global_object().get(boa_engine::js_string!("Document"), ctx)
+        && let Ok(ctor_val) = ctx
+            .global_object()
+            .get(boa_engine::js_string!("Document"), ctx)
         && let Some(ctor_obj) = ctor_val.as_object()
         && let Ok(proto_val) = ctor_obj.get(boa_engine::js_string!("prototype"), ctx)
         && let Some(proto) = proto_val.as_object()
