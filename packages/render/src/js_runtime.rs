@@ -487,6 +487,16 @@ impl JsRuntime {
         // the capture phase. `capture` is not read anywhere in this runtime;
         // implementing real capture/`stopPropagation` is a separate item
         // (L940), not a regression introduced by this walk.
+        // Mint a click event object for the walk: handlers can call
+        // stopPropagation / stopImmediatePropagation on it (previously no
+        // event argument was passed at all, so a handler could neither see
+        // the event nor stop propagation — L940 event-object model).
+        let click_event = self.mint_click_event();
+        let mut stop_propagation = false;
+        // The node whose SAME-TARGET listeners may still run after a plain
+        // stopPropagation; later entries on other nodes are skipped.
+        let mut stop_node: Option<u64> = None;
+        let click_event_value = JsValue::from(click_event);
         let mut entries: Vec<ListenerEntry> = Vec::new();
         {
             let mut cur = Some(blitz_traits::NodeId::from_u64(node_id));
@@ -503,7 +513,9 @@ impl JsRuntime {
         }
         if entries.is_empty() {
             // Even with no node-level listener the document may have one.
-            self.dispatch_document_click();
+            // Mint the same click event object (round-2 of PR #111).
+            let click_event_value = self.mint_click_event();
+            self.dispatch_document_click(&click_event_value.into());
             self.apply_ops(doc);
             self.harvest_listeners();
             self.harvest_timers();
@@ -518,6 +530,11 @@ impl JsRuntime {
             // passes no event argument either, so such a listener cannot see
             // which element fired (L940: event-object model follow-up).
             let this_node = entry.node_id;
+            // stopPropagation: same-target listeners still run (DOM);
+            // ANCESTOR entries are skipped.
+            if stop_propagation && stop_node != Some(this_node) {
+                continue;
+            }
             // Look up the stashed callback and call it with a fresh element
             // handle as `this` (functions) or with the listener object as
             // `this` (handleEvent objects).
@@ -544,12 +561,19 @@ impl JsRuntime {
             let Some(func) = func_val.as_object() else {
                 continue;
             };
-            let this_val = JsValue::from(this);
+            let this_val = JsValue::from(this.clone());
             // DOM: an event listener is either a function or an object with a
             // `handleEvent` method. The callable-only guard silently dropped
-            // the latter (L940 follow-up).
+            // the latter (L940 follow-up). The click event object is passed
+            // as the first argument so a handler can call
+            // stopPropagation / stopImmediatePropagation (previously no event
+            // argument was passed at all — L940 event-object model).
             if func.is_callable() {
-                let _ = func.call(&this_val, &[], &mut self.ctx);
+                let _ = func.call(
+                    &this_val,
+                    std::slice::from_ref(&click_event_value),
+                    &mut self.ctx,
+                );
             // The `is_callable()` check is defence in depth: invoking a
             // non-callable would throw a TypeError that the `let _ =` below
             // swallows, so it is not page-observable on its own.
@@ -559,17 +583,138 @@ impl JsRuntime {
             {
                 // DOM: inside `handleEvent`, `this` is the listener object.
                 let listener = JsValue::from(func.clone());
-                let _ = hf.call(&listener, &[], &mut self.ctx);
+                let _ = hf.call(
+                    &listener,
+                    std::slice::from_ref(&click_event_value),
+                    &mut self.ctx,
+                );
             }
+            // Read the stop flags AFTER each handler (round-2 of PR #111):
+            // stopImmediatePropagation stops everything; stopPropagation
+            // stops the remaining ANCESTOR entries (same-target listeners
+            // still run, per DOM — the flat walk is level-ordered).
+            // Read the stop flags AFTER each handler (round-2 of PR #111):
+            // stopImmediatePropagation stops everything — remaining entries
+            // AND the document walk (round-2 S0: the break alone exited the
+            // walk with stop_propagation still false, so the document
+            // dispatch ran anyway). stopPropagation stops the remaining
+            // ANCESTOR entries only (same-target listeners still run, per
+            // DOM — the flat walk is level-ordered; entries from the same
+            // node keep running, others are skipped).
+            let imm = click_event_value
+                .as_object()
+                .and_then(|ev| {
+                    ev.get(boa_engine::js_string!("_stopImmediate"), &mut self.ctx)
+                        .ok()
+                        .and_then(|v| v.as_boolean())
+                })
+                .unwrap_or(false);
+            let prop = click_event_value
+                .as_object()
+                .and_then(|ev| {
+                    ev.get(boa_engine::js_string!("_stopPropagation"), &mut self.ctx)
+                        .ok()
+                        .and_then(|v| v.as_boolean())
+                })
+                .unwrap_or(false);
+            if imm {
+                stop_propagation = true;
+                break;
+            }
+            if prop {
+                stop_propagation = true;
+                // Same-node entries still run (DOM); skip later ancestors.
+                stop_node = Some(this_node);
+            }
+        }
+        // stopPropagation: ancestors (and the document walk) must not receive
+        // the event — skip everything below the entry that stopped it.
+        if stop_propagation {
+            self.apply_ops(doc);
+            self.harvest_listeners();
+            self.harvest_timers();
+            return;
         }
         // 3. Document-level listeners: they live on the document object's
         // `_js_listeners` map (installed by the document's own
         // addEventListener), not in this registry, so they are dispatched
-        // separately at the end of the bubble path.
-        self.dispatch_document_click();
+        // separately at the end of the bubble path. stopPropagation halts the
+        // bubble here (DOM: the document is the last bubble target).
+        if !stop_propagation {
+            self.dispatch_document_click(&click_event_value.into());
+        } else {
+            self.apply_ops(doc);
+            self.harvest_listeners();
+            self.harvest_timers();
+        }
         self.apply_ops(doc);
         self.harvest_listeners();
         self.harvest_timers();
+    }
+
+    /// Mint a minimal click event object for the fire_click walk: `type`,
+    /// `stopPropagation` / `stopImmediatePropagation` flag setters. Handlers
+    /// previously received NO event argument at all, so they could neither
+    /// see the event nor stop propagation (L940 event-object model).
+    fn mint_click_event(&mut self) -> JsObject {
+        let ev = boa_engine::object::JsObject::with_object_proto(self.ctx.intrinsics());
+        let pd = |v: JsValue| {
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(v)
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build()
+        };
+        let _ = ev.insert_property(
+            boa_engine::js_string!("type"),
+            pd(JsValue::from(boa_engine::js_string!("click"))),
+        );
+        let stop_prop = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopPropagation"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
+        let stop_imm = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopImmediate"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
+        for (name, f) in [
+            ("stopPropagation", stop_prop),
+            ("stopImmediatePropagation", stop_imm),
+        ] {
+            let _ = ev.insert_property(
+                boa_engine::js_string!(name),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::from(
+                        boa_engine::object::FunctionObjectBuilder::new(self.ctx.realm(), f).build(),
+                    ))
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
+        }
+        ev
     }
 
     /// Run the document's `click` listeners (the `_js_listeners` entries on
@@ -577,7 +722,7 @@ impl JsRuntime {
     /// document is not a blitz node: `fire_click` starts from a node id and
     /// the walk steps through `node.parent`, so the document object is never
     /// reachable as a walk step (it has no `_arisId` and no parent).
-    fn dispatch_document_click(&mut self) {
+    fn dispatch_document_click(&mut self, click_event_value: &JsValue) {
         let Ok(doc_val) = self
             .ctx
             .global_object()
@@ -626,16 +771,29 @@ impl JsRuntime {
             let Some(f) = cb.as_object() else { continue };
             // DOM: function or object with `handleEvent`.
             if f.is_callable() {
-                let _ = f.call(&this_val, &[], &mut self.ctx);
+                let _ = f.call(&this_val, &[click_event_value.clone()], &mut self.ctx);
             } else if let Ok(h) = f.get(boa_engine::js_string!("handleEvent"), &mut self.ctx)
                 && let Some(hf) = h.as_object()
                 && hf.is_callable()
             {
                 // DOM: inside `handleEvent`, `this` is the listener object
-                // (not the document). No event argument is passed yet, so the
-                // listener cannot read the event/currentTarget — see L940.
+                // (not the document).
                 let listener = JsValue::from(f.clone());
-                let _ = hf.call(&listener, &[], &mut self.ctx);
+                let _ = hf.call(&listener, &[click_event_value.clone()], &mut self.ctx);
+            }
+            // stopImmediatePropagation halts the remaining document listeners
+            // (round-2 S1 of PR #111: document listeners could neither see
+            // the event nor stop the walk).
+            if click_event_value
+                .as_object()
+                .and_then(|ev| {
+                    ev.get(boa_engine::js_string!("_stopImmediate"), &mut self.ctx)
+                        .ok()
+                        .and_then(|v| v.as_boolean())
+                })
+                .unwrap_or(false)
+            {
+                break;
             }
         }
     }
@@ -2762,24 +2920,55 @@ fn install_event_api(ctx: &mut Context) {
                 .configurable(true)
                 .build(),
         );
-        let noop_fn2 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        // stop* closures set flags ON THE EVENT (`this`) — the dispatch loops
+        // read them to stop listener walks (previously both were no-ops, so
+        // stopPropagation/stopImmediatePropagation did nothing).
+        let stop_prop_fn = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopPropagation"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("stopPropagation"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn2).build(),
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_prop_fn)
+                        .build(),
                 ))
                 .writable(true)
                 .enumerable(true)
                 .configurable(true)
                 .build(),
         );
-        let noop_fn3 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        let stop_imm_fn = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopImmediate"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("stopImmediatePropagation"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn3).build(),
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_imm_fn)
+                        .build(),
                 ))
                 .writable(true)
                 .enumerable(true)
@@ -2845,12 +3034,55 @@ fn install_event_api(ctx: &mut Context) {
                 .configurable(true)
                 .build(),
         );
-        let noop_fn2 = NativeFunction::from_copy_closure(|_t, _a, _c| Ok(JsValue::undefined()));
+        // stop* closures set flags ON THE EVENT (this) — CustomEvent instances
+        // were unstoppable (round-2 S2 of PR #111: dispatchEvent of a
+        // CustomEvent carried no-op stop methods).
+        let ce_stop_prop = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopPropagation"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
+        let ce_stop_imm = NativeFunction::from_copy_closure(|this, _a, _c| {
+            if let Some(o) = this.as_object() {
+                let _ = o.insert_property(
+                    boa_engine::js_string!("_stopImmediate"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(true))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+            Ok(JsValue::undefined())
+        });
         let _ = obj.insert_property(
             boa_engine::js_string!("stopPropagation"),
             boa_engine::property::PropertyDescriptor::builder()
                 .value(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), noop_fn2).build(),
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ce_stop_prop)
+                        .build(),
+                ))
+                .writable(true)
+                .enumerable(true)
+                .configurable(true)
+                .build(),
+        );
+        let _ = obj.insert_property(
+            boa_engine::js_string!("stopImmediatePropagation"),
+            boa_engine::property::PropertyDescriptor::builder()
+                .value(JsValue::from(
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), ce_stop_imm)
+                        .build(),
                 ))
                 .writable(true)
                 .enumerable(true)
@@ -3041,6 +3273,22 @@ fn install_event_api(ctx: &mut Context) {
                         .configurable(true)
                         .build()
                 };
+                // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+                // start so a REUSED Event object starts clean (round-3 S3: a stale
+                // _stopImmediate silently killed the second dispatch).
+                if let Some(ev_obj) = event.as_object() {
+                    for flag in ["_stopImmediate", "_stopPropagation"] {
+                        let _ = ev_obj.insert_property(
+                            boa_engine::js_string!(flag),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(false))
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                }
                 let t = JsValue::from(o.clone());
                 let _ = ev_obj.insert_property(boa_engine::js_string!("target"), pd_ev(t.clone()));
                 let _ = ev_obj.insert_property(boa_engine::js_string!("currentTarget"), pd_ev(t));
@@ -3074,6 +3322,20 @@ fn install_event_api(ctx: &mut Context) {
                         && hf.is_callable()
                     {
                         let _ = hf.call(&JsValue::from(f), std::slice::from_ref(&event), ctx);
+                    }
+                    // stopImmediatePropagation stops the remaining listeners
+                    // on this target (DOM: immediate halts everything after
+                    // the listener that called it).
+                    if event
+                        .as_object()
+                        .and_then(|ev| {
+                            ev.get(boa_engine::js_string!("_stopImmediate"), ctx)
+                                .ok()
+                                .and_then(|v| v.as_boolean())
+                        })
+                        .unwrap_or(false)
+                    {
+                        break;
                     }
                 }
             }
@@ -5997,19 +6259,46 @@ fn install_dom_globals(ctx: &mut Context) {
                     boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), pd_fn).build(),
                 )),
             );
-            let stop_fn =
-                NativeFunction::from_copy_closure(|_this, _args, _ctx| Ok(JsValue::undefined()));
+            let stop_prop_fn = NativeFunction::from_copy_closure(|this, _args, _ctx| {
+                if let Some(o) = this.as_object() {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("_stopPropagation"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(true))
+                            .writable(true)
+                            .enumerable(false)
+                            .configurable(true)
+                            .build(),
+                    );
+                }
+                Ok(JsValue::undefined())
+            });
             let _ = obj.insert_property(
                 boa_engine::js_string!("stopPropagation"),
                 pd(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn.clone())
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_prop_fn)
                         .build(),
                 )),
             );
+            let stop_imm_fn = NativeFunction::from_copy_closure(|this, _args, _ctx| {
+                if let Some(o) = this.as_object() {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("_stopImmediate"),
+                        boa_engine::property::PropertyDescriptor::builder()
+                            .value(JsValue::from(true))
+                            .writable(true)
+                            .enumerable(false)
+                            .configurable(true)
+                            .build(),
+                    );
+                }
+                Ok(JsValue::undefined())
+            });
             let _ = obj.insert_property(
                 boa_engine::js_string!("stopImmediatePropagation"),
                 pd(JsValue::from(
-                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_fn).build(),
+                    boa_engine::object::FunctionObjectBuilder::new(ctx.realm(), stop_imm_fn)
+                        .build(),
                 )),
             );
             // For CustomEvent: add detail property and initCustomEvent method.
@@ -11987,6 +12276,22 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
                     .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                     .unwrap_or_default();
+                // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+                // start so a REUSED Event object starts clean (round-3 S3: a stale
+                // _stopImmediate silently killed the second dispatch).
+                if let Some(ev_obj) = event.as_object() {
+                    for flag in ["_stopImmediate", "_stopPropagation"] {
+                        let _ = ev_obj.insert_property(
+                            boa_engine::js_string!(flag),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(false))
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                }
                 let mut not_canceled = true;
                 if let Ok(lmap) = doc_for_disp.get(boa_engine::js_string!("_js_listeners"), ctx) {
                     if let Some(lm) = lmap.as_object() {
@@ -12057,6 +12362,21 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                                                 );
                                             }
                                         }
+                                    }
+                                    // stopImmediatePropagation stops the
+                                    // remaining document listeners (DOM:
+                                    // immediate halts everything after the
+                                    // listener that called it).
+                                    if event
+                                        .as_object()
+                                        .and_then(|ev| {
+                                            ev.get(boa_engine::js_string!("_stopImmediate"), ctx)
+                                                .ok()
+                                                .and_then(|v| v.as_boolean())
+                                        })
+                                        .unwrap_or(false)
+                                    {
+                                        break;
                                     }
                                     if let Some(ev_obj) = event.as_object() {
                                         let dp = ev_obj
@@ -14215,6 +14535,22 @@ fn make_element_handle(
             .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
             .unwrap_or_default();
+        // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+        // start so a REUSED Event object starts clean (round-3 S3: a stale
+        // _stopImmediate silently killed the second dispatch).
+        if let Some(ev_obj) = event.as_object() {
+            for flag in ["_stopImmediate", "_stopPropagation"] {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!(flag),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(false))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+        }
         // Set event.target = this.
         if let Some(ev_obj) = event.as_object() {
             let _ = ev_obj.insert_property(
@@ -14261,77 +14597,109 @@ fn make_element_handle(
                 }
             }
         }
-        // 2. Call addEventListener listeners from _js_listeners.
-        if let Some(o) = this.as_object() {
-            if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
-                if let Some(lm) = lmap.as_object() {
-                    if let Ok(type_arr) = lm.get(boa_engine::js_string!(event_type.clone()), ctx) {
-                        if let Some(arr) = type_arr.as_object() {
-                            let len = arr
-                                .get(boa_engine::js_string!("length"), ctx)
-                                .ok()
-                                .and_then(|v| v.as_number())
-                                .unwrap_or(0.0) as u32;
-                            for i in 0..len {
-                                if let Ok(listener) = arr.get(i as u32, ctx) {
-                                    // Listener is {callback, passive} or raw function.
-                                    let (callback, is_passive) =
-                                        if let Some(lo) = listener.as_object() {
-                                            let cb = lo
-                                                .get(boa_engine::js_string!("callback"), ctx)
-                                                .ok()
-                                                .unwrap_or(JsValue::undefined());
-                                            let p = lo
-                                                .get(boa_engine::js_string!("passive"), ctx)
-                                                .ok()
-                                                .and_then(|v| v.as_boolean())
-                                                .unwrap_or(false);
-                                            (cb, p)
-                                        } else {
-                                            (listener, false)
-                                        };
-                                    // Set _passive flag on event so preventDefault is a no-op.
-                                    if let Some(ev_obj) = event.as_object() {
-                                        let pd2 = |val: JsValue| {
-                                            boa_engine::property::PropertyDescriptor::builder()
-                                                .value(val)
-                                                .writable(true)
-                                                .enumerable(false)
-                                                .configurable(true)
-                                                .build()
-                                        };
-                                        let _ = ev_obj.insert_property(
-                                            boa_engine::js_string!("_passive"),
-                                            pd2(JsValue::from(is_passive)),
-                                        );
-                                    }
-                                    if let Some(fn_obj) = callback.as_object() {
-                                        if fn_obj.is_callable() {
-                                            let _ = fn_obj.call(&this, &[event.clone()], ctx);
-                                        } else if let Ok(he) =
-                                            fn_obj.get(boa_engine::js_string!("handleEvent"), ctx)
-                                        {
-                                            if let Some(he_fn) = he.as_object() {
-                                                if he_fn.is_callable() {
-                                                    let _ = he_fn.call(
-                                                        &callback,
-                                                        &[event.clone()],
-                                                        ctx,
-                                                    );
+        // 2. Call addEventListener listeners from _js_listeners. A
+        //    stopImmediatePropagation inside the on<type> handler skips this
+        //    walk entirely (DOM: immediate stop halts the whole dispatch).
+        let immediate_stop = event
+            .as_object()
+            .and_then(|ev| {
+                ev.get(boa_engine::js_string!("_stopImmediate"), ctx)
+                    .ok()
+                    .and_then(|v| v.as_boolean())
+            })
+            .unwrap_or(false);
+        if !immediate_stop {
+            if let Some(o) = this.as_object() {
+                if let Ok(lmap) = o.get(boa_engine::js_string!("_js_listeners"), ctx) {
+                    if let Some(lm) = lmap.as_object() {
+                        if let Ok(type_arr) =
+                            lm.get(boa_engine::js_string!(event_type.clone()), ctx)
+                        {
+                            if let Some(arr) = type_arr.as_object() {
+                                let len =
+                                    arr.get(boa_engine::js_string!("length"), ctx)
+                                        .ok()
+                                        .and_then(|v| v.as_number())
+                                        .unwrap_or(0.0) as u32;
+                                for i in 0..len {
+                                    if let Ok(listener) = arr.get(i as u32, ctx) {
+                                        // Listener is {callback, passive} or raw function.
+                                        let (callback, is_passive) =
+                                            if let Some(lo) = listener.as_object() {
+                                                let cb = lo
+                                                    .get(boa_engine::js_string!("callback"), ctx)
+                                                    .ok()
+                                                    .unwrap_or(JsValue::undefined());
+                                                let p = lo
+                                                    .get(boa_engine::js_string!("passive"), ctx)
+                                                    .ok()
+                                                    .and_then(|v| v.as_boolean())
+                                                    .unwrap_or(false);
+                                                (cb, p)
+                                            } else {
+                                                (listener, false)
+                                            };
+                                        // Set _passive flag on event so preventDefault is a no-op.
+                                        if let Some(ev_obj) = event.as_object() {
+                                            let pd2 = |val: JsValue| {
+                                                boa_engine::property::PropertyDescriptor::builder()
+                                                    .value(val)
+                                                    .writable(true)
+                                                    .enumerable(false)
+                                                    .configurable(true)
+                                                    .build()
+                                            };
+                                            let _ = ev_obj.insert_property(
+                                                boa_engine::js_string!("_passive"),
+                                                pd2(JsValue::from(is_passive)),
+                                            );
+                                        }
+                                        if let Some(fn_obj) = callback.as_object() {
+                                            if fn_obj.is_callable() {
+                                                let _ = fn_obj.call(&this, &[event.clone()], ctx);
+                                            } else if let Ok(he) = fn_obj
+                                                .get(boa_engine::js_string!("handleEvent"), ctx)
+                                            {
+                                                if let Some(he_fn) = he.as_object() {
+                                                    if he_fn.is_callable() {
+                                                        let _ = he_fn.call(
+                                                            &callback,
+                                                            &[event.clone()],
+                                                            ctx,
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
+                                        // stopImmediatePropagation stops the
+                                        // remaining listeners on this element
+                                        // (DOM: immediate halts everything after
+                                        // the listener that called it).
+                                        if event
+                                            .as_object()
+                                            .and_then(|ev| {
+                                                ev.get(
+                                                    boa_engine::js_string!("_stopImmediate"),
+                                                    ctx,
+                                                )
+                                                .ok()
+                                                .and_then(|v| v.as_boolean())
+                                            })
+                                            .unwrap_or(false)
+                                        {
+                                            break;
+                                        }
                                     }
-                                }
-                                // Check defaultPrevented after each handler.
-                                if let Some(ev_obj) = event.as_object() {
-                                    let dp = ev_obj
-                                        .get(boa_engine::js_string!("defaultPrevented"), ctx)
-                                        .ok()
-                                        .and_then(|v| v.as_boolean())
-                                        .unwrap_or(false);
-                                    if dp {
-                                        not_canceled = false;
+                                    // Check defaultPrevented after each handler.
+                                    if let Some(ev_obj) = event.as_object() {
+                                        let dp = ev_obj
+                                            .get(boa_engine::js_string!("defaultPrevented"), ctx)
+                                            .ok()
+                                            .and_then(|v| v.as_boolean())
+                                            .unwrap_or(false);
+                                        if dp {
+                                            not_canceled = false;
+                                        }
                                     }
                                 }
                             }
@@ -14339,7 +14707,7 @@ fn make_element_handle(
                     }
                 }
             }
-        }
+        } // !immediate_stop
         // WHATWG: currentTarget is null once dispatch completes (after every
         // listener ran; during the walk it stays the dispatch target).
         if let Some(ev_obj) = event.as_object() {
@@ -23249,5 +23617,387 @@ mod remove_attribute_id_tests {
             document.getElementById('out').setText('byId=' + (byId !== null));
             "#);
         assert_eq!(out, "byId=true", "re-adding the id must restore lookups");
+    }
+}
+
+#[cfg(test)]
+mod stop_propagation_tests {
+    //! stopPropagation / stopImmediatePropagation were NO-OP stubs — calling
+    //! them did nothing, so a listener could not stop dispatch.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// DOM: stopImmediatePropagation halts everything after the listener that
+    /// called it — a second listener on the SAME element must not fire.
+    #[test]
+    fn stop_immediate_halts_remaining_same_element_listeners() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ping', function () { log.push('A'); });
+            t.addEventListener('ping', function (e) {
+                log.push('B');
+                e.stopImmediatePropagation();
+            });
+            t.addEventListener('ping', function () { log.push('C'); });
+            // A real Event instance (not a plain object — a plain `{type}`
+            // object has no stop methods, so the handler could not stop).
+            t.dispatchEvent(new Event('ping'));
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "AB",
+            "stopImmediatePropagation must halt the remaining listeners"
+        );
+    }
+
+    /// DOM: stopPropagation does NOT stop same-target listeners — the `.cls`
+    /// sibling test pins the distinction (immediate stops, propagation does
+    /// not). Here via the element dispatch surface.
+    #[test]
+    fn stop_propagation_does_not_stop_same_element_listeners() {
+        let out = run(r#"
+            var log = [];
+            var el = document.getElementById('el');
+            el.addEventListener('ping', function (e) {
+                log.push('A');
+                e.stopPropagation();
+            });
+            el.addEventListener('ping', function () { log.push('B'); });
+            el.dispatchEvent({ type: 'ping' });
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "AB",
+            "stopPropagation must NOT halt same-target listeners (DOM)"
+        );
+    }
+
+    /// The fire_click path: a click handler calling stopPropagation stops
+    /// the document-level walk — a document click listener must NOT fire.
+    #[test]
+    fn fire_click_stop_propagation_halts_document_walk() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="btn">B</div><div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            btn.addEventListener('click', function (e) { e.stopPropagation(); });
+            document.addEventListener('click', function () {
+                document.getElementById('out').setText('DOC-FIRED');
+            });
+            "#,
+        );
+        let btn_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_id);
+        // The document listener must NOT have fired (no DOC-FIRED text), and
+        // the click event object reached the handler without a stop flag.
+        assert_eq!(
+            out_of(&doc),
+            "i",
+            "stopPropagation must halt the document-level click walk"
+        );
+    }
+
+    /// Round-3 S3: the stop flags are dispatch-scoped — REUSING one Event
+    /// object across two dispatches must start the second dispatch clean
+    /// (WHATWG resets the flags at dispatch start).
+    #[test]
+    fn reused_event_object_starts_each_dispatch_clean() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ping', function () { log.push('1'); });
+            t.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            var ev = new Event('ping');
+            t.dispatchEvent(ev);
+            // second dispatch with the SAME (stopped) object
+            t.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "1S1S",
+            "a reused Event object must start each dispatch with clean flags"
+        );
+    }
+
+    /// Round-4 S3: the ELEMENT dispatch clear (the flat block inside
+    /// `make_element_handle`'s `dispatchEvent`, ~14541) is pinned separately
+    /// — the EventTarget-path test (`new EventTarget()`, block ~3279) cannot
+    /// see it. Each of the three clear blocks has exactly one test.
+    #[test]
+    fn element_dispatch_reused_event_starts_clean() {
+        let out = run(r#"
+            var log = [];
+            var el = document.getElementById('el');
+            el.addEventListener('ping', function () { log.push('E1'); });
+            el.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            el.addEventListener('ping', function () { log.push('E2'); });
+            var ev = new Event('ping');
+            el.dispatchEvent(ev);
+            el.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "E1SE1S",
+            "element dispatch must reset the flags per dispatch"
+        );
+    }
+
+    /// Round-4 S3: the DOCUMENT dispatch clear (the indented block in the
+    /// document's `disp_ev`, ~12282) is pinned separately.
+    #[test]
+    fn document_dispatch_reused_event_starts_clean() {
+        let out = run(r#"
+            var log = [];
+            document.addEventListener('ping', function () { log.push('D1'); });
+            document.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            var ev = new Event('ping');
+            document.dispatchEvent(ev);
+            document.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "D1SD1S",
+            "document dispatch must reset the flags per dispatch"
+        );
+    }
+
+    /// Control: WITHOUT stopPropagation the document listener fires.
+    #[test]
+    fn fire_click_without_stop_propagation_reaches_document() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="btn">B</div><div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            btn.addEventListener('click', function () {
+                document.getElementById('out').setText('DOC-FIRED');
+            });
+            "#,
+        );
+        let btn_id = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_id);
+        assert_eq!(
+            out_of(&doc),
+            "DOC-FIRED",
+            "control: the document walk must run without stopPropagation"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stop_propagation_ancestor_tests {
+    //! Round-2 S0/S1/S2 of PR #111: (S0) stopImmediatePropagation from an
+    //! ANCESTOR did not halt the document walk; (S1) document listeners
+    //! received no event; (S2) CustomEvent instances carried no-op stop
+    //! methods.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body>
+            <div id="host"><div id="anc">A</div><div id="btn">B</div></div>
+            <div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// S0: stopImmediatePropagation from an ANCESTOR (#host) halts the
+    /// document walk — a document click listener must NOT fire.
+    #[test]
+    fn ancestor_stop_immediate_halts_document_walk() {
+        let mut doc = HtmlDocument::from_html(
+            // #btn nested INSIDE #host: the ancestor walk must pass through
+            // #host for the propagation-stop to be observable.
+            r#"<html><body>
+            <div id="host"><div id="btn">B</div></div><div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            host.addEventListener('click', function (e) {
+                e.stopImmediatePropagation();
+            });
+            document.addEventListener('click', function () {
+                document.getElementById('out').setText('DOC');
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(
+            out_of(&doc),
+            "i",
+            "ancestor stopImmediate must halt the document walk"
+        );
+    }
+
+    /// S1: document listeners RECEIVE the event object.
+    #[test]
+    fn document_listener_receives_the_event() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            document.addEventListener('click', function (e) {
+                document.getElementById('out').setText('type=' + e.type);
+            });
+            "#,
+        );
+        let out_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #out");
+        rt.fire_click(&mut doc, out_nid);
+        assert_eq!(
+            out_of(&doc),
+            "type=click",
+            "document listeners get the event"
+        );
+    }
+
+    /// S2: a CustomEvent's stopImmediatePropagation halts dispatch.
+    #[test]
+    fn custom_event_stop_immediate_halts() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ce', function (e) {
+                log.push('A');
+                e.stopImmediatePropagation();
+            });
+            t.addEventListener('ce', function () { log.push('B'); });
+            t.dispatchEvent(new CustomEvent('ce'));
+            document.getElementById('out').setText(log.join(''));
+            "#,
+        );
+        assert_eq!(
+            out_of(&doc),
+            "A",
+            "CustomEvent stopImmediate must halt remaining listeners"
+        );
+    }
+
+    /// S0 control: WITHOUT the stop, the document listener fires.
+    #[test]
+    fn ancestor_without_stop_document_walk_runs() {
+        let mut doc = HtmlDocument::from_html(
+            // #btn nested INSIDE #host: the ancestor walk must pass through
+            // #host for the propagation-stop to be observable.
+            r#"<html><body>
+            <div id="host"><div id="btn">B</div></div><div id="out">i</div>
+            </body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var host = document.getElementById('host');
+            host.addEventListener('click', function () { /* no stop */ });
+            document.addEventListener('click', function () {
+                document.getElementById('out').setText('DOC');
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(out_of(&doc), "DOC", "control: document walk runs");
     }
 }
