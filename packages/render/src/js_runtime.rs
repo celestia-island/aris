@@ -11607,18 +11607,18 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             // same-run `setAttribute('class', ...)` — now reflected into
             // `node_props.class_name` by the set_attr cobweb — was invisible
             // to `querySelector('.cls')` while `getElementsByClassName` saw
-            // it). `#id` still prefers the id index (ids are unique and the
-            // set_attr cobweb updates the snapshot `id` too).
+            // it).
             let bb = b.borrow();
+            // `#id` uses the id index directly: `node_props.id` is
+            // write-never (the set_attr cobweb updates the JS `id` PROPERTY
+            // but not the snapshot), so a snapshot scan can never turn an
+            // index miss into a hit — it only added an O(n) walk on every
+            // failed `#id` lookup (round-2 S3: dead code by construction).
+            // A same-run `setAttribute('id', ...)` is therefore still
+            // invisible to `querySelector('#newid')` (pre-existing gap,
+            // L940).
             let nid = if let Some(id) = sel.strip_prefix('#') {
-                match bb.query_by_id.get(id).copied() {
-                    Some(nid) => Some(nid),
-                    None => {
-                        bb.all_element_ids.iter().copied().find(|&nid| {
-                            bb.node_props.get(&nid).map(|s| s.id == id).unwrap_or(false)
-                        })
-                    }
-                }
+                bb.query_by_id.get(id).copied()
             } else if let Some(cls) = sel.strip_prefix('.') {
                 bb.all_element_ids.iter().copied().find(|&nid| {
                     bb.node_props
@@ -22993,16 +22993,22 @@ mod query_selector_live_tests {
     /// elements, and no-match returns null.
     #[test]
     fn selector_forms_still_resolve() {
+        // Round-2 S3-c: assert IDENTITY against getElementById (non-null
+        // would pass even if the tag arm returned the LAST div).
         let out = run(r#"
+            var q = document.querySelector('div');
+            var ref = document.getElementById('el');
+            var upper = document.querySelector('DIV');
             var r = [];
-            r.push('id=' + (document.querySelector('#el') !== null));
+            r.push('same=' + (q === ref));
+            r.push('tag=' + (q && q.tagName));
+            r.push('upperSame=' + (upper === ref));
             r.push('cls_null=' + (document.querySelector('.nope') === null));
-            r.push('tag=' + (document.querySelector('div') !== null));
             r.push('nsm_null=' + (document.querySelector('nosuchtag') === null));
             document.getElementById('out').setText(r.join(' '));
             "#);
         assert_eq!(
-            out, "id=true cls_null=true tag=true nsm_null=true",
+            out, "same=true tag=DIV upperSame=true cls_null=true nsm_null=true",
             "the selector forms must keep their existing semantics"
         );
     }
