@@ -634,21 +634,24 @@ impl JsRuntime {
                 stop_node = Some(this_node);
             }
         }
-        // WHATWG: currentTarget is null once dispatch completes.
-        if let Some(ev_obj) = click_event_value.as_object() {
-            let _ = ev_obj.insert_property(
-                boa_engine::js_string!("currentTarget"),
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(JsValue::null())
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build(),
-            );
-        }
         // stopPropagation: ancestors (and the document walk) must not receive
         // the event — skip everything below the entry that stopped it.
+        // WHATWG: currentTarget is null once dispatch completes — the stop
+        // path ends HERE, so reset before returning (round-3 S1: the reset
+        // used to sit before the document walk, leaving the event holding
+        // the document after a normal dispatch).
         if stop_propagation {
+            if let Some(ev_obj) = click_event_value.as_object() {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!("currentTarget"),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::null())
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build(),
+                );
+            }
             self.apply_ops(doc);
             self.harvest_listeners();
             self.harvest_timers();
@@ -869,6 +872,21 @@ impl JsRuntime {
             {
                 break;
             }
+        }
+        // The document is the last bubble stage — dispatch completes here.
+        // WHATWG: currentTarget is null once dispatch completes (round-3 S1:
+        // nothing re-nulled it after the document stage, so a held event
+        // kept pointing at the document).
+        if let Some(ev_obj) = click_event_value.as_object() {
+            let _ = ev_obj.insert_property(
+                boa_engine::js_string!("currentTarget"),
+                boa_engine::property::PropertyDescriptor::builder()
+                    .value(JsValue::null())
+                    .writable(true)
+                    .enumerable(true)
+                    .configurable(true)
+                    .build(),
+            );
         }
     }
 
@@ -24188,6 +24206,46 @@ mod event_object_polish_tests {
             out_of(&doc),
             "btn:tgt===true cur=btn:true host:cur=host:true tgt=btn:true doc:cur=doc:true",
             "currentTarget must track the listening node; target must be the stable handle"
+        );
+    }
+
+    /// Round-3 S1: currentTarget must be null AFTER dispatch completes —
+    /// a held event read from a LATER dispatch sees null (the previous
+    /// reset sat before the document walk, so the event kept pointing at
+    /// the document).
+    #[test]
+    fn held_event_reads_null_current_target_after_dispatch() {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="btn">B</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(
+            &mut doc,
+            r#"
+            var btn = document.getElementById('btn');
+            var out = document.getElementById('out');
+            document.addEventListener('click', function (e) {
+                if (window.__ev) {
+                    out.setText('post=' + (window.__ev.currentTarget === null));
+                }
+                window.__ev = e;
+            });
+            "#,
+        );
+        let btn_nid = doc
+            .tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("btn"))
+            .map(|(i, _)| i.as_u64())
+            .expect("missing #btn");
+        // Click 1 holds the event; click 2 reads click 1's post-dispatch state.
+        rt.fire_click(&mut doc, btn_nid);
+        rt.fire_click(&mut doc, btn_nid);
+        assert_eq!(
+            out_of(&doc),
+            "post=true",
+            "a held event must read null currentTarget after its dispatch completed"
         );
     }
 
