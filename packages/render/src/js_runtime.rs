@@ -3273,6 +3273,22 @@ fn install_event_api(ctx: &mut Context) {
                         .configurable(true)
                         .build()
                 };
+                // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+                // start so a REUSED Event object starts clean (round-3 S3: a stale
+                // _stopImmediate silently killed the second dispatch).
+                if let Some(ev_obj) = event.as_object() {
+                    for flag in ["_stopImmediate", "_stopPropagation"] {
+                        let _ = ev_obj.insert_property(
+                            boa_engine::js_string!(flag),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(false))
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                }
                 let t = JsValue::from(o.clone());
                 let _ = ev_obj.insert_property(boa_engine::js_string!("target"), pd_ev(t.clone()));
                 let _ = ev_obj.insert_property(boa_engine::js_string!("currentTarget"), pd_ev(t));
@@ -12260,6 +12276,22 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
                     .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
                     .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
                     .unwrap_or_default();
+                // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+                // start so a REUSED Event object starts clean (round-3 S3: a stale
+                // _stopImmediate silently killed the second dispatch).
+                if let Some(ev_obj) = event.as_object() {
+                    for flag in ["_stopImmediate", "_stopPropagation"] {
+                        let _ = ev_obj.insert_property(
+                            boa_engine::js_string!(flag),
+                            boa_engine::property::PropertyDescriptor::builder()
+                                .value(JsValue::from(false))
+                                .writable(true)
+                                .enumerable(false)
+                                .configurable(true)
+                                .build(),
+                        );
+                    }
+                }
                 let mut not_canceled = true;
                 if let Ok(lmap) = doc_for_disp.get(boa_engine::js_string!("_js_listeners"), ctx) {
                     if let Some(lm) = lmap.as_object() {
@@ -14503,6 +14535,22 @@ fn make_element_handle(
             .and_then(|o| o.get(boa_engine::js_string!("type"), ctx).ok())
             .and_then(|v| v.as_string().map(|s| s.to_std_string_escaped()))
             .unwrap_or_default();
+        // WHATWG: the stop flags are dispatch-scoped — clear them at dispatch
+        // start so a REUSED Event object starts clean (round-3 S3: a stale
+        // _stopImmediate silently killed the second dispatch).
+        if let Some(ev_obj) = event.as_object() {
+            for flag in ["_stopImmediate", "_stopPropagation"] {
+                let _ = ev_obj.insert_property(
+                    boa_engine::js_string!(flag),
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(JsValue::from(false))
+                        .writable(true)
+                        .enumerable(false)
+                        .configurable(true)
+                        .build(),
+                );
+            }
+        }
         // Set event.target = this.
         if let Some(ev_obj) = event.as_object() {
             let _ = ev_obj.insert_property(
@@ -23680,6 +23728,31 @@ mod stop_propagation_tests {
             out_of(&doc),
             "i",
             "stopPropagation must halt the document-level click walk"
+        );
+    }
+
+    /// Round-3 S3: the stop flags are dispatch-scoped — REUSING one Event
+    /// object across two dispatches must start the second dispatch clean
+    /// (WHATWG resets the flags at dispatch start).
+    #[test]
+    fn reused_event_object_starts_each_dispatch_clean() {
+        let out = run(r#"
+            var log = [];
+            var t = new EventTarget();
+            t.addEventListener('ping', function () { log.push('1'); });
+            t.addEventListener('ping', function (e) {
+                log.push('S');
+                e.stopImmediatePropagation();
+            });
+            var ev = new Event('ping');
+            t.dispatchEvent(ev);
+            // second dispatch with the SAME (stopped) object
+            t.dispatchEvent(ev);
+            document.getElementById('out').setText(log.join(''));
+            "#);
+        assert_eq!(
+            out, "1S1S",
+            "a reused Event object must start each dispatch with clean flags"
         );
     }
 
