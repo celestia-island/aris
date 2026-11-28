@@ -13481,115 +13481,145 @@ fn make_element_handle(
     init.function(has_attr, boa_engine::js_string!("hasAttribute"), 1);
 
     // removeAttribute — removes from attributes NamedNodeMap (best-effort).
-    let remove_attr = NativeFunction::from_copy_closure(|this, args, ctx| {
-        let name = arg_string(args, 0).to_ascii_lowercase();
-        if let Some(o) = this.as_object() {
-            // Remove from attributes NamedNodeMap.
-            if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
-                if let Some(attrs) = attrs_val.as_object() {
-                    let len = attrs
-                        .get(boa_engine::js_string!("length"), ctx)
-                        .ok()
-                        .and_then(|v| v.as_number())
-                        .unwrap_or(0.0) as u32;
-                    // Find and remove the matching attribute entry.
-                    let mut found_idx: Option<u32> = None;
-                    for i in 0..len {
-                        if let Ok(av) = attrs.get(i as u32, ctx) {
-                            if let Some(ao) = av.as_object() {
-                                if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
-                                    if an
-                                        .as_string()
-                                        .map(|s| s.to_std_string_escaped().to_ascii_lowercase())
-                                        .as_deref()
-                                        == Some(&name)
-                                    {
-                                        found_idx = Some(i);
-                                        break;
+    let remove_attr = NativeFunction::from_copy_closure_with_captures(
+        |this, args, b, ctx| {
+            let name = arg_string(args, 0).to_ascii_lowercase();
+            if let Some(o) = this.as_object() {
+                // Remove from attributes NamedNodeMap.
+                if let Ok(attrs_val) = o.get(boa_engine::js_string!("attributes"), ctx) {
+                    if let Some(attrs) = attrs_val.as_object() {
+                        let len = attrs
+                            .get(boa_engine::js_string!("length"), ctx)
+                            .ok()
+                            .and_then(|v| v.as_number())
+                            .unwrap_or(0.0) as u32;
+                        // Find and remove the matching attribute entry.
+                        let mut found_idx: Option<u32> = None;
+                        for i in 0..len {
+                            if let Ok(av) = attrs.get(i as u32, ctx) {
+                                if let Some(ao) = av.as_object() {
+                                    if let Ok(an) = ao.get(boa_engine::js_string!("name"), ctx) {
+                                        if an
+                                            .as_string()
+                                            .map(|s| s.to_std_string_escaped().to_ascii_lowercase())
+                                            .as_deref()
+                                            == Some(&name)
+                                        {
+                                            found_idx = Some(i);
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
+                        if let Some(idx) = found_idx {
+                            // Shift remaining entries down.
+                            for i in idx..len - 1 {
+                                if let Ok(next) = attrs.get((i + 1) as u32, ctx) {
+                                    let pd2 = |v: JsValue| {
+                                        boa_engine::property::PropertyDescriptor::builder()
+                                            .value(v)
+                                            .writable(true)
+                                            .enumerable(true)
+                                            .configurable(true)
+                                            .build()
+                                    };
+                                    let _ = attrs.insert_property(i as u32, pd2(next));
+                                }
+                            }
+                            let _ = attrs.insert_property(
+                                boa_engine::js_string!("length"),
+                                boa_engine::property::PropertyDescriptor::builder()
+                                    .value(JsValue::from(len - 1))
+                                    .writable(true)
+                                    .enumerable(true)
+                                    .configurable(true)
+                                    .build(),
+                            );
+                        }
                     }
-                    if let Some(idx) = found_idx {
-                        // Shift remaining entries down.
-                        for i in idx..len - 1 {
-                            if let Ok(next) = attrs.get((i + 1) as u32, ctx) {
-                                let pd2 = |v: JsValue| {
-                                    boa_engine::property::PropertyDescriptor::builder()
-                                        .value(v)
-                                        .writable(true)
-                                        .enumerable(true)
-                                        .configurable(true)
-                                        .build()
-                                };
-                                let _ = attrs.insert_property(i as u32, pd2(next));
+                }
+                // Clear direct property and special properties.
+                let pd_clear = |v: JsValue| {
+                    boa_engine::property::PropertyDescriptor::builder()
+                        .value(v)
+                        .writable(true)
+                        .enumerable(true)
+                        .configurable(true)
+                        .build()
+                };
+                if name == "class" {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("className"),
+                        pd_clear(JsValue::from(boa_engine::js_string!(""))),
+                    );
+                    // Clear the direct class property set by setAttribute.
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("class"),
+                        pd_clear(JsValue::null()),
+                    );
+                } else if name == "id" {
+                    let _ = o.insert_property(
+                        boa_engine::js_string!("id"),
+                        pd_clear(JsValue::from(boa_engine::js_string!(""))),
+                    );
+                    let _ =
+                        o.insert_property(boa_engine::js_string!("id"), pd_clear(JsValue::null()));
+                    // DROP the id index entries (round-2 of PR #109's mirror):
+                    // removeAttribute('id') left `ids` / `query_by_id` pointing
+                    // at this node, so BOTH lookups kept returning the element
+                    // after its id attribute was gone — ghost resolution, the
+                    // mirror image of the setAttribute('id') cobweb from #109.
+                    // Also clear the SNAPSHOT id, or the LIVE fallback scans
+                    // (get_by_id / querySelector, added with the #109 cobweb)
+                    // find the node by its dead id again — the ghost would
+                    // survive the map removal.
+                    if let Some(nid) = read_handle_id(this) {
+                        let mut bb = b.borrow_mut();
+                        let dead_id = bb
+                            .node_props
+                            .get(&nid)
+                            .map(|snap| snap.id.clone())
+                            .unwrap_or_default();
+                        if !dead_id.is_empty() && bb.ids.get(&dead_id) == Some(&nid) {
+                            bb.ids.remove(&dead_id);
+                            bb.query_by_id.remove(&dead_id);
+                            if let Some(snap) = bb.node_props.get_mut(&nid) {
+                                snap.id = String::new();
                             }
                         }
-                        let _ = attrs.insert_property(
-                            boa_engine::js_string!("length"),
+                    }
+                } else if name == "style" {
+                    // Clear the style OBJECT's cache — writing `style: null` on
+                    // the handle would clobber the style object and make the
+                    // next `el.style.cssText` read THROW (round-2 S2). The style
+                    // object itself stays; DOM-wise removing the style
+                    // attribute leaves an empty CSSStyleDeclaration.
+                    if let Ok(style_val) = o.get(boa_engine::js_string!("style"), ctx)
+                        && let Some(style_obj) = style_val.as_object()
+                    {
+                        let _ = style_obj.insert_property(
+                            boa_engine::js_string!("_arisCssTextCache"),
                             boa_engine::property::PropertyDescriptor::builder()
-                                .value(JsValue::from(len - 1))
+                                .value(JsValue::from(boa_engine::js_string!("")))
                                 .writable(true)
-                                .enumerable(true)
+                                .enumerable(false)
                                 .configurable(true)
                                 .build(),
                         );
                     }
-                }
-            }
-            // Clear direct property and special properties.
-            let pd_clear = |v: JsValue| {
-                boa_engine::property::PropertyDescriptor::builder()
-                    .value(v)
-                    .writable(true)
-                    .enumerable(true)
-                    .configurable(true)
-                    .build()
-            };
-            if name == "class" {
-                let _ = o.insert_property(
-                    boa_engine::js_string!("className"),
-                    pd_clear(JsValue::from(boa_engine::js_string!(""))),
-                );
-                // Clear the direct class property set by setAttribute.
-                let _ =
-                    o.insert_property(boa_engine::js_string!("class"), pd_clear(JsValue::null()));
-            } else if name == "id" {
-                let _ = o.insert_property(
-                    boa_engine::js_string!("id"),
-                    pd_clear(JsValue::from(boa_engine::js_string!(""))),
-                );
-                let _ = o.insert_property(boa_engine::js_string!("id"), pd_clear(JsValue::null()));
-            } else if name == "style" {
-                // Clear the style OBJECT's cache — writing `style: null` on
-                // the handle would clobber the style object and make the
-                // next `el.style.cssText` read THROW (round-2 S2). The style
-                // object itself stays; DOM-wise removing the style
-                // attribute leaves an empty CSSStyleDeclaration.
-                if let Ok(style_val) = o.get(boa_engine::js_string!("style"), ctx)
-                    && let Some(style_obj) = style_val.as_object()
-                {
-                    let _ = style_obj.insert_property(
-                        boa_engine::js_string!("_arisCssTextCache"),
-                        boa_engine::property::PropertyDescriptor::builder()
-                            .value(JsValue::from(boa_engine::js_string!("")))
-                            .writable(true)
-                            .enumerable(false)
-                            .configurable(true)
-                            .build(),
+                } else {
+                    // Clear the direct property.
+                    let _ = o.insert_property(
+                        boa_engine::js_string!(name.clone()),
+                        pd_clear(JsValue::null()),
                     );
                 }
-            } else {
-                // Clear the direct property.
-                let _ = o.insert_property(
-                    boa_engine::js_string!(name.clone()),
-                    pd_clear(JsValue::null()),
-                );
             }
-        }
-        Ok(JsValue::undefined())
-    });
+            Ok(JsValue::undefined())
+        },
+        Gc::clone(&bridge),
+    );
     init.function(remove_attr, boa_engine::js_string!("removeAttribute"), 1);
 
     // toggleAttribute(name, force?) — toggles boolean attribute.
@@ -23140,5 +23170,84 @@ mod id_attr_cobweb_tests {
             out, "old=false qold=false",
             "the old id must stop resolving once the attribute moved"
         );
+    }
+}
+
+#[cfg(test)]
+mod remove_attribute_id_tests {
+    //! The mirror image of PR #109: `removeAttribute('id')` left the `ids` /
+    //! `query_by_id` index entries in place, so BOTH lookups kept returning
+    //! the element after its id attribute was gone (ghost resolution).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: removeAttribute('id') then BOTH lookups by the
+    /// removed id must return null.
+    #[test]
+    fn removed_id_stops_resolving_everywhere() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.removeAttribute('id');
+            var byId = document.getElementById('el');
+            var byQs = document.querySelector('#el');
+            document.getElementById('out').setText(
+                'byId=' + (byId !== null) + ' byQs=' + (byQs !== null)
+            );
+            "#);
+        assert_eq!(
+            out, "byId=false byQs=false",
+            "a removed id must stop resolving through both lookups"
+        );
+    }
+
+    /// The guard must not over-remove: removing ANOTHER attribute must not
+    /// disturb the id index.
+    #[test]
+    fn removing_another_attribute_keeps_the_id_resolvable() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.setAttribute('data-x', '1');
+            el.removeAttribute('data-x');
+            var byId = document.getElementById('el');
+            document.getElementById('out').setText('byId=' + (byId !== null));
+            "#);
+        assert_eq!(
+            out, "byId=true",
+            "removing an unrelated attribute must not clear the id index"
+        );
+    }
+
+    /// Re-adding the id after removal must make it resolvable again.
+    #[test]
+    fn id_can_be_readded_after_removal() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.removeAttribute('id');
+            el.setAttribute('id', 'el');
+            var byId = document.getElementById('el');
+            document.getElementById('out').setText('byId=' + (byId !== null));
+            "#);
+        assert_eq!(out, "byId=true", "re-adding the id must restore lookups");
     }
 }
