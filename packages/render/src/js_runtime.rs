@@ -24365,21 +24365,32 @@ mod style_cache_hardening_tests {
     }
 
     /// removeAttribute('style') clears the cache to empty and the setter
-    /// still works.
+    /// Round-2 S1: the SETTER and REMOVEATTRIBUTE lockdown flags are pinned
+    /// here via descriptor assertions — the scribble test only exercises the
+    /// seeded site, so reverting either of the other two left the whole
+    /// suite green (R2's mutations M2/M3 survived).
     #[test]
-    fn remove_attribute_resets_and_setter_works() {
+    fn setter_and_remove_attribute_lockdown_is_pinned() {
         let out = run(r#"
             var r = [];
             var el = document.body;
+            // After a cssText SETTER write the cache must still be locked.
+            el.style.cssText = 'color:blue';
+            var d1 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('setterW=' + d1.writable + ' setterC=' + d1.configurable);
+            // After removeAttribute the reinstalled cache must still be locked.
             el.removeAttribute('style');
-            r.push('cleared=' + (el.style.cssText === ''));
+            var d2 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('rmW=' + (d2 === undefined ? 'absent' : d2.writable) +
+                ' rmC=' + (d2 === undefined ? 'absent' : d2.configurable));
             el.style.cssText = 'color:green';
-            r.push('set=' + el.style.cssText);
+            var d3 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('reW=' + d3.writable + ' reC=' + d3.configurable);
             document.getElementById('out').setText(r.join(' '));
             "#);
         assert_eq!(
-            out, "cleared=true set=color:green",
-            "removeAttribute clears the cache; the setter still works"
+            out, "setterW=false setterC=false rmW=false rmC=false reW=false reC=false",
+            "the setter and removeAttribute cache installs must stay locked"
         );
     }
 }
