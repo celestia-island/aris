@@ -2182,9 +2182,9 @@ fn populate_props(
                     boa_engine::js_string!("_arisCssTextCache"),
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(v.clone())))
-                        .writable(true)
+                        .writable(false)
                         .enumerable(false)
-                        .configurable(true)
+                        .configurable(false)
                         .build(),
                 );
             }
@@ -13288,9 +13288,9 @@ fn make_element_handle(
                     boa_engine::js_string!("_arisCssTextCache"),
                     boa_engine::property::PropertyDescriptor::builder()
                         .value(JsValue::from(boa_engine::js_string!(value)))
-                        .writable(true)
+                        .writable(false)
                         .enumerable(false)
-                        .configurable(true)
+                        .configurable(false)
                         .build(),
                 );
             }
@@ -14023,9 +14023,9 @@ fn make_element_handle(
                             boa_engine::js_string!("_arisCssTextCache"),
                             boa_engine::property::PropertyDescriptor::builder()
                                 .value(JsValue::from(boa_engine::js_string!("")))
-                                .writable(true)
+                                .writable(false)
                                 .enumerable(false)
-                                .configurable(true)
+                                .configurable(false)
                                 .build(),
                         );
                     }
@@ -24309,6 +24309,88 @@ mod event_object_polish_tests {
             out_of(&doc),
             "d=42 d2=null",
             "detail must unwrap the init dict; absent detail is null"
+        );
+    }
+}
+
+#[cfg(test)]
+mod style_cache_hardening_tests {
+    //! The `_arisCssTextCache` property was writable+configurable, so a page
+    //! could poison it (`el.style._arisCssTextCache = 'garbage'`) and the
+    //! next `cssText` read returned the garbage verbatim. The cache is now
+    //! non-writable / non-configurable: runtime writes go through
+    //! `insert_property` (internal channel) and still work; page scribbles
+    //! are no-ops (sloppy mode).
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body style="color:red"><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: scribble the cache, read cssText.
+    #[test]
+    fn scribbling_the_cache_does_not_poison_csstext() {
+        let out = run(r#"
+            var r = [];
+            var el = document.body;
+            r.push('seeded=' + el.style.cssText);
+            el.style._arisCssTextCache = 'garbage';
+            r.push('after=' + el.style.cssText);
+            el.style.cssText = 'color:blue';
+            r.push('rewrite=' + el.style.cssText);
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "seeded=color:red after=color:red rewrite=color:blue",
+            "a page scribble must not poison cssText; runtime writes still work"
+        );
+    }
+
+    /// removeAttribute('style') clears the cache to empty and the setter
+    /// Round-2 S1: the SETTER and REMOVEATTRIBUTE lockdown flags are pinned
+    /// here via descriptor assertions — the scribble test only exercises the
+    /// seeded site, so reverting either of the other two left the whole
+    /// suite green (R2's mutations M2/M3 survived).
+    #[test]
+    fn setter_and_remove_attribute_lockdown_is_pinned() {
+        let out = run(r#"
+            var r = [];
+            var el = document.body;
+            // After a cssText SETTER write the cache must still be locked.
+            el.style.cssText = 'color:blue';
+            var d1 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('setterW=' + d1.writable + ' setterC=' + d1.configurable);
+            // After removeAttribute the reinstalled cache must still be locked.
+            el.removeAttribute('style');
+            var d2 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('rmW=' + (d2 === undefined ? 'absent' : d2.writable) +
+                ' rmC=' + (d2 === undefined ? 'absent' : d2.configurable));
+            el.style.cssText = 'color:green';
+            var d3 = Object.getOwnPropertyDescriptor(el.style, '_arisCssTextCache');
+            r.push('reW=' + d3.writable + ' reC=' + d3.configurable);
+            document.getElementById('out').setText(r.join(' '));
+            "#);
+        assert_eq!(
+            out, "setterW=false setterC=false rmW=false rmC=false reW=false reC=false",
+            "the setter and removeAttribute cache installs must stay locked"
         );
     }
 }
