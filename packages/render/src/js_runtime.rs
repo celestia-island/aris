@@ -24898,8 +24898,12 @@ mod node_proto_enumerable_tests {
     use blitz_html::HtmlDocument;
 
     fn out_of(doc: &HtmlDocument) -> String {
-        doc.tree().iter().find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
-            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content())).unwrap_or_default().unwrap_or_default()
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
     }
 
     fn run(script: &str) -> String {
@@ -24936,8 +24940,7 @@ mod node_proto_enumerable_tests {
             document.getElementById('out').setText(r.join(' '));
         "#);
         assert_eq!(
-            out,
-            "bad=0 nodeLeak=0 hasChild=true contains=true",
+            out, "bad=0 nodeLeak=0 hasChild=true contains=true",
             "Node.prototype members must be non-enumerable and still functional"
         );
     }
