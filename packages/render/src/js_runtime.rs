@@ -10214,7 +10214,23 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             let nid = b.borrow().ids.get(&id).copied();
             match nid {
                 Some(nid) => Ok(cached_element_handle(nid, b, ctx)?.into()),
-                None => Ok(JsValue::null()),
+                None => {
+                    // LIVE fallback (this PR, round-2 review): `ids` is frozen at
+                    // bind, so a same-run setAttribute('id', ...) was
+                    // invisible here while querySelector('#id') (which scans
+                    // node_props via the cobweb) saw it — the two lookups
+                    // disagreed. node_props.id is kept fresh by the set_attr
+                    // cobweb, so this scan is authoritative, not stale.
+                    let found = b
+                        .borrow()
+                        .node_props
+                        .iter()
+                        .find_map(|(nid, s)| (s.id == id).then_some(*nid));
+                    match found {
+                        Some(nid) => Ok(cached_element_handle(nid, b, ctx)?.into()),
+                        None => Ok(JsValue::null()),
+                    }
+                }
             }
         },
         Gc::clone(&bridge),
@@ -11618,7 +11634,16 @@ fn install_document(ctx: &mut Context, bridge: Gc<GcRefCell<Bridge>>) -> JsResul
             // invisible to `querySelector('#newid')` (pre-existing gap,
             // L940).
             let nid = if let Some(id) = sel.strip_prefix('#') {
-                bb.query_by_id.get(id).copied()
+                // Live fallback scan (this PR, round-2 review): node_props.id is
+                // cobweb-fresh, so a same-run setAttribute('id') is visible.
+                match bb.query_by_id.get(id).copied() {
+                    Some(nid) => Some(nid),
+                    None => {
+                        bb.all_element_ids.iter().copied().find(|&nid| {
+                            bb.node_props.get(&nid).map(|s| s.id == id).unwrap_or(false)
+                        })
+                    }
+                }
             } else if let Some(cls) = sel.strip_prefix('.') {
                 bb.all_element_ids.iter().copied().find(|&nid| {
                     bb.node_props
@@ -13162,6 +13187,32 @@ fn make_element_handle(
                         boa_engine::js_string!("id"),
                         pd(JsValue::from(boa_engine::js_string!(value.clone()))),
                     );
+                    // Keep the SNAPSHOT id in step too (round-2 of PR #108):
+                    // the getElementsBy* filters read `node_props`, and
+                    // `querySelector('#id')`'s live scan compares against it —
+                    // a setAttribute('id') that skipped this write was
+                    // invisible to both (the `ids` map is frozen at bind).
+                    if let Some(nid) = read_handle_id(this) {
+                        // MOVE the id mapping, not just the snapshot: the old
+                        // id must STOP resolving (DOM: changing an id removes
+                        // it from the old lookup), so drop the stale
+                        // ids/query_by_id entries and install the new one.
+                        let mut bb = b.borrow_mut();
+                        let old_id = bb
+                            .node_props
+                            .get(&nid)
+                            .map(|snap| snap.id.clone())
+                            .unwrap_or_default();
+                        if let Some(snap) = bb.node_props.get_mut(&nid) {
+                            snap.id = value.clone();
+                        }
+                        if !old_id.is_empty() && bb.ids.get(&old_id) == Some(&nid) {
+                            bb.ids.remove(&old_id);
+                            bb.query_by_id.remove(&old_id);
+                        }
+                        bb.ids.insert(value.clone(), nid);
+                        bb.query_by_id.insert(value.clone(), nid);
+                    }
                 } else if name == "class" {
                     let _ = o.insert_property(
                         boa_engine::js_string!("className"),
@@ -23017,6 +23068,77 @@ mod query_selector_live_tests {
         assert_eq!(
             out, "d1=true/E d1u=true sp=sp n1=true c1=true/EM nope=true",
             "tag/.cls/#id forms must resolve by identity across spellings"
+        );
+    }
+}
+
+#[cfg(test)]
+mod id_attr_cobweb_tests {
+    //! Round-2 of PR #108: `setAttribute('id', ...)` did not update
+    //! `node_props.id` (the set_attr cobweb only updated the JS `id`
+    //! property), so both `getElementById('newid')` and
+    //! `querySelector('#newid')` were blind to a same-run id write while
+    //! `getElementById('oldid')` still returned the element. The set_attr
+    //! cobweb now writes `node_props.id`, and both lookups fall back to a
+    //! live `node_props` scan when their bind-time maps miss.
+
+    use super::JsRuntime;
+    use blitz_dom::DocumentConfig;
+    use blitz_html::HtmlDocument;
+
+    fn out_of(doc: &HtmlDocument) -> String {
+        doc.tree()
+            .iter()
+            .find(|(_, n)| n.attr(blitz_dom::local_name!("id")) == Some("out"))
+            .map(|(i, _)| doc.get_node(i).map(|n| n.text_content()))
+            .unwrap_or_default()
+            .unwrap_or_default()
+    }
+
+    fn run(script: &str) -> String {
+        let mut doc = HtmlDocument::from_html(
+            r#"<html><body><div id="el">E</div><div id="out">i</div></body></html>"#,
+            DocumentConfig::default(),
+        );
+        let mut rt = JsRuntime::new();
+        rt.bind_and_run(&mut doc, script);
+        out_of(&doc)
+    }
+
+    /// The reported shape: setAttribute('id','newid') then BOTH lookups by
+    /// the new id must find the element.
+    #[test]
+    fn same_run_id_write_is_visible_to_both_lookups() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.setAttribute('id', 'newid');
+            var byQs = document.querySelector('#newid');
+            var byId = document.getElementById('newid');
+            document.getElementById('out').setText(
+                'qs=' + (byQs === el) + ' gid=' + (byId === el)
+            );
+            "#);
+        assert_eq!(
+            out, "qs=true gid=true",
+            "both id lookups must see a same-run setAttribute id write"
+        );
+    }
+
+    /// The OLD id must stop resolving after the attribute moved.
+    #[test]
+    fn old_id_stops_resolving_after_the_write() {
+        let out = run(r#"
+            var el = document.getElementById('el');
+            el.setAttribute('id', 'newid');
+            var old = document.getElementById('el');
+            var qold = document.querySelector('#el');
+            document.getElementById('out').setText(
+                'old=' + (old !== null) + ' qold=' + (qold !== null)
+            );
+            "#);
+        assert_eq!(
+            out, "old=false qold=false",
+            "the old id must stop resolving once the attribute moved"
         );
     }
 }
