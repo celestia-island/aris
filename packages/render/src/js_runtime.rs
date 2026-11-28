@@ -22447,13 +22447,22 @@ mod selector_handle_cache_tests {
     /// Same for `getElementsByClassName`.
     #[test]
     fn get_elements_by_class_name_shares_the_handle() {
+        // Round-2 S2: register AND dispatch through the SAME by-class lookup,
+        // so reverting the by-class call site to a fresh handle is caught
+        // here (at af2fbe4 this test dispatched via getElementById and a
+        // revert of the by-class site survived).
         let out = run(r#"
             var n = 0;
-            document.getElementsByClassName('kel')[0].addEventListener('ping', function(){ n++; });
+            var viaClass = document.getElementsByClassName('kel')[0];
+            viaClass.addEventListener('ping', function(){ n++; });
+            viaClass.dispatchEvent({ type: 'ping' });
             document.getElementById('el').dispatchEvent({ type: 'ping' });
             document.getElementById('out').setText('n=' + n);
             "#);
-        assert_eq!(out, "n=1", "the by-class lookup must share the handle too");
+        assert_eq!(
+            out, "n=2",
+            "both dispatches must reach the one registration"
+        );
     }
 
     /// Same for `getElementsByTagName`.
@@ -22480,15 +22489,24 @@ mod selector_handle_cache_tests {
     /// collection lookups (they used to call set_element_prototype).
     #[test]
     fn collection_lookups_still_carry_their_prototype() {
+        // Resolve BY ID: the collection order is hash-based and not stable
+        // across runs (round-2 S1-b of PR #105) — indexing [0] pins whatever
+        // element the hash happens to yield, not the one this test names.
         let out = run(r#"
-            var el = document.getElementsByClassName('kel')[0];
+            var list = document.getElementsByClassName('kel');
+            var el = null;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i].id === 'el') el = list[i];
+            }
             document.getElementById('out').setText(
-                'tag=' + el.tagName + ' id=' + el.id
+                'found=' + (el !== null) +
+                ' tag=' + (el && el.tagName) +
+                ' id=' + (el && el.id)
             );
             "#);
         assert_eq!(
-            out, "tag=DIV id=el",
-            "the collection handle must be populated"
+            out, "found=true tag=DIV id=el",
+            "the collection handle for #el must be populated"
         );
     }
 }
